@@ -1,0 +1,10 @@
+[project]
+name = "map-miner"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "geopy>=2.4.1",
+    "playwright>=1.55.0",
+]
