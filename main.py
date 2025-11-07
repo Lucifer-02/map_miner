@@ -53,14 +53,16 @@ def main():
     results = asyncio.run(
         scrape_google_maps(
             queries=queries,
-            max_places=50,
+            max_places=120,
             lang="en",
-            headless=False,
-            geo_coordinates=Point(10.7784382, 106.640777),
+            headless=True,
+            # geo_coordinates=Point(10.7784382, 106.640777),
+            geo_coordinates=Point(21.037912, 105.821952),
             zoom=18,
         )
     )
 
+    logging.info(results)
     logging.info(f"Length of results: {len(results)}")
 
 

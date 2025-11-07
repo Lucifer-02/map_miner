@@ -1,2 +1,2 @@
 run:
-	uv run main.py
+	time uv run main.py

@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from typing import Dict
 
 logger = logging.getLogger("root.scraper")
 
@@ -266,7 +267,7 @@ def get_thumbnail(data):
 # from omkarcloud/src/extract_data.py as a reference, BUT VERIFYING against debug_inner_data.json
 
 
-def extract_place_data(html_content: str):
+def extract_place_data(html_content: str) -> Dict | None:
     """
     High-level function to orchestrate extraction from HTML content.
     """

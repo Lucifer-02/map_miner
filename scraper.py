@@ -74,20 +74,6 @@ async def scrape_google_maps(
                 locale=lang,
             )
 
-            # place_links = list(
-            #     itertools.chain.from_iterable(
-            #         [
-            #             await get_place_urls(
-            #                 context=context,
-            #                 max_places=max_places,
-            #                 query=query,
-            #                 geo_coordinates=geo_coordinates,
-            #                 zoom=zoom,
-            #             )
-            #             for query in queries
-            #         ]
-            #     )
-            # )
             # Create a list of tasks to be run concurrently
             tasks = [
                 get_place_urls(
@@ -101,65 +87,27 @@ async def scrape_google_maps(
             ]
             # Run the tasks in parallel
             list_of_sets_of_links = await asyncio.gather(*tasks)
-
             # Flatten the list of sets into a single list of unique links
             place_links = list(
                 set(itertools.chain.from_iterable(list_of_sets_of_links))
             )
-            logger.debug(place_links)
+            logger.debug(f"List of place links: {place_links}.")
 
             # --- Scraping Individual Places ---
             logger.info(f"\nScraping details for {len(place_links)} places...")
-            count = 0
-            # ================ origin ===============
-            # for link in place_links:
-            #     count += 1
-            #     logger.info(
-            #         f"Processing link {count}/{len(place_links)}: {link}"
-            #     )  # Keep sync logger.info
-            #     try:
-            #         await page.goto(link, wait_until="domcontentloaded")  # Added await
-            #         # Wait a bit for dynamic content if needed, or wait for a specific element
-            #         # await page.wait_for_load_state('networkidle', timeout=10000) # Or networkidle if needed
-            #
-            #         html_content = await page.content()  # Added await
-            #         place_data = extractor.extract_place_data(html_content)
-            #
-            #         if place_data:
-            #             place_data["link"] = link  # Add the source link
-            #             results.append(place_data)
-            #             # logger.info(json.dumps(place_data, indent=2)) # Optional: print data as it's scraped
-            #         else:
-            #             logger.info(f"  - Failed to extract data for: {link}")
-            #             # Optionally save the HTML for debugging
-            #             # with open(f"error_page_{count}.html", "w", encoding="utf-8") as f:
-            #             #     f.write(html_content)
-            #
-            #     except PlaywrightTimeoutError:
-            #         logger.info(f"  - Timeout navigating to or processing: {link}")
-            #     except Exception as e:
-            #         logger.info(f"  - Error processing {link}: {e}")
-            #     await asyncio.sleep(0.5)  # Changed to asyncio.sleep, added await
-            # ================ edit ==========
-            # Limit to e.g. 5 concurrent tabs
-            # total = len(place_links)
-            # semaphore = asyncio.Semaphore(8)
-            #
-            # # Create tasks
-            # tasks = [
-            #     process_link(context, link, semaphore, i + 1, total)
-            #     for i, link in enumerate(place_links)
-            # ]
-            #
-            # # Run all in parallel
-            # results = await asyncio.gather(*tasks)
-            #
-            # # Filter out None values
-            # results = [r for r in results if r]
-            # logger.info(f"\n✅ Collected {len(results)} results")
-            # ================  ===============
+            total = len(place_links)
+            semaphore = asyncio.Semaphore(16)
 
-            input("Enter any key to close...")
+            # Create tasks
+            tasks = [
+                process_link(context, link, semaphore, i + 1, total)
+                for i, link in enumerate(place_links)
+            ]
+            # Run all in parallel
+            results = await asyncio.gather(*tasks)
+            # Filter out None values
+            results = [r for r in results if r]
+            logger.info(f"\n✅ Collected {len(results)} results")
 
             await browser.close()  # Added await
 
@@ -199,7 +147,7 @@ async def process_link(
                 .content_frame.get_by_text("I'm not a robot")
                 .is_visible()
             ) and "sorry" in page.url:
-                logging.info("CAPTCHA DECTECTED!!!")
+                logging.debug("CAPTCHA DECTECTED!!!")
                 await page.screenshot(path=f"image_{int(time.time())}.png")
 
             place_data = extractor.extract_place_data(html_content)
@@ -210,7 +158,6 @@ async def process_link(
                 return place_data
             else:
                 logger.info(f"  ⚠️ Failed to extract: {link}")
-                input("Pause")
         except PlaywrightTimeoutError:
             logger.error(f"  ⏰ Timeout for: {link}")
         except Exception as e:
@@ -220,42 +167,10 @@ async def process_link(
         return None
 
 
-async def pass_consent2(search_page: Page):
-    logging.info("Passing consent...")
-    # accept_button = search_page.get_by_role("button", name="Reject all")
-    accept_button = search_page.get_by_role("button", name="Accept all")
-    await accept_button.click()
-
-
 async def pass_consent(search_page: Page):
-    # --- Handle potential consent forms ---
-    # This is a common pattern, might need adjustment based on specific consent popups
-    try:
-        consent_button_xpath = "//button[.//span[contains(text(), 'Accept all') or contains(text(), 'Reject all')]]"
-        # Wait briefly for the button to potentially appear
-        await search_page.wait_for_selector(
-            consent_button_xpath, state="visible", timeout=5000
-        )  # Added await
-        # Click the "Accept all" or equivalent button if found
-        # Example: Prioritize "Accept all"
-        accept_button = await search_page.query_selector(
-            "//button[.//span[contains(text(), 'Accept all')]]"
-        )  # Added await
-        if accept_button:
-            logger.debug("Accepting consent form...")
-            await accept_button.click()  # Added await
-        else:
-            # Fallback to clicking the first consent button found (might be reject)
-            logger.debug("Clicking first available consent button...")
-            await search_page.locator(consent_button_xpath).first.click()  # Added await
-        # Wait for navigation/popup closure
-        await search_page.wait_for_load_state(
-            "networkidle", timeout=5000
-        )  # Added await
-    except PlaywrightTimeoutError:
-        logger.error("No consent form detected or timed out waiting.")
-    except Exception as e:
-        logger.error(f"Error handling consent form: {e}")
+    logging.debug("Passing consent...")
+    accept_button = search_page.get_by_role("button", name="Reject all")
+    await accept_button.click()
 
 
 async def get_place_urls(
@@ -276,12 +191,11 @@ async def get_place_urls(
 
     logger.info(f"Navigating to search URL: {search_url}")
     await search_page.goto(search_url, wait_until="domcontentloaded")  # Added await
-    # await search_page.wait_for_load_state(state="networkidle")
     await asyncio.sleep(random.uniform(1, 3))  # Changed to asyncio.sleep, added await
 
     if "consent" in search_page.url:
-        logging.info("DETECT CONSENT!!!")
-        await pass_consent2(search_page=search_page)
+        logging.debug("CONSENT DETECTED!!!")
+        await pass_consent(search_page=search_page)
 
     # recaptchaSolver = RecaptchaSolver(driver=search_page)
     # recaptchaSolver.solveCaptcha()
@@ -333,11 +247,8 @@ async def get_place_urls(
             logger.debug(f"Found {len(place_links)} unique place links so far...")
 
             if max_places is not None and len(place_links) >= max_places:
-                # place_links = set(list(place_links)[:max_places])  # Trim excess links
                 logger.debug(f"Reached max_places limit ({max_places}).")
-                place_links = set(
-                    itertools.islice(place_links, max_places)
-                )  # Trim the set efficiently
+                place_links = set(itertools.islice(place_links, max_places))
                 break
 
             # Check if scroll height has changed
