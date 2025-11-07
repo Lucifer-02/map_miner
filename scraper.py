@@ -1,36 +1,38 @@
 import asyncio  # Changed from time
-from typing import Set
+import itertools
+import logging
+import random
+import time
+import traceback
+from typing import List, Set
 from urllib.parse import quote_plus
 
 from geopy.point import Point
-from playwright.async_api import (
-    Browser,
-    ChromiumBrowserContext,
-    Page,
-    async_playwright,
-)
+from playwright.async_api import ChromiumBrowserContext, Page, async_playwright
 from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
 import extractor
 
+logger = logging.getLogger("root.scraper")
+
 # --- Constants ---
 DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
 MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
-    5  # Stop scrolling if no new links found after this many scrolls
+    2  # Stop scrolling if no new links found after this many scrolls
 )
 
 
-def make_google_maps_url(query: str, geo_coordinates: Point, zoom: float):
+def make_place_url(query: str, geo_coordinates: Point, zoom: float):
     # URL encode the query to handle spaces and special characters
     encoded_query = quote_plus(query)
-    return f"https://www.google.com/maps/search/{encoded_query}/@{geo_coordinates.latitude},{geo_coordinates.longitude},{zoom}z"
+    return f"https://www.google.com/maps/search/{encoded_query}/@{geo_coordinates.latitude},{geo_coordinates.longitude},{zoom}z?hl=en"
 
 
 # --- Main Scraping Logic ---
 async def scrape_google_maps(
-    query: str,
+    queries: List[str],
     geo_coordinates: Point,
     zoom: float,
     max_places: int,
@@ -57,7 +59,7 @@ async def scrape_google_maps(
         try:
             browser = await p.chromium.launch(
                 headless=headless,
-                # proxy={"server": "socks5://127.0.0.1:9050"},
+                proxy={"server": "socks5://127.0.0.1:9050"},
                 args=[
                     "--disable-dev-shm-usage",  # Use /tmp instead of /dev/shm for shared memory
                     "--no-sandbox",  # Required for running in Docker
@@ -71,67 +73,50 @@ async def scrape_google_maps(
                 # Consider setting viewport, locale, timezone if needed
                 locale=lang,
             )
-            page = await context.new_page()  # Added await
-            if not page:
-                await browser.close()  # Close browser before raising
-                raise Exception(
-                    "Failed to create a new browser page (context.new_page() returned None)."
+
+            # place_links = list(
+            #     itertools.chain.from_iterable(
+            #         [
+            #             await get_place_urls(
+            #                 context=context,
+            #                 max_places=max_places,
+            #                 query=query,
+            #                 geo_coordinates=geo_coordinates,
+            #                 zoom=zoom,
+            #             )
+            #             for query in queries
+            #         ]
+            #     )
+            # )
+            # Create a list of tasks to be run concurrently
+            tasks = [
+                get_place_urls(
+                    context=context,
+                    max_places=max_places,
+                    query=query,
+                    geo_coordinates=geo_coordinates,
+                    zoom=zoom,
                 )
-            # Removed problematic: await page.set_default_timeout(DEFAULT_TIMEOUT)
-            # Removed associated debug prints
+                for query in queries
+            ]
+            # Run the tasks in parallel
+            list_of_sets_of_links = await asyncio.gather(*tasks)
 
-            search_url = make_google_maps_url(
-                query=query, geo_coordinates=geo_coordinates, zoom=zoom
+            # Flatten the list of sets into a single list of unique links
+            place_links = list(
+                set(itertools.chain.from_iterable(list_of_sets_of_links))
             )
-
-            print(f"Navigating to search URL: {search_url}")
-            await page.goto(search_url, wait_until="domcontentloaded")  # Added await
-            await asyncio.sleep(2)  # Changed to asyncio.sleep, added await
-
-            # --- Handle potential consent forms ---
-            # This is a common pattern, might need adjustment based on specific consent popups
-            try:
-                consent_button_xpath = "//button[.//span[contains(text(), 'Accept all') or contains(text(), 'Reject all')]]"
-                # Wait briefly for the button to potentially appear
-                await page.wait_for_selector(
-                    consent_button_xpath, state="visible", timeout=5000
-                )  # Added await
-                # Click the "Accept all" or equivalent button if found
-                # Example: Prioritize "Accept all"
-                accept_button = await page.query_selector(
-                    "//button[.//span[contains(text(), 'Accept all')]]"
-                )  # Added await
-                if accept_button:
-                    print("Accepting consent form...")
-                    await accept_button.click()  # Added await
-                else:
-                    # Fallback to clicking the first consent button found (might be reject)
-                    print("Clicking first available consent button...")
-                    await page.locator(
-                        consent_button_xpath
-                    ).first.click()  # Added await
-                # Wait for navigation/popup closure
-                await page.wait_for_load_state(
-                    "networkidle", timeout=5000
-                )  # Added await
-            except PlaywrightTimeoutError:
-                print("No consent form detected or timed out waiting.")
-            except Exception as e:
-                print(f"Error handling consent form: {e}")
-
-            place_links = await extract_place_urls(
-                browser=browser, page=page, max_places=max_places
-            )
+            logger.debug(place_links)
 
             # --- Scraping Individual Places ---
-            print(f"\nScraping details for {len(place_links)} places...")
+            logger.info(f"\nScraping details for {len(place_links)} places...")
             count = 0
             # ================ origin ===============
             # for link in place_links:
             #     count += 1
-            #     print(
+            #     logger.info(
             #         f"Processing link {count}/{len(place_links)}: {link}"
-            #     )  # Keep sync print
+            #     )  # Keep sync logger.info
             #     try:
             #         await page.goto(link, wait_until="domcontentloaded")  # Added await
             #         # Wait a bit for dynamic content if needed, or wait for a specific element
@@ -143,44 +128,45 @@ async def scrape_google_maps(
             #         if place_data:
             #             place_data["link"] = link  # Add the source link
             #             results.append(place_data)
-            #             # print(json.dumps(place_data, indent=2)) # Optional: print data as it's scraped
+            #             # logger.info(json.dumps(place_data, indent=2)) # Optional: print data as it's scraped
             #         else:
-            #             print(f"  - Failed to extract data for: {link}")
+            #             logger.info(f"  - Failed to extract data for: {link}")
             #             # Optionally save the HTML for debugging
             #             # with open(f"error_page_{count}.html", "w", encoding="utf-8") as f:
             #             #     f.write(html_content)
             #
             #     except PlaywrightTimeoutError:
-            #         print(f"  - Timeout navigating to or processing: {link}")
+            #         logger.info(f"  - Timeout navigating to or processing: {link}")
             #     except Exception as e:
-            #         print(f"  - Error processing {link}: {e}")
+            #         logger.info(f"  - Error processing {link}: {e}")
             #     await asyncio.sleep(0.5)  # Changed to asyncio.sleep, added await
             # ================ edit ==========
             # Limit to e.g. 5 concurrent tabs
-            total = len(place_links)
-            semaphore = asyncio.Semaphore(5)
-
-            # Create tasks
-            tasks = [
-                process_link(context, link, extractor, semaphore, i + 1, total)
-                for i, link in enumerate(place_links)
-            ]
-
-            # Run all in parallel
-            results = await asyncio.gather(*tasks)
-
-            # Filter out None values
-            results = [r for r in results if r]
-            print(f"\n✅ Collected {len(results)} results")
+            # total = len(place_links)
+            # semaphore = asyncio.Semaphore(8)
+            #
+            # # Create tasks
+            # tasks = [
+            #     process_link(context, link, semaphore, i + 1, total)
+            #     for i, link in enumerate(place_links)
+            # ]
+            #
+            # # Run all in parallel
+            # results = await asyncio.gather(*tasks)
+            #
+            # # Filter out None values
+            # results = [r for r in results if r]
+            # logger.info(f"\n✅ Collected {len(results)} results")
             # ================  ===============
+
+            input("Enter any key to close...")
 
             await browser.close()  # Added await
 
         except PlaywrightTimeoutError:
-            print("Timeout error during scraping process.")
+            logger.info("Timeout error during scraping process.")
         except Exception as e:
-            print(f"An error occurred during scraping: {e}")
-            import traceback
+            logger.info(f"An error occurred during scraping: {e}")
 
             traceback.print_exc()  # Print detailed traceback for debugging
         finally:
@@ -190,73 +176,147 @@ async def scrape_google_maps(
             ):  # Check if browser exists and is connected
                 await browser.close()  # Added await
 
-    print(f"\nScraping finished. Found details for {len(results)} places.")
+    logger.info(f"\nScraping finished. Found details for {len(results)} places.")
     return results
 
 
 async def process_link(
     context: ChromiumBrowserContext,
     link: str,
-    extractor,
-    semaphore,
+    semaphore: asyncio.Semaphore,
     count: int,
     total: int,
 ):
     async with semaphore:  # Limit concurrency
-        print(f"Processing link {count}/{total}: {link}")
+        logger.info(f"Processing link {count}/{total}: {link}")
         page = await context.new_page()
         try:
             await page.goto(link, wait_until="domcontentloaded", timeout=15000)
             html_content = await page.content()
+
+            if (
+                page.locator('iframe[name="a-280r0snlgxq2"]')
+                .content_frame.get_by_text("I'm not a robot")
+                .is_visible()
+            ) and "sorry" in page.url:
+                logging.info("CAPTCHA DECTECTED!!!")
+                await page.screenshot(path=f"image_{int(time.time())}.png")
+
             place_data = extractor.extract_place_data(html_content)
 
             if place_data:
                 place_data["link"] = link
-                print(f"  ✅ Extracted: {link}")
+                logger.info(f"  ✅ Extracted: {link}")
                 return place_data
             else:
-                print(f"  ⚠️ Failed to extract: {link}")
+                logger.info(f"  ⚠️ Failed to extract: {link}")
+                input("Pause")
         except PlaywrightTimeoutError:
-            print(f"  ⏰ Timeout for: {link}")
+            logger.error(f"  ⏰ Timeout for: {link}")
         except Exception as e:
-            print(f"  ❌ Error for {link}: {e}")
+            logger.error(f"  ❌ Error for {link}: {e}")
         finally:
             await page.close()
         return None
 
 
-async def extract_place_urls(browser: Browser, page: Page, max_places: int) -> Set[str]:
+async def pass_consent2(search_page: Page):
+    logging.info("Passing consent...")
+    # accept_button = search_page.get_by_role("button", name="Reject all")
+    accept_button = search_page.get_by_role("button", name="Accept all")
+    await accept_button.click()
+
+
+async def pass_consent(search_page: Page):
+    # --- Handle potential consent forms ---
+    # This is a common pattern, might need adjustment based on specific consent popups
+    try:
+        consent_button_xpath = "//button[.//span[contains(text(), 'Accept all') or contains(text(), 'Reject all')]]"
+        # Wait briefly for the button to potentially appear
+        await search_page.wait_for_selector(
+            consent_button_xpath, state="visible", timeout=5000
+        )  # Added await
+        # Click the "Accept all" or equivalent button if found
+        # Example: Prioritize "Accept all"
+        accept_button = await search_page.query_selector(
+            "//button[.//span[contains(text(), 'Accept all')]]"
+        )  # Added await
+        if accept_button:
+            logger.debug("Accepting consent form...")
+            await accept_button.click()  # Added await
+        else:
+            # Fallback to clicking the first consent button found (might be reject)
+            logger.debug("Clicking first available consent button...")
+            await search_page.locator(consent_button_xpath).first.click()  # Added await
+        # Wait for navigation/popup closure
+        await search_page.wait_for_load_state(
+            "networkidle", timeout=5000
+        )  # Added await
+    except PlaywrightTimeoutError:
+        logger.error("No consent form detected or timed out waiting.")
+    except Exception as e:
+        logger.error(f"Error handling consent form: {e}")
+
+
+async def get_place_urls(
+    context: ChromiumBrowserContext,
+    max_places: int,
+    query: str,
+    geo_coordinates: Point,
+    zoom: float,
+) -> Set[str]:
+    search_page = await context.new_page()  # Added await
+    if not search_page:
+        raise Exception(
+            "Failed to create a new browser page (context.new_page() returned None)."
+        )
+    # Removed problematic: await page.set_default_timeout(DEFAULT_TIMEOUT)
+    # Removed associated debug logger.infos
+    search_url = make_place_url(query=query, geo_coordinates=geo_coordinates, zoom=zoom)
+
+    logger.info(f"Navigating to search URL: {search_url}")
+    await search_page.goto(search_url, wait_until="domcontentloaded")  # Added await
+    # await search_page.wait_for_load_state(state="networkidle")
+    await asyncio.sleep(random.uniform(1, 3))  # Changed to asyncio.sleep, added await
+
+    if "consent" in search_page.url:
+        logging.info("DETECT CONSENT!!!")
+        await pass_consent2(search_page=search_page)
+
+    # recaptchaSolver = RecaptchaSolver(driver=search_page)
+    # recaptchaSolver.solveCaptcha()
+
     place_links = set()
 
     # --- Scrolling and Link Extraction ---
-    print("Scrolling to load places...")
+    logger.debug("Scrolling to load places...")
     feed_selector = '[role="feed"]'
     try:
-        await page.wait_for_selector(
+        await search_page.wait_for_selector(
             feed_selector, state="visible", timeout=25000
         )  # Added await
     except PlaywrightTimeoutError:
         # Check if it's a single result page (maps/place/)
-        if "/maps/place/" in page.url:
-            print("Detected single place page.")
-            place_links.add(page.url)
+        if "/maps/place/" in search_page.url:
+            logger.debug("Detected single place page.")
+            place_links.add(search_page.url)
         else:
-            print(
+            logger.error(
                 f"Error: Feed element '{feed_selector}' not found. Maybe no results or page structure changed."
             )
-            await browser.close()  # Added await
+            # await browser.close()  # Added await
             return set()  # No results or page structure changed
 
-    if await page.locator(feed_selector).count() > 0:  # Added await
-        last_height = await page.evaluate(
+    if await search_page.locator(feed_selector).count() > 0:  # Added await
+        last_height = await search_page.evaluate(
             f"document.querySelector('{feed_selector}').scrollHeight"
         )  # Added await
 
         scroll_attempts_no_new = 0
-        SCROLL_PAUSE_TIME = 1.5  # Pause between scrolls
+        SCROLL_PAUSE_TIME = 0.5  # Pause between scrolls
         while True:
             # Scroll down
-            await page.evaluate(
+            await search_page.evaluate(
                 f"document.querySelector('{feed_selector}').scrollTop = document.querySelector('{feed_selector}').scrollHeight"
             )  # Added await
             await asyncio.sleep(
@@ -264,21 +324,24 @@ async def extract_place_urls(browser: Browser, page: Page, max_places: int) -> S
             )  # Changed to asyncio.sleep, added await
 
             # Extract links after scroll
-            current_links_list = await page.locator(
+            current_links_list = await search_page.locator(
                 f'{feed_selector} a[href*="/maps/place/"]'
             ).evaluate_all("elements => elements.map(a => a.href)")  # Added await
             current_links = set(current_links_list)
             new_links_found = len(current_links - place_links) > 0
             place_links.update(current_links)
-            print(f"Found {len(place_links)} unique place links so far...")
+            logger.debug(f"Found {len(place_links)} unique place links so far...")
 
             if max_places is not None and len(place_links) >= max_places:
-                print(f"Reached max_places limit ({max_places}).")
-                place_links = set(list(place_links)[:max_places])  # Trim excess links
+                # place_links = set(list(place_links)[:max_places])  # Trim excess links
+                logger.debug(f"Reached max_places limit ({max_places}).")
+                place_links = set(
+                    itertools.islice(place_links, max_places)
+                )  # Trim the set efficiently
                 break
 
             # Check if scroll height has changed
-            new_height = await page.evaluate(
+            new_height = await search_page.evaluate(
                 f"document.querySelector('{feed_selector}').scrollHeight"
             )  # Added await
             if new_height == last_height:
@@ -286,22 +349,24 @@ async def extract_place_urls(browser: Browser, page: Page, max_places: int) -> S
                 end_marker_xpath = (
                     '//span[contains(text(), "You\'ve reached the end of the list.")]'
                 )
-                if await page.locator(end_marker_xpath).count() > 0:  # Added await
-                    print("Reached the end of the results list.")
+                if (
+                    await search_page.locator(end_marker_xpath).count() > 0
+                ):  # Added await
+                    logger.debug("Reached the end of the results list.")
                     break
                 else:
                     # If height didn't change but end marker isn't there, maybe loading issue?
                     # Increment no-new-links counter
                     if not new_links_found:
                         scroll_attempts_no_new += 1
-                        print(
+                        logger.debug(
                             f"Scroll height unchanged and no new links. Attempt {scroll_attempts_no_new}/{MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS}"
                         )
                         if (
                             scroll_attempts_no_new
                             >= MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS
                         ):
-                            print("Stopping scroll due to lack of new links.")
+                            logger.debug("Stopping scroll due to lack of new links.")
                             break
                     else:
                         scroll_attempts_no_new = (
@@ -313,4 +378,5 @@ async def extract_place_urls(browser: Browser, page: Page, max_places: int) -> S
 
             # Optional: Add a hard limit on scrolls to prevent infinite loops
             # if scroll_count > MAX_SCROLLS: break
+    await search_page.close()
     return place_links
