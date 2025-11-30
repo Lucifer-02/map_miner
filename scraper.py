@@ -89,7 +89,7 @@ async def scrape_google_maps(
                 args=LAUNCH_ARGS,
             )  # Added await
             context = await browser.new_context(  # Added await
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.37 Safari/537.36",
                 java_script_enabled=True,
                 accept_downloads=False,
                 storage_state="./state.json",
@@ -122,7 +122,7 @@ async def scrape_google_maps(
             logger.info(f"\nScraping details for {len(place_links)} places...")
             total = len(place_links)
 
-            semaphore = asyncio.Semaphore(8)
+            semaphore = asyncio.Semaphore(12)
 
             # Create tasks
             tasks = [
