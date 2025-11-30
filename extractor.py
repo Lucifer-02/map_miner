@@ -162,12 +162,17 @@ def get_place_id(data):
     return safe_get(data, 10)  # Updated index
 
 
-def get_gps_coordinates(data):
-    """Extracts latitude and longitude."""
+def get_latitude(data):
     lat = safe_get(data, 9, 2)
+    if lat is not None:
+        return lat
+    return None
+
+
+def get_longitude(data):
     lon = safe_get(data, 9, 3)
-    if lat is not None and lon is not None:
-        return {"latitude": lat, "longitude": lon}
+    if lon is not None:
+        return lon
     return None
 
 
@@ -285,7 +290,8 @@ def extract_place_data(html_content: str) -> Dict | None:
     place_details = {
         "name": get_main_name(data_blob),
         "place_id": get_place_id(data_blob),
-        "coordinates": get_gps_coordinates(data_blob),
+        "lat": get_latitude(data_blob),
+        "lon": get_longitude(data_blob),
         "address": get_complete_address(data_blob),
         # "rating": get_rating(data_blob),
         # "reviews_count": get_reviews_count(data_blob),

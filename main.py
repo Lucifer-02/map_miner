@@ -52,7 +52,7 @@ def main():
     logging.getLogger("main.scraper").setLevel(logging.INFO)
     results = asyncio.run(
         scrape_google_maps(
-            queries=queries,
+            queries=queries_2,
             max_places=120,
             lang="en",
             headless=True,

@@ -1,4 +1,5 @@
 import asyncio  # Changed from time
+import polars as pl
 import itertools
 import logging
 import random
@@ -63,7 +64,7 @@ async def scrape_google_maps(
     max_places: int = 120,
     lang: str = "en",
     headless=False,
-) -> List[Dict]:
+) -> pl.DataFrame:
     """
     Scrapes Google Maps for places based on a query.
 
@@ -158,7 +159,7 @@ async def scrape_google_maps(
                 await browser.close()  # Added await
 
     logger.info(f"\nScraping finished. Found details for {len(results)} places.")
-    return results
+    return pl.from_dicts(results)
 
 
 async def process_link(

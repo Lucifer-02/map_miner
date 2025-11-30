@@ -12,6 +12,7 @@ dependencies = [
     "notebook>=7.4.7",
     "playwright>=1.55.0",
     "playwright-stealth==1.0.6",
+    "polars>=1.35.2",
     "pydub>=0.25.1",
     "pytest>=9.0.1",
     "speechrecognition>=3.14.3",
