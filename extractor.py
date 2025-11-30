@@ -290,7 +290,7 @@ def extract_place_data(html_content: str) -> Dict | None:
     place_details = {
         "name": get_main_name(data_blob),
         "place_id": get_place_id(data_blob),
-        "lattitude": get_latitude(data_blob),
+        "latitude": get_latitude(data_blob),
         "longitude": get_longitude(data_blob),
         "address": get_complete_address(data_blob),
         # "rating": get_rating(data_blob),
