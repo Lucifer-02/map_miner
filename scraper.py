@@ -15,7 +15,7 @@ from playwright.async_api import (
 )
 
 from .extractor import extract_place_data
-from RecaptchaSolver import RecaptchaSolver
+from .RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
 
