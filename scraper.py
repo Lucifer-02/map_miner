@@ -4,7 +4,7 @@ import logging
 import random
 import time
 import traceback
-from typing import List, Set
+from typing import Dict, List, Set
 from urllib.parse import quote_plus
 
 from geopy.point import Point
@@ -14,6 +14,7 @@ from playwright.async_api import (
 )
 
 import extractor
+from RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
 
@@ -22,6 +23,30 @@ DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
 MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
     2  # Stop scrolling if no new links found after this many scrolls
 )
+# Launch args tuned to reduce headless fingerprints and cut noisy features
+LAUNCH_ARGS = [
+    "--start-maximized",
+    "--no-default-browser-check",
+    "--disable-dev-shm-usage",
+    "--disable-setuid-sandbox",
+    "--no-sandbox",
+    "--no-zygote",
+    "--disable-gpu",
+    # "--mute-audio",
+    "--disable-extensions",
+    "--disable-breakpad",
+    # "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+    "--disable-ipc-flooding-protection",
+    "--enable-features=NetworkService,NetworkServiceInProcess",
+    "--disable-default-apps",
+    "--disable-notifications",
+    "--disable-webgl",
+    "--disable-blink-features=AutomationControlled",
+    "--ignore-certificate-errors",
+    "--ignore-certificate-errors-spki-list",
+    "--disable-web-security",
+    "--blink-settings=imagesEnabled=false",
+]
 
 
 def make_place_url(query: str, geo_coordinates: Point, zoom: float):
@@ -35,18 +60,17 @@ async def scrape_google_maps(
     queries: List[str],
     geo_coordinates: Point,
     zoom: float,
-    max_places: int,
+    max_places: int = 120,
     lang: str = "en",
     headless=False,
-):
+) -> List[Dict]:
     """
     Scrapes Google Maps for places based on a query.
 
     Args:
         query (str): The search query (e.g., "restaurants in New York").
         max_places (int, optional): Maximum number of places to scrape. Defaults to None (scrape all found).
-        lang (str, optional): Language code for Google Maps (e.g., 'en', 'es'). Defaults to "en".
-        headless (bool, optional): Whether to run the browser in headless mode. Defaults to True.
+        lang (str, optional): Language code for Google Maps (e.g., 'en', 'es'). Defaults to "en". headless (bool, optional): Whether to run the browser in headless mode. Defaults to True.
 
     Returns:
         list: A list of dictionaries, each containing details for a scraped place.
@@ -59,19 +83,27 @@ async def scrape_google_maps(
         try:
             browser = await p.chromium.launch(
                 headless=headless,
-                proxy={"server": "socks5://127.0.0.1:9050"},
-                args=[
-                    "--disable-dev-shm-usage",  # Use /tmp instead of /dev/shm for shared memory
-                    "--no-sandbox",  # Required for running in Docker
-                    "--disable-setuid-sandbox",
-                ],
+                proxy={
+                    "server": "http://103.162.31.234:49060",
+                    "username": "user49060",
+                    "password": "zDBKBdlIO4",
+                },
+                # proxy={
+                #     "server": "http://154.202.3.40:49230",
+                #     "username": "user49230",
+                #     "password": "GQJ62IBqX2",
+                # },
+                args=LAUNCH_ARGS,
             )  # Added await
             context = await browser.new_context(  # Added await
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
                 java_script_enabled=True,
                 accept_downloads=False,
+                storage_state="./state.json",
                 # Consider setting viewport, locale, timezone if needed
-                locale=lang,
+                # viewport={"width": 1920, "height": 1080},
+                # timezone_id="Asia/Singapore",
+                # locale=lang,
             )
 
             # Create a list of tasks to be run concurrently
@@ -96,7 +128,8 @@ async def scrape_google_maps(
             # --- Scraping Individual Places ---
             logger.info(f"\nScraping details for {len(place_links)} places...")
             total = len(place_links)
-            semaphore = asyncio.Semaphore(16)
+
+            semaphore = asyncio.Semaphore(8)
 
             # Create tasks
             tasks = [
@@ -134,12 +167,19 @@ async def process_link(
     semaphore: asyncio.Semaphore,
     count: int,
     total: int,
-):
+) -> Dict[str, str] | None:
     async with semaphore:  # Limit concurrency
         logger.info(f"Processing link {count}/{total}: {link}")
         page = await context.new_page()
         try:
             await page.goto(link, wait_until="domcontentloaded", timeout=15000)
+
+            # Humanize: Move mouse randomly around the center before doing anything
+            await page.mouse.move(random.randint(100, 1000), random.randint(100, 800))
+
+            # Random short delay before extracting data
+            await asyncio.sleep(random.uniform(0.3, 1.2))
+
             html_content = await page.content()
 
             if (
@@ -158,13 +198,15 @@ async def process_link(
                 return place_data
             else:
                 logger.info(f"  ⚠️ Failed to extract: {link}")
+                logger.debug(f"html content: {html_content}")
+                return None
+
         except PlaywrightTimeoutError:
             logger.error(f"  ⏰ Timeout for: {link}")
         except Exception as e:
             logger.error(f"  ❌ Error for {link}: {e}")
         finally:
             await page.close()
-        return None
 
 
 async def pass_consent(search_page: Page):
@@ -181,6 +223,7 @@ async def get_place_urls(
     zoom: float,
 ) -> Set[str]:
     search_page = await context.new_page()  # Added await
+
     if not search_page:
         raise Exception(
             "Failed to create a new browser page (context.new_page() returned None)."
@@ -197,8 +240,12 @@ async def get_place_urls(
         logging.debug("CONSENT DETECTED!!!")
         await pass_consent(search_page=search_page)
 
-    # recaptchaSolver = RecaptchaSolver(driver=search_page)
-    # recaptchaSolver.solveCaptcha()
+    if "sorry" in search_page.url:
+        logging.info("CAPTCHA DECTECTED!!!")
+        await search_page.screenshot(path=f"image_{int(time.time())}.png")
+
+        recaptchaSolver = RecaptchaSolver(search_page)
+        await recaptchaSolver.solveCaptcha()
 
     place_links = set()
 
