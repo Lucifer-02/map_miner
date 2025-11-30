@@ -14,7 +14,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-import extractor
+from .extractor import extract_place_data
 from RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
@@ -191,7 +191,7 @@ async def process_link(
                 logging.debug("CAPTCHA DECTECTED!!!")
                 await page.screenshot(path=f"image_{int(time.time())}.png")
 
-            place_data = extractor.extract_place_data(html_content)
+            place_data = extract_place_data(html_content)
 
             if place_data:
                 place_data["link"] = link
