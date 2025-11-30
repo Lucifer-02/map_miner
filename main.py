@@ -55,10 +55,20 @@ def main():
             queries=queries_2,
             max_places=120,
             lang="en",
-            headless=True,
+            headless=False,
             # geo_coordinates=Point(10.7784382, 106.640777),
             geo_coordinates=Point(21.037912, 105.821952),
             zoom=18,
+            # proxy={
+            #     "server": "http://103.162.31.234:49060",
+            #     "username": "user49060",
+            #     "password": "zDBKBdlIO4",
+            # },
+            proxy={
+                "server": "http://154.202.3.40:49230",
+                "username": "user49230",
+                "password": "GQJ62IBqX2",
+            },
         )
     )
 

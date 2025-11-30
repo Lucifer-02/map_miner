@@ -1,5 +1,4 @@
 import asyncio  # Changed from time
-import polars as pl
 import itertools
 import logging
 import random
@@ -8,6 +7,7 @@ import traceback
 from typing import Dict, List, Set
 from urllib.parse import quote_plus
 
+import polars as pl
 from geopy.point import Point
 from playwright.async_api import ChromiumBrowserContext, Page, async_playwright
 from playwright.async_api import (
@@ -61,6 +61,7 @@ async def scrape_google_maps(
     queries: List[str],
     geo_coordinates: Point,
     zoom: float,
+    proxy: Dict,
     max_places: int = 120,
     lang: str = "en",
     headless=False,
@@ -84,16 +85,7 @@ async def scrape_google_maps(
         try:
             browser = await p.chromium.launch(
                 headless=headless,
-                proxy={
-                    "server": "http://103.162.31.234:49060",
-                    "username": "user49060",
-                    "password": "zDBKBdlIO4",
-                },
-                # proxy={
-                #     "server": "http://154.202.3.40:49230",
-                #     "username": "user49230",
-                #     "password": "GQJ62IBqX2",
-                # },
+                proxy=proxy,
                 args=LAUNCH_ARGS,
             )  # Added await
             context = await browser.new_context(  # Added await
