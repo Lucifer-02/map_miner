@@ -94,9 +94,9 @@ async def scrape_google_maps(
                 accept_downloads=False,
                 storage_state="./state.json",
                 # Consider setting viewport, locale, timezone if needed
-                # viewport={"width": 1920, "height": 1080},
-                # timezone_id="Asia/Singapore",
-                # locale=lang,
+                viewport={"width": 1920, "height": 1080},
+                timezone_id="Asia/Singapore",
+                locale=lang,
             )
 
             # Create a list of tasks to be run concurrently
@@ -129,10 +129,10 @@ async def scrape_google_maps(
                 process_link(context, link, semaphore, i + 1, total)
                 for i, link in enumerate(place_links)
             ]
-            # Run all in parallel
             results = await asyncio.gather(*tasks)
+
             # Filter out None values
-            results = [r for r in results if r]
+            results = [r for r in results if r is not None]
             logger.info(f"\n✅ Collected {len(results)} results")
 
             await browser.close()  # Added await
@@ -142,13 +142,13 @@ async def scrape_google_maps(
         except Exception as e:
             logger.info(f"An error occurred during scraping: {e}")
 
-            traceback.print_exc()  # Print detailed traceback for debugging
+            traceback.print_exc()  
         finally:
             # Ensure browser is closed if an error occurred mid-process
             if (
                 browser and browser.is_connected()
             ):  # Check if browser exists and is connected
-                await browser.close()  # Added await
+                await browser.close()
 
     logger.info(f"\nScraping finished. Found details for {len(results)} places.")
     return pl.from_dicts(results)
@@ -161,16 +161,14 @@ async def process_link(
     count: int,
     total: int,
 ) -> Dict[str, str] | None:
-    async with semaphore:  # Limit concurrency
+    async with semaphore:
         logger.info(f"Processing link {count}/{total}: {link}")
         page = await context.new_page()
         try:
-            await page.goto(link, wait_until="domcontentloaded", timeout=15000)
+            await page.goto(link, wait_until="domcontentloaded", timeout=30000)
 
             # Humanize: Move mouse randomly around the center before doing anything
             await page.mouse.move(random.randint(100, 1000), random.randint(100, 800))
-
-            # Random short delay before extracting data
             await asyncio.sleep(random.uniform(0.3, 1.2))
 
             html_content = await page.content()
@@ -267,7 +265,7 @@ async def get_place_urls(
         )  # Added await
 
         scroll_attempts_no_new = 0
-        SCROLL_PAUSE_TIME = 0.5  # Pause between scrolls
+        SCROLL_PAUSE_TIME = 0.5
         while True:
             # Scroll down
             await search_page.evaluate(
