@@ -122,7 +122,7 @@ async def scrape_google_maps(
             logger.info(f"\nScraping details for {len(place_links)} places...")
             total = len(place_links)
 
-            semaphore = asyncio.Semaphore(12)
+            semaphore = asyncio.Semaphore(8)
 
             # Create tasks
             tasks = [
