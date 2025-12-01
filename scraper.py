@@ -65,6 +65,7 @@ async def scrape_google_maps(
     max_places: int = 120,
     lang: str = "en",
     headless=False,
+    n_semaphore: int = 8,
 ) -> pl.DataFrame:
     """
     Scrapes Google Maps for places based on a query.
@@ -122,7 +123,7 @@ async def scrape_google_maps(
             logger.info(f"\nScraping details for {len(place_links)} places...")
             total = len(place_links)
 
-            semaphore = asyncio.Semaphore(8)
+            semaphore = asyncio.Semaphore(n_semaphore)
 
             # Create tasks
             tasks = [
@@ -142,7 +143,7 @@ async def scrape_google_maps(
         except Exception as e:
             logger.info(f"An error occurred during scraping: {e}")
 
-            traceback.print_exc()  
+            traceback.print_exc()
         finally:
             # Ensure browser is closed if an error occurred mid-process
             if (
@@ -220,7 +221,6 @@ async def get_place_urls(
             "Failed to create a new browser page (context.new_page() returned None)."
         )
     # Removed problematic: await page.set_default_timeout(DEFAULT_TIMEOUT)
-    # Removed associated debug logger.infos
     search_url = make_place_url(query=query, geo_coordinates=geo_coordinates, zoom=zoom)
 
     logger.info(f"Navigating to search URL: {search_url}")
