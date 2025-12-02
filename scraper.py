@@ -61,7 +61,7 @@ async def scrape_google_maps(
     queries: Set[str],
     geo_coordinates: Point,
     zoom: float,
-    proxy: Dict,
+    proxy: Dict | None = None,
     max_places: int = 120,
     lang: str = "en",
     headless=False,
