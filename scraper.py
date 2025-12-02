@@ -1,10 +1,10 @@
-import asyncio  # Changed from time
+import asyncio
 import itertools
 import logging
 import random
 import time
 import traceback
-from typing import Dict, List, Set
+from typing import Dict, Set
 from urllib.parse import quote_plus
 
 import polars as pl
@@ -58,7 +58,7 @@ def make_place_url(query: str, geo_coordinates: Point, zoom: float):
 
 # --- Main Scraping Logic ---
 async def scrape_google_maps(
-    queries: List[str],
+    queries: Set[str],
     geo_coordinates: Point,
     zoom: float,
     proxy: Dict,
@@ -105,7 +105,7 @@ async def scrape_google_maps(
                 get_place_urls(
                     context=context,
                     max_places=max_places,
-                    query=query,
+                    query=query.replace("_", " "),
                     geo_coordinates=geo_coordinates,
                     zoom=zoom,
                 )
