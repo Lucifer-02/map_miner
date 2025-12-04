@@ -47,6 +47,10 @@ LAUNCH_ARGS = [
     "--ignore-certificate-errors-spki-list",
     "--disable-web-security",
     "--blink-settings=imagesEnabled=false",
+    "--disable-accelerated-2d-canvas",
+    "--no-first-run",
+    "--single-process",  # Currently, this is needed for '--no-sandbox' on Linux.
+    "--headless=new",
 ]
 
 
@@ -93,9 +97,11 @@ async def scrape_google_maps(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.37 Safari/537.36",
                 java_script_enabled=True,
                 accept_downloads=False,
-                storage_state="./state.json",
                 # Consider setting viewport, locale, timezone if needed
-                viewport={"width": 1920, "height": 1080},
+                viewport={
+                    "width": 1920 + random.randint(-50, 50),
+                    "height": 1080 + random.randint(-50, 50),
+                },
                 timezone_id="Asia/Singapore",
                 locale=lang,
             )
@@ -166,19 +172,30 @@ async def process_link(
         logger.info(f"Processing link {count}/{total}: {link}")
         page = await context.new_page()
         try:
+            await page.set_extra_http_headers({"Referer": "https://www.google.com/"})
             await page.goto(link, wait_until="domcontentloaded", timeout=30000)
 
             # Humanize: Move mouse randomly around the center before doing anything
             await page.mouse.move(random.randint(100, 1000), random.randint(100, 800))
-            await asyncio.sleep(random.uniform(0.3, 1.2))
+            await page.goto(
+                link, wait_until="networkidle", timeout=30000
+            )  # Wait for network to calm down
+            await asyncio.sleep(random.uniform(2, 5))
 
             html_content = await page.content()
 
+            # if (
+            #     page.locator('iframe[name="a-280r0snlgxq2"]')
+            #     .content_frame.get_by_text("I'm not a robot")
+            #     .is_visible()
+            # ) and "sorry" in page.url:
             if (
-                page.locator('iframe[name="a-280r0snlgxq2"]')
-                .content_frame.get_by_text("I'm not a robot")
-                .is_visible()
-            ) and "sorry" in page.url:
+                "sorry/index" in page.url
+                or await page.locator(
+                    'text="Our systems have detected unusual traffic"'
+                ).count()
+                > 0
+            ):
                 logging.debug("CAPTCHA DECTECTED!!!")
                 await page.screenshot(path=f"image_{int(time.time())}.png")
 
@@ -231,7 +248,15 @@ async def get_place_urls(
         logging.debug("CONSENT DETECTED!!!")
         await pass_consent(search_page=search_page)
 
-    if "sorry" in search_page.url:
+    # if "sorry" in search_page.url:
+
+    if (
+        "sorry/index" in search_page.url
+        or await search_page.locator(
+            'text="Our systems have detected unusual traffic"'
+        ).count()
+        > 0
+    ):
         logging.info("CAPTCHA DECTECTED!!!")
         await search_page.screenshot(path=f"image_{int(time.time())}.png")
 
