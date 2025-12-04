@@ -50,7 +50,7 @@ LAUNCH_ARGS = [
     "--disable-accelerated-2d-canvas",
     "--no-first-run",
     "--single-process",  # Currently, this is needed for '--no-sandbox' on Linux.
-    "--headless=new",
+    # "--headless=new",
 ]
 
 
