@@ -177,9 +177,9 @@ async def process_link(
 
             # Humanize: Move mouse randomly around the center before doing anything
             await page.mouse.move(random.randint(100, 1000), random.randint(100, 800))
-            await page.goto(
-                link, wait_until="networkidle", timeout=30000
-            )  # Wait for network to calm down
+            # await page.goto(
+            #     link, wait_until="networkidle", timeout=30000
+            # )  # Wait for network to calm down
             await asyncio.sleep(random.uniform(2, 5))
 
             html_content = await page.content()
