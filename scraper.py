@@ -3,6 +3,7 @@ import itertools
 import logging
 import random
 import time
+import traceback
 from typing import Dict, Set
 from urllib.parse import quote_plus
 
@@ -167,37 +168,68 @@ async def process_link(
     total: int,
 ) -> Dict[str, str] | None:
     async with semaphore:
-        logger.info(f"Processing link {count}/{total}: {link}")
-        page = await context.new_page()
+        page: Page | None = None
         try:
-            await page.set_extra_http_headers({"Referer": "https://www.google.com/"})
-            await page.goto(link, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_load_state(state="load")
+            logger.info(f"Processing link {count}/{total}: {link}")
+            page = await context.new_page()
 
-            # Humanize: Move mouse randomly around the center before doing anything
-            await page.mouse.move(random.randint(100, 1000), random.randint(100, 800))
-            # await page.goto(
-            #     link, wait_until="networkidle", timeout=30000
-            # )  # Wait for network to calm down
-            await asyncio.sleep(random.uniform(2, 5))
+            # 2. Set Headers (User-Agent should ideally be randomized in the context, not here)
+            await page.set_extra_http_headers(
+                {
+                    "Referer": "https://www.google.com/",
+                    "Accept-Language": "en-US,en;q=0.9",
+                }
+            )
+
+            # 3. Navigation with robust Error Handling
+            try:
+                # 'domcontentloaded' is faster, but we will add explicit waits later
+                await page.goto(link, wait_until="domcontentloaded", timeout=30000)
+            except PlaywrightTimeoutError:
+                logger.warning(f"  ❌ Timeout loading: {link}")
+                return None
+            except Exception as e:
+                logger.error(f"  ❌ Error loading {link}: {e}")
+                return None
+
+            # 4. Humanize: Scroll + Mouse
+            # Scroll down to trigger lazy loading (essential for reviews/images)
+            await page.mouse.wheel(0, random.randint(300, 700))
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+            # Move mouse slightly
+            await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+
+            # Scroll back up slightly or waiting for network to settle
+            try:
+                # Wait for network to be idle (no active connections for 500ms)
+                # This is better than a fixed sleep
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except:
+                pass  # Continue even if network is chatty
+
+            # 5. Check for CAPTCHA / Bans
+            # Checking URL is fast, checking selectors is slower
+            if "sorry/index" in page.url:
+                logger.warning("  🚨 CAPTCHA/Ban Detected (URL check)!")
+                await page.screenshot(path=f"captcha_{int(time.time())}.png")
+                return None
+
+            # Quick check for specific text without throwing error if not found
+            content_text = await page.evaluate("document.body.innerText")
+            if "Our systems have detected unusual traffic" in content_text:
+                logger.warning("  🚨 CAPTCHA Detected (Text check)!")
+                await page.screenshot(path=f"captcha_{int(time.time())}.png")
+                return None
+
+            # 6. Extract Data
+            # Optional: Wait for a known element to ensure successful render
+            # try:
+            #     await page.wait_for_selector('h1', timeout=3000)
+            # except:
+            #     pass
 
             html_content = await page.content()
-
-            # if (
-            #     page.locator('iframe[name="a-280r0snlgxq2"]')
-            #     .content_frame.get_by_text("I'm not a robot")
-            #     .is_visible()
-            # ) and "sorry" in page.url:
-            if (
-                "sorry/index" in page.url
-                or await page.locator(
-                    'text="Our systems have detected unusual traffic"'
-                ).count()
-                > 0
-            ):
-                logging.debug("CAPTCHA DECTECTED!!!")
-                await page.screenshot(path=f"captcha_{int(time.time())}.png")
-
             place_data = extract_place_data(html_content)
 
             if place_data:
@@ -205,17 +237,20 @@ async def process_link(
                 logger.info(f"  ✅ Extracted: {link}")
                 return place_data
             else:
-                logger.info(f"  ⚠️ Failed to extract: {link}")
-                await page.screenshot(path=f"extract_failed_{int(time.time())}.png")
-                logger.debug(f"html content: {html_content}")
+                logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
+                # Save HTML to debug why extraction failed
+                # with open(f"failed_{int(time.time())}.html", "w", encoding="utf-8") as f:
+                #     f.write(html_content)
                 return None
 
-        except PlaywrightTimeoutError:
-            logger.error(f"  ⏰ Timeout for: {link}")
         except Exception as e:
-            logger.error(f"  ❌ Error for {link}: {e}")
+            logger.error(f"  ❌ Unexpected error: {e}")
+            return None
+
         finally:
-            await page.close()
+            # 7. CLEANUP: Vital to prevent memory leaks
+            if page:
+                await page.close()
 
 
 async def pass_consent(search_page: Page):
