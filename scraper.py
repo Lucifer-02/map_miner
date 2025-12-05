@@ -2,8 +2,6 @@ import asyncio
 import itertools
 import logging
 import random
-import time
-import traceback
 from typing import Dict, Set
 from urllib.parse import quote_plus
 
@@ -14,8 +12,8 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from .extractor import extract_place_data
-from .RecaptchaSolver import RecaptchaSolver
+from extractor import extract_place_data
+from RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
 
@@ -26,7 +24,7 @@ MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
 )
 # Launch args tuned to reduce headless fingerprints and cut noisy features
 LAUNCH_ARGS = [
-    "--start-maximized",
+    # "--start-maximized",
     "--no-default-browser-check",
     "--disable-dev-shm-usage",
     "--disable-setuid-sandbox",
@@ -36,7 +34,6 @@ LAUNCH_ARGS = [
     # "--mute-audio",
     "--disable-extensions",
     "--disable-breakpad",
-    # "--disable-features=TranslateUI,BlinkGenPropertyTrees",
     "--disable-ipc-flooding-protection",
     "--enable-features=NetworkService,NetworkServiceInProcess",
     "--disable-default-apps",
@@ -49,7 +46,7 @@ LAUNCH_ARGS = [
     "--blink-settings=imagesEnabled=false",
     "--disable-accelerated-2d-canvas",
     "--no-first-run",
-    "--single-process",  # Currently, this is needed for '--no-sandbox' on Linux.
+    "--single-process",
     # "--headless=new",
 ]
 
@@ -174,6 +171,7 @@ async def process_link(
         try:
             await page.set_extra_http_headers({"Referer": "https://www.google.com/"})
             await page.goto(link, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_load_state(state="load")
 
             # Humanize: Move mouse randomly around the center before doing anything
             await page.mouse.move(random.randint(100, 1000), random.randint(100, 800))
