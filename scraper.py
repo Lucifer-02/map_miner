@@ -12,8 +12,8 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from extractor import extract_place_data
-from RecaptchaSolver import RecaptchaSolver
+from .extractor import extract_place_data
+from .RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
 
