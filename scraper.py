@@ -2,8 +2,8 @@ import asyncio
 import itertools
 import logging
 import random
-from typing import Dict, Set
 import time
+from typing import Dict, Set
 from urllib.parse import quote_plus
 
 import polars as pl
@@ -13,7 +13,8 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from .extractor import extract_place_data from .RecaptchaSolver import RecaptchaSolver
+from .extractor import extract_place_data
+from .RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
 
