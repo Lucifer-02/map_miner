@@ -3,6 +3,7 @@ import itertools
 import logging
 import random
 from typing import Dict, Set
+import time
 from urllib.parse import quote_plus
 
 import polars as pl
@@ -12,8 +13,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from .extractor import extract_place_data
-from .RecaptchaSolver import RecaptchaSolver
+from .extractor import extract_place_data from .RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
 
@@ -195,7 +195,7 @@ async def process_link(
                 > 0
             ):
                 logging.debug("CAPTCHA DECTECTED!!!")
-                await page.screenshot(path=f"image_{int(time.time())}.png")
+                await page.screenshot(path=f"captcha_{int(time.time())}.png")
 
             place_data = extract_place_data(html_content)
 
@@ -205,6 +205,7 @@ async def process_link(
                 return place_data
             else:
                 logger.info(f"  ⚠️ Failed to extract: {link}")
+                await page.screenshot(path=f"extract_failed_{int(time.time())}.png")
                 logger.debug(f"html content: {html_content}")
                 return None
 
@@ -256,7 +257,7 @@ async def get_place_urls(
         > 0
     ):
         logging.info("CAPTCHA DECTECTED!!!")
-        await search_page.screenshot(path=f"image_{int(time.time())}.png")
+        await search_page.screenshot(path=f"captcha_{int(time.time())}.png")
 
         recaptchaSolver = RecaptchaSolver(search_page)
         await recaptchaSolver.solveCaptcha()
