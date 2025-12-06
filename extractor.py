@@ -35,7 +35,7 @@ def safe_get(data, *keys):
     return current
 
 
-def extract_initial_json(html_content):
+def extract_initial_json(html_content: str):
     """
     Extracts the JSON string assigned to window.APP_INITIALIZATION_STATE from HTML content.
     """

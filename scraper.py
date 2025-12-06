@@ -240,8 +240,8 @@ async def process_link(
                 logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
                 await page.screenshot(path=f"failed_extract_{int(time.time())}.png")
                 # Save HTML to debug why extraction failed
-                # with open(f"failed_{int(time.time())}.html", "w", encoding="utf-8") as f:
-                #     f.write(html_content)
+                with open(f"failed_{int(time.time())}.html", "w", encoding="utf-8") as f:
+                    f.write(html_content)
                 return None
 
         except Exception as e:
