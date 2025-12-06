@@ -225,7 +225,7 @@ async def process_link(
             # 6. Extract Data
             # Optional: Wait for a known element to ensure successful render
             try:
-                await page.wait_for_selector('h1', timeout=3000)
+                await page.wait_for_selector('h1', timeout=2000)
             except:
                 pass
 
@@ -238,9 +238,10 @@ async def process_link(
                 return place_data
             else:
                 logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
+                await page.screenshot(path=f"failed_extract_{int(time.time())}.png")
                 # Save HTML to debug why extraction failed
-                with open(f"failed_{int(time.time())}.html", "w", encoding="utf-8") as f:
-                    f.write(html_content)
+                # with open(f"failed_{int(time.time())}.html", "w", encoding="utf-8") as f:
+                #     f.write(html_content)
                 return None
 
         except Exception as e:
