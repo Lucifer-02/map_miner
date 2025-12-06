@@ -352,6 +352,17 @@ async def process_link(
                 logger.warning(f"  ⚠️ Content not found (H1 missing): {link}")
                 # Optional: Snapshot only on failure
                 await page.screenshot(path=f"failed_{int(current)}.png")
+
+                # Only save files on failure (saves I/O)
+                save_tasks = [
+                    page.screenshot(path=f"failed_h1_{int(current)}.png"),
+                    asyncio.to_thread(
+                        lambda: open(
+                            f"failed_{int(current)}.html", "w", encoding="utf-8"
+                        ).write(html_content)
+                    ),
+                ]
+                await asyncio.gather(*save_tasks, return_exceptions=True)
                 return None
 
             # 7. Heavy Optimization: Extraction Strategy
