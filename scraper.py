@@ -168,6 +168,7 @@ async def process_link(
     total: int,
 ) -> Dict[str, str] | None:
     async with semaphore:
+        current = time.time()
         page: Page | None = None
         try:
             logger.info(f"Processing link {count}/{total}: {link}")
@@ -212,20 +213,20 @@ async def process_link(
             # Checking URL is fast, checking selectors is slower
             if "sorry/index" in page.url:
                 logger.warning("  🚨 CAPTCHA/Ban Detected (URL check)!")
-                await page.screenshot(path=f"captcha_{int(time.time())}.png")
+                await page.screenshot(path=f"captcha_{int(current)}.png")
                 return None
 
             # Quick check for specific text without throwing error if not found
             content_text = await page.evaluate("document.body.innerText")
             if "Our systems have detected unusual traffic" in content_text:
                 logger.warning("  🚨 CAPTCHA Detected (Text check)!")
-                await page.screenshot(path=f"captcha_{int(time.time())}.png")
+                await page.screenshot(path=f"captcha_{int(current)}.png")
                 return None
 
             # 6. Extract Data
             # Optional: Wait for a known element to ensure successful render
             try:
-                await page.wait_for_selector('h1', timeout=2000)
+                await page.wait_for_selector("h1", timeout=2000)
             except:
                 pass
 
@@ -238,9 +239,8 @@ async def process_link(
                 return place_data
             else:
                 logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
-                await page.screenshot(path=f"failed_extract_{int(time.time())}.png")
-                # Save HTML to debug why extraction failed
-                with open(f"failed_{int(time.time())}.html", "w", encoding="utf-8") as f:
+                await page.screenshot(path=f"failed_extract_{int(current)}.png")
+                with open(f"failed_{int(current)}.html", "w", encoding="utf-8") as f:
                     f.write(html_content)
                 return None
 
