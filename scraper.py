@@ -283,6 +283,105 @@ async def process_link_1(
 
 
 async def process_link(
+    context: ChromiumBrowserContext,
+    link: str,
+    semaphore: asyncio.Semaphore,
+    count: int,
+    total: int,
+) -> Dict[str, str] | None:
+    async with semaphore:
+        current = time.time()
+        page: Page | None = None
+        try:
+            logger.info(f"Processing link {count}/{total}: {link}")
+            page = await context.new_page()
+
+            # 2. Set Headers (User-Agent should ideally be randomized in the context, not here)
+            await page.set_extra_http_headers(
+                {
+                    "Referer": "https://www.google.com/",
+                    "Accept-Language": "en-US,en;q=0.9",
+                }
+            )
+
+            # 3. Navigation with robust Error Handling
+            try:
+                # 'domcontentloaded' is faster, but we will add explicit waits later
+                await page.goto(link, wait_until="domcontentloaded", timeout=30000)
+            except PlaywrightTimeoutError:
+                logger.warning(f"  ❌ Timeout loading: {link}")
+                return None
+            except Exception as e:
+                logger.error(f"  ❌ Error loading {link}: {e}")
+                return None
+
+            # 4. Humanize: Scroll + Mouse
+            # Scroll down to trigger lazy loading (essential for reviews/images)
+            await page.mouse.wheel(0, random.randint(300, 700))
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+            # Move mouse slightly
+            await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
+
+            # Scroll back up slightly or waiting for network to settle
+            try:
+                # Wait for network to be idle (no active connections for 500ms)
+                # This is better than a fixed sleep
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except:
+                pass  # Continue even if network is chatty
+
+            # 5. Check for CAPTCHA / Bans
+            # Checking URL is fast, checking selectors is slower
+            if "sorry/index" in page.url:
+                logger.warning("  🚨 CAPTCHA/Ban Detected (URL check)!")
+                await page.screenshot(path=f"captcha_{int(current)}.png")
+                return None
+
+            # Quick check for specific text without throwing error if not found
+            content_text = await page.evaluate("document.body.innerText")
+            if "Our systems have detected unusual traffic" in content_text:
+                logger.warning("  🚨 CAPTCHA Detected (Text check)!")
+                await page.screenshot(path=f"captcha_{int(current)}.png")
+                return None
+
+            # 6. Extract Data
+            # Optional: Wait for a known element to ensure successful render
+            try:
+                await page.wait_for_selector("h1", timeout=2000)
+            except:
+                pass
+
+            html_content = await page.content()
+            place_data = extract_place_data(html_content)
+
+            if place_data:
+                place_data["link"] = link
+                logger.info(f"  ✅ Extracted: {link}")
+                # with open(
+                #     f"successful_{int(current)}.html", "w", encoding="utf-8"
+                # ) as f:
+                #     f.write(html_content)
+                # logger.info("Saved successful page.")
+                return place_data
+            else:
+                logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
+                await page.screenshot(path=f"failed_extract_{int(current)}.png")
+                with open(f"failed_{int(current)}.html", "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                return None
+
+        except Exception as e:
+            logger.error(f"  ❌ Unexpected error: {e}")
+            return None
+
+        finally:
+            # 7. CLEANUP: Vital to prevent memory leaks
+            if page:
+                await page.close()
+
+
+async def process_link_2(
     context: BrowserContext,
     link: str,
     semaphore: asyncio.Semaphore,
