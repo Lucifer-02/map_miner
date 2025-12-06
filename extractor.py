@@ -63,12 +63,15 @@ def extract_initial_json(html_content: str):
 def parse_json_data(json_str):
     """
     Parses the extracted JSON string, handling the nested JSON string if present.
-    Returns the main data blob (list) or None if parsing fails or structure is unexpected.
+    Returns a tuple of (data_blob, format_tag) or (None, None) if parsing fails.
+    format_tag is "rich" for the usual structure and "lean" for a slimmed-down
+    variant observed in some pages.
     """
     if not json_str:
-        return None
+        return None, None
     try:
         initial_data = json.loads(json_str)
+        data_blob = None
 
         # Check the initial heuristic path [3][6]
         if (
@@ -84,7 +87,7 @@ def parse_json_data(json_str):
                 logger.debug(
                     "Found expected list structure directly at initial_data[3][6]."
                 )
-                return data_blob_or_str
+                data_blob = data_blob_or_str
 
             # Case 2: It's the string containing the actual JSON
             elif isinstance(data_blob_or_str, str) and data_blob_or_str.startswith(
@@ -102,49 +105,68 @@ def parse_json_data(json_str):
                         potential_data_blob = safe_get(actual_data, 6)
                         if isinstance(potential_data_blob, list):
                             logger.debug("Returning data blob found at actual_data[6].")
-                            return (
-                                potential_data_blob  # This is the main data structure
-                            )
+                            data_blob = potential_data_blob  # This is the main data structure
                         else:
                             logger.debug(
                                 f"Data at actual_data[6] is not a list, but {type(potential_data_blob)}."
                             )
-                            return None  # Structure mismatch within inner data
+                            data_blob = None  # Structure mismatch within inner data
                     else:
                         logger.debug(
                             f"Parsed inner JSON is not a list or too short (len <= 6), type: {type(actual_data)}."
                         )
-                        return None  # Inner JSON structure not as expected
+                        data_blob = None  # Inner JSON structure not as expected
 
                 except json.JSONDecodeError as e_inner:
                     logger.debug(f"Error decoding inner JSON string: {e_inner}")
-                    return None
+                    data_blob = None
                 except Exception as e_inner_general:
                     logger.debug(
                         f"Unexpected error processing inner JSON string: {e_inner_general}"
                     )
-                    return None
+                    data_blob = None
 
             # Case 3: Data at [3][6] is neither a list nor the expected string
             else:
                 logger.debug(
                     f"Parsed JSON structure unexpected at [3][6]. Expected list or prefixed JSON string, got {type(data_blob_or_str)}."
                 )
-                return None  # Unexpected structure at [3][6]
+                data_blob = None  # Unexpected structure at [3][6]
 
         # Case 4: Initial path [3][6] itself wasn't valid
         else:
             logger.debug(
                 f"Initial JSON structure not as expected (list[3][6] path not valid). Type: {type(initial_data)}"
             )
-            return None  # Initial structure invalid
+            data_blob = None  # Initial structure invalid
 
     except json.JSONDecodeError as e:
         logger.debug(f"Error decoding initial JSON: {e}")
-        return None
+        data_blob = None
     except Exception as e:
         logger.debug(f"Unexpected error parsing JSON data: {e}")
-        return None
+        data_blob = None
+
+    if data_blob is not None:
+        return data_blob, "rich"
+
+    # --- Fallback path: some pages store the data at [3][5] instead of [3][6] ---
+    try:
+        alt_blob = safe_get(initial_data, 3, 5)
+        if isinstance(alt_blob, str) and alt_blob.startswith(")]}'\n"):
+            alt_parsed = json.loads(alt_blob.split(")]}'\n", 1)[1])
+            if isinstance(alt_parsed, list) and len(alt_parsed) > 0:
+                first_entry = alt_parsed[0]
+                if isinstance(first_entry, list):
+                    logger.debug("Using fallback data blob at initial_data[3][5].")
+                    return first_entry, "lean"
+        logger.debug("Fallback path [3][5] did not yield a usable list structure.")
+    except json.JSONDecodeError as e:
+        logger.debug(f"Error decoding fallback JSON string: {e}")
+    except Exception as e:
+        logger.debug(f"Unexpected error in fallback parsing: {e}")
+
+    return None, None
 
 
 # --- Field Extraction Functions (Indices relative to the data_blob returned by parse_json_data) ---
@@ -257,6 +279,82 @@ def get_categories(data):
     return safe_get(data, 13)
 
 
+# --- Fallback (lean structure) extraction helpers ---
+
+
+def get_main_name_lean(data):
+    return safe_get(data, 1)
+
+
+def get_place_id_lean(data):
+    return safe_get(data, 0)
+
+
+def get_latitude_lean(data):
+    return safe_get(data, 3, 2)
+
+
+def get_longitude_lean(data):
+    return safe_get(data, 3, 3)
+
+
+def get_address_lean(initial_data):
+    """Extract address from summary string in APP_INITIALIZATION_STATE[9][0]."""
+    summary = safe_get(initial_data, 9, 0)
+    if isinstance(summary, str) and "·" in summary:
+        parts = summary.split("·", 1)
+        if len(parts) > 1:
+            return parts[1].strip()
+    return None
+
+
+def get_categories_lean(initial_data):
+    """
+    Extract categories from summary string or gcid marker.
+    """
+    summary = safe_get(initial_data, 9, 1)
+    if isinstance(summary, str) and "·" in summary:
+        cat = summary.split("·", 1)[1].strip()
+        if cat:
+            return [cat]
+
+    gcid = safe_get(initial_data, 2, 3, 0, 13, 0, 14)
+    if isinstance(gcid, str) and gcid.startswith("gcid:"):
+        cat = gcid.split(":", 1)[1].replace("_", " ").title()
+        return [cat]
+
+    return None
+
+
+def get_thumbnail_lean(initial_data):
+    thumb = safe_get(initial_data, 9, 2)
+    return thumb if isinstance(thumb, str) else None
+
+
+def parse_rating_reviews_from_html(html_content: str):
+    """
+    Fallback parsing for rating and review count directly from HTML attributes.
+    """
+    rating = None
+    reviews = None
+
+    m_rating = re.search(r'aria-label="([0-9\\.]+) stars', html_content)
+    if m_rating:
+        try:
+            rating = float(m_rating.group(1))
+        except (TypeError, ValueError):
+            rating = None
+
+    m_reviews = re.search(r'aria-label="([0-9,]+) reviews', html_content)
+    if m_reviews:
+        try:
+            reviews = int(m_reviews.group(1).replace(",", ""))
+        except (TypeError, ValueError):
+            reviews = None
+
+    return rating, reviews
+
+
 def get_thumbnail(data):
     """Extracts the main thumbnail image URL."""
     # This path might still be relative to the old structure, needs verification
@@ -281,55 +379,55 @@ def extract_place_data(html_content: str) -> Dict | None:
         logger.debug("Failed to extract JSON string from HTML.")
         return None
 
-    data_blob = parse_json_data(json_str)
+    data_blob, data_format = parse_json_data(json_str)
+    initial_data = None
+    try:
+        initial_data = json.loads(json_str)
+    except Exception:
+        initial_data = None
+
     if not data_blob:
         logger.debug("Failed to parse JSON data or find expected structure.")
         return None
 
-    # Now extract individual fields using the helper functions
-    place_details = {
-        "name": get_main_name(data_blob),
-        "place_id": get_place_id(data_blob),
-        "latitude": get_latitude(data_blob),
-        "longitude": get_longitude(data_blob),
-        "address": get_complete_address(data_blob),
-        # "rating": get_rating(data_blob),
-        # "reviews_count": get_reviews_count(data_blob),
-        "categories": get_categories(data_blob),
-        # "website": get_website(data_blob),
-        # "phone": get_phone_number(data_blob), # Needs index verification
-        # "thumbnail": get_thumbnail(data_blob), # Needs index verification
-        # Add other fields as needed
-    }
+    if data_format == "rich":
+        # Now extract individual fields using the helper functions
+        place_details = {
+            "name": get_main_name(data_blob),
+            "place_id": get_place_id(data_blob),
+            "latitude": get_latitude(data_blob),
+            "longitude": get_longitude(data_blob),
+            "address": get_complete_address(data_blob),
+            # "rating": get_rating(data_blob),
+            # "reviews_count": get_reviews_count(data_blob),
+            "categories": get_categories(data_blob),
+            # "website": get_website(data_blob),
+            # "phone": get_phone_number(data_blob), # Needs index verification
+            # "thumbnail": get_thumbnail(data_blob), # Needs index verification
+            # Add other fields as needed
+        }
+    elif data_format == "lean":
+        # Minimal fallback extraction for lean structure
+        place_details = {
+            "name": get_main_name_lean(data_blob),
+            "place_id": get_place_id_lean(data_blob),
+            "latitude": get_latitude_lean(data_blob),
+            "longitude": get_longitude_lean(data_blob),
+        }
+
+        if initial_data:
+            address = get_address_lean(initial_data)
+            if address:
+                place_details["address"] = address
+
+            categories = get_categories_lean(initial_data)
+            if categories:
+                place_details["categories"] = categories
+    else:
+        logger.debug("Unknown data format encountered during extraction.")
+        return None
 
     # Filter out None values if desired
     place_details = {k: v for k, v in place_details.items() if v is not None}
 
     return place_details if place_details else None
-
-
-def test():
-    # Load sample HTML content from a file (replace 'sample_place.html' with your file)
-    try:
-        with open("sample_place.html", "r", encoding="utf-8") as f:
-            sample_html = f.read()
-
-        extracted_info = extract_place_data(sample_html)
-
-        if extracted_info:
-            logger.debug("Extracted Place Data:")
-            logger.debug(json.dumps(extracted_info, indent=2))
-        else:
-            logger.debug("Could not extract data from the sample HTML.")
-
-    except FileNotFoundError:
-        logger.debug(
-            "Sample HTML file 'sample_place.html' not found. Cannot run example."
-        )
-    except Exception as e:
-        logger.debug(f"An error occurred during example execution: {e}")
-
-
-# Example usage (for testing):
-if __name__ == "__main__":
-    test()
