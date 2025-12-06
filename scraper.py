@@ -137,7 +137,7 @@ async def scrape_google_maps(
 
             # Create tasks
             tasks = [
-                process_link(context, link, semaphore, i + 1, total)
+                process_link_1(context, link, semaphore, i + 1, total)
                 for i, link in enumerate(place_links)
             ]
             results = await asyncio.gather(*tasks)
@@ -180,6 +180,16 @@ async def process_link_1(
             logger.info(f"Processing link {count}/{total}: {link}")
             page = await context.new_page()
 
+            # 1. OPTIMIZATION: Block unnecessary resources
+            # This is the biggest speed gain. Loading images/fonts is useless for scraping text.
+            BLOCKED_RESOURCE_TYPES = ["image", "font", "media", "stylesheet", "other"]
+            await page.route(
+                "**/*",
+                lambda route: route.abort()
+                if route.request.resource_type in BLOCKED_RESOURCE_TYPES
+                else route.continue_(),
+            )
+
             # Set headers once
             await page.set_extra_http_headers(
                 {
@@ -216,14 +226,14 @@ async def process_link_1(
             # Move mouse (non-blocking)
             await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
 
-            # Use Promise.race pattern for faster completion
-            try:
-                await asyncio.wait_for(
-                    page.wait_for_load_state("networkidle"),
-                    timeout=3.0,  # Reduced from 5s
-                )
-            except asyncio.TimeoutError:
-                pass
+            # # Use Promise.race pattern for faster completion
+            # try:
+            #     await asyncio.wait_for(
+            #         page.wait_for_load_state("networkidle"),
+            #         timeout=3.0,  # Reduced from 5s
+            #     )
+            # except asyncio.TimeoutError:
+            #     pass
 
             # Combined content extraction and CAPTCHA check
             # Use evaluate to get both HTML and text in single call
@@ -307,6 +317,7 @@ async def process_link(
             )
 
             # 3. Navigation
+
             try:
                 # 'domcontentloaded' is sufficient for 90% of sites if we wait for a specific selector later
                 # Reduced timeout to fail fast
