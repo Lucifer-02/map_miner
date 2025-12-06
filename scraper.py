@@ -236,11 +236,11 @@ async def process_link(
             if place_data:
                 place_data["link"] = link
                 logger.info(f"  ✅ Extracted: {link}")
-                with open(
-                    f"successful_{int(current)}.html", "w", encoding="utf-8"
-                ) as f:
-                    f.write(html_content)
-                logger.info("Saved successful page.")
+                # with open(
+                #     f"successful_{int(current)}.html", "w", encoding="utf-8"
+                # ) as f:
+                #     f.write(html_content)
+                # logger.info("Saved successful page.")
                 return place_data
             else:
                 logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
