@@ -226,15 +226,6 @@ async def process_link_1(
             # Move mouse (non-blocking)
             await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
 
-            # # Use Promise.race pattern for faster completion
-            # try:
-            #     await asyncio.wait_for(
-            #         page.wait_for_load_state("networkidle"),
-            #         timeout=3.0,  # Reduced from 5s
-            #     )
-            # except asyncio.TimeoutError:
-            #     pass
-
             # Combined content extraction and CAPTCHA check
             # Use evaluate to get both HTML and text in single call
             page_data = await page.evaluate("""() => {
@@ -278,7 +269,6 @@ async def process_link_1(
 
         finally:
             if page:
-                # Close without waiting (fire-and-forget)
                 asyncio.create_task(page.close())
 
 
