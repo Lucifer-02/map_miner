@@ -562,6 +562,13 @@ def parse_dom_from_html(html_content: str) -> dict:
         return {}
 
     dom_data = {}
+
+    def _attr(element, attribute: str) -> str:
+        val = element.get(attribute, "")
+        if isinstance(val, list):
+            return " ".join(val)
+        return str(val) if val is not None else ""
+
     h1 = soup.find("h1")
     if h1 and h1.get_text(strip=True):
         dom_data["name"] = h1.get_text(strip=True)
@@ -569,21 +576,21 @@ def parse_dom_from_html(html_content: str) -> dict:
     # Plus code
     pc_el = soup.select_one("[data-item-id='oloc'], [aria-label*='Plus code:']")
     if pc_el:
-        label = pc_el.get("aria-label", "")
+        label = _attr(pc_el, "aria-label")
         m = re.sub(r"^Plus code:\s*", "", label, flags=re.IGNORECASE).strip()
         dom_data["plus_code"] = m or pc_el.get_text(strip=True)
 
     # Address
     addr_el = soup.select_one("[data-item-id='address'], [aria-label^='Address:']")
     if addr_el:
-        label = addr_el.get("aria-label", "")
+        label = _attr(addr_el, "aria-label")
         m = re.sub(r"^Address:\s*", "", label, flags=re.IGNORECASE).strip()
         dom_data["address"] = m or addr_el.get_text(strip=True)
 
     # Phone
     phone_el = soup.select_one("[data-item-id^='phone:'], [aria-label^='Phone:']")
     if phone_el:
-        label = phone_el.get("aria-label", "")
+        label = _attr(phone_el, "aria-label")
         m = re.sub(r"^Phone:\s*", "", label, flags=re.IGNORECASE).strip()
         dom_data["phone"] = m or phone_el.get_text(strip=True)
 
@@ -591,14 +598,14 @@ def parse_dom_from_html(html_content: str) -> dict:
     web_el = soup.select_one("[data-item-id='authority'], [aria-label^='Website:']")
     if web_el:
         dom_data["website"] = (
-            web_el.get("href")
-            or web_el.get("aria-label", "").replace("Website:", "").strip()
+            _attr(web_el, "href")
+            or _attr(web_el, "aria-label").replace("Website:", "").strip()
         )
 
     # Menu url
     menu_el = soup.select_one("a[data-item-id='menu'], a[aria-label*='Menu']")
-    if menu_el and menu_el.get("href"):
-        dom_data["menu_url"] = menu_el.get("href")
+    if menu_el and _attr(menu_el, "href"):
+        dom_data["menu_url"] = _attr(menu_el, "href")
 
     # Price level
     pr_el = soup.select_one(
@@ -606,14 +613,14 @@ def parse_dom_from_html(html_content: str) -> dict:
     )
     if pr_el:
         dom_data["price_level"] = (
-            pr_el.get("aria-label") or pr_el.get_text(strip=True)
+            _attr(pr_el, "aria-label") or pr_el.get_text(strip=True)
         ).strip()
 
     # Open status
     os_el = soup.select_one("[aria-label*='Open'], [aria-label*='Closed']")
     if os_el:
         dom_data["open_status"] = (
-            os_el.get("aria-label") or os_el.get_text(strip=True)
+            _attr(os_el, "aria-label") or os_el.get_text(strip=True)
         ).strip()
 
     # Opening hours table
@@ -646,8 +653,9 @@ def parse_dom_from_html(html_content: str) -> dict:
     # Rating & Reviews
     stars_el = soup.select_one("[aria-label*='stars']")
     if stars_el:
+        stars_label = _attr(stars_el, "aria-label")
         m = re.search(
-            r"([0-9.]+)\s*stars", stars_el.get("aria-label", ""), re.IGNORECASE
+            r"([0-9.]+)\s*stars", stars_label, re.IGNORECASE
         )
         if m:
             try:
@@ -657,8 +665,9 @@ def parse_dom_from_html(html_content: str) -> dict:
 
     rev_el = soup.select_one("[aria-label*='reviews']")
     if rev_el:
+        rev_label = _attr(rev_el, "aria-label")
         m = re.search(
-            r"([0-9,]+)\s*reviews", rev_el.get("aria-label", ""), re.IGNORECASE
+            r"([0-9,]+)\s*reviews", rev_label, re.IGNORECASE
         )
         if m:
             try:

@@ -6,6 +6,7 @@ import random
 import re
 import time
 import traceback
+from typing import Any
 from urllib.parse import quote_plus
 
 import polars as pl
@@ -13,6 +14,7 @@ from geopy.point import Point
 from playwright.async_api import (
     ChromiumBrowserContext,
     Page,
+    ProxySettings,
     async_playwright,
 )
 from playwright.async_api import (
@@ -45,7 +47,64 @@ LAUNCH_ARGS = [
     "--disable-notifications",
     "--disable-blink-features=AutomationControlled",
     "--no-first-run",
+    # Bandwidth & Resource Optimization Flags
+    "--blink-settings=imagesEnabled=false",
+    "--disable-remote-fonts",
+    "--mute-audio",
+    "--disable-background-networking",
 ]
+
+# Resource types to abort across all pages (Search and Detail)
+BLOCKED_RESOURCE_TYPES = {"image", "media", "font", "stylesheet"}
+
+# URL substrings to abort (Map vector/satellite tiles, tracking, telemetry, photo CDN)
+BLOCKED_URL_PATTERNS = [
+    "/maps/vt",
+    "/vt/pb=",
+    "/vt/data=",
+    "khms",
+    "/kh/v=",
+    "google.com/vt",
+    "google-analytics.com",
+    "play.google.com/log",
+    "stats.g.doubleclick.net",
+    "/gen_204",
+    "googleusercontent.com",
+    "ggpht.com",
+    "streetviewpixels",
+]
+
+
+async def global_route_handler(route):
+    """
+    Context-wide route handler to block heavy resources and tracking,
+    saving significant network bandwidth while preserving reCAPTCHA and core APIs.
+    """
+    try:
+        req = route.request
+        url = req.url
+
+        # Always permit reCAPTCHA verification requests
+        if "recaptcha" in url:
+            await route.continue_()
+            return
+
+        # Block by resource type (images, media, fonts, stylesheets)
+        if req.resource_type in BLOCKED_RESOURCE_TYPES:
+            await route.abort()
+            return
+
+        # Block by URL pattern (Map vector tiles, tracking, telemetry, photo CDN)
+        if any(pattern in url for pattern in BLOCKED_URL_PATTERNS):
+            await route.abort()
+            return
+
+        await route.continue_()
+    except Exception:
+        try:
+            await route.continue_()
+        except Exception:
+            pass
 
 
 def make_place_url(
@@ -263,7 +322,7 @@ async def process_link(
     total: int,
     fields: list[str] | set[str] | None = None,
     max_retries: int = 2,
-) -> dict[str, any] | None:
+) -> dict[str, Any] | None:
     """
     Processes a single place link to extract data:
     - Pure I/O: intercepts rich network payload or collects HTML content
@@ -279,20 +338,6 @@ async def process_link(
                     f"Processing link [{count}/{total}] (attempt {attempt}/{max_retries}): {link}"
                 )
                 page = await context.new_page()
-
-                # Block heavy media resources safely without breaking scripts/XHR
-                BLOCKED_TYPES = {"image", "media", "font", "stylesheet"}
-
-                async def route_handler(route):
-                    try:
-                        if route.request.resource_type in BLOCKED_TYPES:
-                            await route.abort()
-                        else:
-                            await route.continue_()
-                    except Exception:
-                        pass
-
-                await page.route("**/*", route_handler)
 
                 # Intercept Google Maps rich place preview API response
                 preview_json: str | None = None
@@ -346,7 +391,25 @@ async def process_link(
                     except Exception:
                         pass
 
-                # Anti-bot human jitter: slight random scroll & mouse move
+                # Early exit: if rich preview JSON was intercepted, extract immediately without waiting for DOM
+                if preview_json:
+                    place_data = extract_place_data(
+                        html_content=None,
+                        preview_json=preview_json,
+                        fields=fields,
+                    )
+                    if place_data is not None and (
+                        "name" in place_data or len(place_data) >= 3
+                    ):
+                        if fields is None or "link" in fields:
+                            place_data["link"] = link
+                        elapsed = time.time() - start_time
+                        logger.info(
+                            f"  ✅ Extracted (early preview): {link} in {elapsed:.2f}s"
+                        )
+                        return place_data
+
+                # Anti-bot human jitter: slight random scroll & mouse move (fallback path)
                 try:
                     await page.mouse.move(
                         random.randint(100, 400), random.randint(100, 400)
@@ -435,7 +498,7 @@ async def scrape_google_maps(
     queries: set[str],
     geo_coordinates: Point,
     zoom: float,
-    proxy: dict | None = None,
+    proxy: ProxySettings | None = None,
     max_places: int = 120,
     lang: str = "en",
     headless: bool = False,
@@ -491,6 +554,9 @@ async def scrape_google_maps(
                 if (!window.chrome) { window.chrome = {}; }
                 window.chrome.runtime = window.chrome.runtime || {};
             """)
+
+            # Register context-wide bandwidth-saving route handler (search & detail pages)
+            await context.route("**/*", global_route_handler)
 
             # 1. Fetch place URLs across queries
             tasks = [

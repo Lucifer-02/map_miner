@@ -3,6 +3,7 @@ import random
 import asyncio
 import aiohttp
 import time
+from typing import Any
 from pydub import AudioSegment
 import speech_recognition as sr
 
@@ -75,7 +76,7 @@ class RecaptchaSolver:
             print("Converted MP3 to WAV.")
 
             # Recognize the audio
-            recognizer = sr.Recognizer()
+            recognizer: Any = sr.Recognizer()
             with sr.AudioFile(path_to_wav) as source:
                 audio = recognizer.record(source)
             captcha_text = recognizer.recognize_google(audio).lower()

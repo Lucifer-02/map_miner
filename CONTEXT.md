@@ -214,6 +214,11 @@ uv run main.py
    - **Cơ chế Stealth sạch, tự nhiên**: Không phụ thuộc vào thư viện bên ngoài dễ lỗi runtime; tích hợp cờ `--disable-blink-features=AutomationControlled` kết hợp `context.add_init_script` chuẩn mực giúp ẩn hoàn toàn `navigator.webdriver`.
    - **Chờ Adaptive & Tự động Retry**: Chờ bất đồng bộ thông minh theo sự kiện `preview_event` (tối đa 4.5s nhưng phản hồi ngay khi có dữ liệu ~0.8s - 1.2s), kèm cơ chế tự động thử lại (retry 2 lần) với jitter nhẹ khi mạng trễ.
    - **Vượt Consent đa ngôn ngữ**: Nhận diện và tự động vượt banner chấp thuận cookie bằng regex cho nhiều ngôn ngữ (Anh, Việt, Đức, Pháp, Ý...).
+4. **[ĐÃ HOÀN TẤT] Tối ưu hóa lưu lượng mạng & Băng thông (Bandwidth & Traffic Minimization)**:
+   - **Chặn tài nguyên toàn cục (`context.route`)**: Áp dụng bộ lọc tài nguyên trên toàn bộ `ChromiumBrowserContext`, bao gồm cả trang tìm kiếm (`search_page`) khi cuộn feed và các trang chi tiết (`process_link`).
+   - **Mở rộng danh mục chặn**: Tự động chặn hình ảnh, media, font chữ, CSS, và đặc biệt là các gói gạch bản đồ vector/vệ tinh (`/maps/vt`, `khms`), tracking & telemetry (`google-analytics`, `play.google.com/log`, `/gen_204`) trong khi vẫn giữ nguyên các yêu cầu giải reCAPTCHA.
+   - **Bật cờ Chromium tiết kiệm băng thông**: `--blink-settings=imagesEnabled=false`, `--disable-remote-fonts`, `--mute-audio`, `--disable-background-networking`.
+   - **Cơ chế Early Exit khi nhận `preview_json`**: Trích xuất dữ liệu và đóng trang ngay khi nhận được XHR `/maps/preview/place`, triệt tiêu thời gian chờ đợi DOM và hủy các luồng tải dở dang.
 
 ### Kế hoạch phát triển tính năng (Feature Roadmap):
 - [ ] **Proxy Manager**: Tích hợp module tự động xoay vòng proxy pool (HTTP/SOCKS5) với tính năng đo lường độ trễ và tự động loại bỏ proxy hỏng.
