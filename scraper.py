@@ -1,16 +1,15 @@
 import asyncio
 import itertools
 import logging
+import os
 import random
 import time
 import traceback
-from typing import Dict, Optional, Set
 from urllib.parse import quote_plus
 
 import polars as pl
 from geopy.point import Point
 from playwright.async_api import (
-    BrowserContext,
     ChromiumBrowserContext,
     Page,
     async_playwright,
@@ -19,8 +18,8 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from .extractor import extract_place_data
-from .RecaptchaSolver import RecaptchaSolver
+from extractor import extract_place_data
+from RecaptchaSolver import RecaptchaSolver
 
 logger = logging.getLogger("root.scraper")
 
@@ -66,14 +65,15 @@ def make_place_url(query: str, geo_coordinates: Point, zoom: float):
 
 # --- Main Scraping Logic ---
 async def scrape_google_maps(
-    queries: Set[str],
+    queries: set[str],
     geo_coordinates: Point,
     zoom: float,
-    proxy: Dict | None = None,
+    proxy: dict | None = None,
     max_places: int = 120,
     lang: str = "en",
     headless=False,
     n_semaphore: int = 8,
+    fields: list[str] | set[str] | None = None,
 ) -> pl.DataFrame:
     """
     Scrapes Google Maps for places based on a query.
@@ -81,7 +81,9 @@ async def scrape_google_maps(
     Args:
         query (str): The search query (e.g., "restaurants in New York").
         max_places (int, optional): Maximum number of places to scrape. Defaults to None (scrape all found).
-        lang (str, optional): Language code for Google Maps (e.g., 'en', 'es'). Defaults to "en". headless (bool, optional): Whether to run the browser in headless mode. Defaults to True.
+        lang (str, optional): Language code for Google Maps (e.g., 'en', 'es'). Defaults to "en".
+        headless (bool, optional): Whether to run the browser in headless mode. Defaults to True.
+        fields (list[str], optional): Specific list/set of fields to extract. Defaults to None (all fields).
 
     Returns:
         list: A list of dictionaries, each containing details for a scraped place.
@@ -137,7 +139,7 @@ async def scrape_google_maps(
 
             # Create tasks
             tasks = [
-                process_link_1(context, link, semaphore, i + 1, total)
+                process_link(context, link, semaphore, i + 1, total, fields=fields)
                 for i, link in enumerate(place_links)
             ]
             results = await asyncio.gather(*tasks)
@@ -165,14 +167,14 @@ async def scrape_google_maps(
     return pl.from_dicts(results)
 
 
-# another version
-async def process_link_1(
+async def process_link(
     context: ChromiumBrowserContext,
     link: str,
     semaphore: asyncio.Semaphore,
     count: int,
     total: int,
-) -> Dict[str, str] | None:
+    fields: list[str] | set[str] | None = None,
+) -> dict[str, str] | None:
     async with semaphore:
         current = time.time()
         page: Page | None = None
@@ -185,10 +187,29 @@ async def process_link_1(
             BLOCKED_RESOURCE_TYPES = ["image", "font", "media", "stylesheet", "other"]
             await page.route(
                 "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type in BLOCKED_RESOURCE_TYPES
-                else route.continue_(),
+                lambda route: (
+                    route.abort()
+                    if route.request.resource_type in BLOCKED_RESOURCE_TYPES
+                    else route.continue_()
+                ),
             )
+
+            # Listen for Google Maps rich place preview API response (raw IO)
+            preview_json = None
+            preview_event = asyncio.Event()
+
+            async def handle_response(response):
+                nonlocal preview_json
+                if "maps/preview/place" in response.url:
+                    try:
+                        text = await response.text()
+                        if text and len(text) > 50:
+                            preview_json = text
+                            preview_event.set()
+                    except Exception:
+                        pass
+
+            page.on("response", handle_response)
 
             # Set headers once
             await page.set_extra_http_headers(
@@ -208,6 +229,12 @@ async def process_link_1(
                 logger.error(f"  ❌ Error loading {link}: {e}")
                 return None
 
+            # Wait briefly for preview API response (usually arrives within 0.3s - 1.5s)
+            try:
+                await asyncio.wait_for(preview_event.wait(), timeout=1.5)
+            except TimeoutError:
+                pass
+
             # Parallel humanization + content check
             scroll_task = page.mouse.wheel(0, random.randint(300, 700))
             url_check = page.url
@@ -217,7 +244,8 @@ async def process_link_1(
             # Quick CAPTCHA check first (before expensive operations)
             if "sorry/index" in url_check:
                 logger.warning("  🚨 CAPTCHA/Ban Detected (URL check)!")
-                await page.screenshot(path=f"captcha_{int(current)}.png")
+                os.makedirs("debug", exist_ok=True)
+                await page.screenshot(path=f"debug/captcha_{int(current)}.png")
                 return None
 
             # Reduced sleep time
@@ -226,38 +254,38 @@ async def process_link_1(
             # Move mouse (non-blocking)
             await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
 
-            # Combined content extraction and CAPTCHA check
-            # Use evaluate to get both HTML and text in single call
-            page_data = await page.evaluate("""() => {
-                return {
-                    html: document.documentElement.outerHTML,
-                    bodyText: document.body.innerText,
-                    hasH1: !!document.querySelector('h1')
-                };
-            }""")
-
-            # Fast text-based CAPTCHA check
-            if "Our systems have detected unusual traffic" in page_data["bodyText"]:
+            # Fast text-based CAPTCHA check (I/O)
+            body_text = await page.inner_text("body")
+            if "Our systems have detected unusual traffic" in body_text:
                 logger.warning("  🚨 CAPTCHA Detected (Text check)!")
-                await page.screenshot(path=f"captcha_{int(current)}.png")
+                os.makedirs("debug", exist_ok=True)
+                await page.screenshot(path=f"debug/captcha_{int(current)}.png")
                 return None
 
-            # Extract data from already-fetched HTML
-            place_data = extract_place_data(page_data["html"])
+            # Retrieve raw HTML content (I/O)
+            html_content = await page.content()
 
-            if place_data:
-                place_data["link"] = link
+            # Delegate pure extraction to extractor.py
+            place_data = extract_place_data(
+                html_content=html_content,
+                preview_json=preview_json,
+                fields=fields,
+            )
+
+            if place_data is not None:
+                if fields is None or "link" in fields:
+                    place_data["link"] = link
                 logger.info(f"  ✅ Extracted: {link} in {time.time() - current:.2f}s")
                 return place_data
             else:
                 logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
-                # Only save files on failure (saves I/O)
+                os.makedirs("debug", exist_ok=True)
                 save_tasks = [
-                    page.screenshot(path=f"failed_extract_{int(current)}.png"),
+                    page.screenshot(path=f"debug/failed_extract_{int(current)}.png"),
                     asyncio.to_thread(
                         lambda: open(
-                            f"failed_{int(current)}.html", "w", encoding="utf-8"
-                        ).write(page_data["html"])
+                            f"debug/failed_{int(current)}.html", "w", encoding="utf-8"
+                        ).write(html_content)
                     ),
                 ]
                 await asyncio.gather(*save_tasks, return_exceptions=True)
@@ -272,236 +300,6 @@ async def process_link_1(
                 asyncio.create_task(page.close())
 
 
-async def process_link(
-    context: ChromiumBrowserContext,
-    link: str,
-    semaphore: asyncio.Semaphore,
-    count: int,
-    total: int,
-) -> Dict[str, str] | None:
-    async with semaphore:
-        current = time.time()
-        page: Page | None = None
-        try:
-            logger.info(f"Processing link {count}/{total}: {link}")
-            page = await context.new_page()
-
-            # 2. Set Headers (User-Agent should ideally be randomized in the context, not here)
-            await page.set_extra_http_headers(
-                {
-                    "Referer": "https://www.google.com/",
-                    "Accept-Language": "en-US,en;q=0.9",
-                }
-            )
-
-            # 3. Navigation with robust Error Handling
-            try:
-                # 'domcontentloaded' is faster, but we will add explicit waits later
-                await page.goto(link, wait_until="domcontentloaded", timeout=30000)
-            except PlaywrightTimeoutError:
-                logger.warning(f"  ❌ Timeout loading: {link}")
-                return None
-            except Exception as e:
-                logger.error(f"  ❌ Error loading {link}: {e}")
-                return None
-
-            # 4. Humanize: Scroll + Mouse
-            # Scroll down to trigger lazy loading (essential for reviews/images)
-            await page.mouse.wheel(0, random.randint(300, 700))
-            await asyncio.sleep(random.uniform(0.5, 1.5))
-
-            # Move mouse slightly
-            await page.mouse.move(random.randint(100, 500), random.randint(100, 500))
-
-            # Scroll back up slightly or waiting for network to settle
-            try:
-                # Wait for network to be idle (no active connections for 500ms)
-                # This is better than a fixed sleep
-                await page.wait_for_load_state("networkidle", timeout=5000)
-            except:
-                pass  # Continue even if network is chatty
-
-            # 5. Check for CAPTCHA / Bans
-            # Checking URL is fast, checking selectors is slower
-            if "sorry/index" in page.url:
-                logger.warning("  🚨 CAPTCHA/Ban Detected (URL check)!")
-                await page.screenshot(path=f"captcha_{int(current)}.png")
-                return None
-
-            # Quick check for specific text without throwing error if not found
-            content_text = await page.evaluate("document.body.innerText")
-            if "Our systems have detected unusual traffic" in content_text:
-                logger.warning("  🚨 CAPTCHA Detected (Text check)!")
-                await page.screenshot(path=f"captcha_{int(current)}.png")
-                return None
-
-            # 6. Extract Data
-            # Optional: Wait for a known element to ensure successful render
-            try:
-                await page.wait_for_selector("h1", timeout=2000)
-            except:
-                pass
-
-            html_content = await page.content()
-            place_data = extract_place_data(html_content)
-
-            if place_data:
-                place_data["link"] = link
-                logger.info(f"  ✅ Extracted: {link}")
-                # with open(
-                #     f"successful_{int(current)}.html", "w", encoding="utf-8"
-                # ) as f:
-                #     f.write(html_content)
-                # logger.info("Saved successful page.")
-                return place_data
-            else:
-                logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
-                await page.screenshot(path=f"failed_extract_{int(current)}.png")
-                with open(f"failed_{int(current)}.html", "w", encoding="utf-8") as f:
-                    f.write(html_content)
-                return None
-
-        except Exception as e:
-            logger.error(f"  ❌ Unexpected error: {e}")
-            return None
-
-        finally:
-            # 7. CLEANUP: Vital to prevent memory leaks
-            if page:
-                await page.close()
-
-
-async def process_link_2(
-    context: BrowserContext,
-    link: str,
-    semaphore: asyncio.Semaphore,
-    count: int,
-    total: int,
-) -> Optional[Dict[str, str]]:
-    async with semaphore:
-        # Define resource types to block to save bandwidth/time
-        BLOCKED_RESOURCE_TYPES = ["image", "font", "media", "stylesheet", "other"]
-        current = time.time()
-        page: Optional[Page] = None
-
-        try:
-            logger.info(f"Processing link {count}/{total}")
-            page = await context.new_page()
-
-            # 1. OPTIMIZATION: Block unnecessary resources
-            # This is the biggest speed gain. Loading images/fonts is useless for scraping text.
-            await page.route(
-                "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type in BLOCKED_RESOURCE_TYPES
-                else route.continue_(),
-            )
-
-            # 2. Set Headers
-            await page.set_extra_http_headers(
-                {
-                    "Referer": "https://www.google.com/",
-                    "Accept-Language": "en-US,en;q=0.9",
-                }
-            )
-
-            # 3. Navigation
-
-            try:
-                # 'domcontentloaded' is sufficient for 90% of sites if we wait for a specific selector later
-                # Reduced timeout to fail fast
-                await page.goto(link, wait_until="domcontentloaded", timeout=15000)
-            except PlaywrightTimeoutError:
-                logger.warning(f"  ❌ Timeout loading: {link}")
-                return None
-
-            # 4. Light Humanization (Concurrent)
-            # Instead of serial sleeps, we perform checks while "simulating" reading
-            # We skip the specific 'networkidle' wait because it is extremely slow/flaky
-
-            # Fast scroll to trigger lazy loads (if JS needs it)
-            # Executing this in JS is faster than Python calls
-            await page.evaluate("""
-                window.scrollTo(0, 300);
-                setTimeout(() => window.scrollTo(0, 0), 200);
-            """)
-
-            # 5. Check for CAPTCHA / Bans (Optimized)
-            # checking 'page.url' is instant.
-            if "sorry/index" in page.url:
-                logger.warning("  🚨 CAPTCHA detected (URL)!")
-                return None
-
-            # Optimization: Check specific title or limited text instead of entire body.innerText
-            # or use a very specific selector for the "Unusual traffic" box.
-            # Here we grab the first 1000 chars of text to avoid huge string serialization
-            start_text = await page.evaluate(
-                "document.body.innerText.substring(0, 1000)"
-            )
-            if "Our systems have detected unusual traffic" in start_text:
-                logger.warning("  🚨 CAPTCHA detected (Text)!")
-                return None
-
-            # 6. Extract Data (Wait for critical element)
-            # Instead of wait_for_selector inside a try/catch, we just wait.
-            # If the Critical Element (e.g. h1) isn't there, the page is likely broken/garbage anyway.
-            try:
-                # Wait max 3 seconds for the main header to appear
-                await page.wait_for_selector("h1", timeout=3000, state="attached")
-            except PlaywrightTimeoutError:
-                logger.warning(f"  ⚠️ Content not found (H1 missing): {link}")
-                # Optional: Snapshot only on failure
-                await page.screenshot(path=f"failed_{int(current)}.png")
-
-                # Only save files on failure (saves I/O)
-                save_tasks = [
-                    page.screenshot(path=f"failed_h1_{int(current)}.png"),
-                    asyncio.to_thread(
-                        lambda: open(
-                            f"failed_{int(current)}.html", "w", encoding="utf-8"
-                        ).write(html_content)
-                    ),
-                ]
-                await asyncio.gather(*save_tasks, return_exceptions=True)
-                return None
-
-            # 7. Heavy Optimization: Extraction Strategy
-            # NOTE: Ideally, move the logic of 'extract_place_data' inside page.evaluate()
-            # to return JSON directly. Passing full HTML to Python is slow.
-            # Assuming you must keep Python extraction:
-            html_content = await page.content()
-
-            # Offload CPU-bound parsing to a thread if 'extract_place_data' is complex/slow
-            # place_data = await asyncio.to_thread(extract_place_data, html_content)
-            place_data = extract_place_data(html_content)
-
-            if place_data:
-                place_data["link"] = link
-                logger.info(f"  ✅ Extracted in {time.time() - current:.2f}s")
-                return place_data
-            else:
-                logger.info(f"  ⚠️ Failed to extract (Structure changed?): {link}")
-                # Only save files on failure (saves I/O)
-                save_tasks = [
-                    page.screenshot(path=f"failed_extract_{int(current)}.png"),
-                    asyncio.to_thread(
-                        lambda: open(
-                            f"failed_{int(current)}.html", "w", encoding="utf-8"
-                        ).write(html_content)
-                    ),
-                ]
-                await asyncio.gather(*save_tasks, return_exceptions=True)
-                return None
-
-        except Exception as e:
-            logger.error(f"  ❌ Error: {e}")
-            return None
-
-        finally:
-            if page:
-                await page.close()
-
-
 async def pass_consent(search_page: Page):
     logging.debug("Passing consent...")
     accept_button = search_page.get_by_role("button", name="Reject all")
@@ -514,7 +312,7 @@ async def get_place_urls(
     query: str,
     geo_coordinates: Point,
     zoom: float,
-) -> Set[str]:
+) -> set[str]:
     search_page = await context.new_page()  # Added await
 
     if not search_page:
@@ -542,7 +340,8 @@ async def get_place_urls(
         > 0
     ):
         logging.info("CAPTCHA DECTECTED!!!")
-        await search_page.screenshot(path=f"captcha_{int(time.time())}.png")
+        os.makedirs("debug", exist_ok=True)
+        await search_page.screenshot(path=f"debug/captcha_{int(time.time())}.png")
 
         recaptchaSolver = RecaptchaSolver(search_page)
         await recaptchaSolver.solveCaptcha()

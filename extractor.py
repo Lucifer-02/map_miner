@@ -1,9 +1,9 @@
 import json
 import logging
 import re
-from typing import Dict
+import unicodedata
 
-logger = logging.getLogger("root.scraper")
+logger = logging.getLogger(__name__)
 
 
 def safe_get(data, *keys):
@@ -60,20 +60,17 @@ def extract_initial_json(html_content: str):
         return None
 
 
-def parse_json_data(json_str):
+def parse_json_data(json_str: str):
     """
-    Parses the extracted JSON string, handling the nested JSON string if present.
-    Returns a tuple of (data_blob, format_tag) or (None, None) if parsing fails.
-    format_tag is "rich" for the usual structure and "lean" for a slimmed-down
-    variant observed in some pages.
+    Parses the window.APP_INITIALIZATION_STATE JSON string to extract the inner data blob.
+    Returns the data blob list or None.
     """
     if not json_str:
-        return None, None
+        return None
     try:
         initial_data = json.loads(json_str)
-        data_blob = None
 
-        # Check the initial heuristic path [3][6]
+        # Check path [3][6]
         if (
             isinstance(initial_data, list)
             and len(initial_data) > 3
@@ -81,92 +78,48 @@ def parse_json_data(json_str):
             and len(initial_data[3]) > 6
         ):
             data_blob_or_str = initial_data[3][6]
-
-            # Case 1: It's already the list we expect (older format?)
             if isinstance(data_blob_or_str, list):
-                logger.debug(
-                    "Found expected list structure directly at initial_data[3][6]."
-                )
-                data_blob = data_blob_or_str
-
-            # Case 2: It's the string containing the actual JSON
+                return data_blob_or_str
             elif isinstance(data_blob_or_str, str) and data_blob_or_str.startswith(
                 ")]}'\n"
             ):
-                logger.debug(
-                    "Found string at initial_data[3][6], attempting to parse inner JSON."
-                )
-                try:
-                    json_str_inner = data_blob_or_str.split(")]}'\n", 1)[1]
-                    actual_data = json.loads(json_str_inner)
+                json_str_inner = data_blob_or_str.split(")]}'\n", 1)[1]
+                actual_data = json.loads(json_str_inner)
+                if isinstance(actual_data, list) and len(actual_data) > 6:
+                    potential_data_blob = safe_get(actual_data, 6)
+                    if isinstance(potential_data_blob, list):
+                        return potential_data_blob
 
-                    # Check if the parsed inner data is a list and has the expected sub-structure at index 6
-                    if isinstance(actual_data, list) and len(actual_data) > 6:
-                        potential_data_blob = safe_get(actual_data, 6)
-                        if isinstance(potential_data_blob, list):
-                            logger.debug("Returning data blob found at actual_data[6].")
-                            data_blob = potential_data_blob  # This is the main data structure
-                        else:
-                            logger.debug(
-                                f"Data at actual_data[6] is not a list, but {type(potential_data_blob)}."
-                            )
-                            data_blob = None  # Structure mismatch within inner data
-                    else:
-                        logger.debug(
-                            f"Parsed inner JSON is not a list or too short (len <= 6), type: {type(actual_data)}."
-                        )
-                        data_blob = None  # Inner JSON structure not as expected
-
-                except json.JSONDecodeError as e_inner:
-                    logger.debug(f"Error decoding inner JSON string: {e_inner}")
-                    data_blob = None
-                except Exception as e_inner_general:
-                    logger.debug(
-                        f"Unexpected error processing inner JSON string: {e_inner_general}"
-                    )
-                    data_blob = None
-
-            # Case 3: Data at [3][6] is neither a list nor the expected string
-            else:
-                logger.debug(
-                    f"Parsed JSON structure unexpected at [3][6]. Expected list or prefixed JSON string, got {type(data_blob_or_str)}."
-                )
-                data_blob = None  # Unexpected structure at [3][6]
-
-        # Case 4: Initial path [3][6] itself wasn't valid
-        else:
-            logger.debug(
-                f"Initial JSON structure not as expected (list[3][6] path not valid). Type: {type(initial_data)}"
-            )
-            data_blob = None  # Initial structure invalid
-
-    except json.JSONDecodeError as e:
-        logger.debug(f"Error decoding initial JSON: {e}")
-        data_blob = None
-    except Exception as e:
-        logger.debug(f"Unexpected error parsing JSON data: {e}")
-        data_blob = None
-
-    if data_blob is not None:
-        return data_blob, "rich"
-
-    # --- Fallback path: some pages store the data at [3][5] instead of [3][6] ---
-    try:
+        # Check alternative path [3][5]
         alt_blob = safe_get(initial_data, 3, 5)
         if isinstance(alt_blob, str) and alt_blob.startswith(")]}'\n"):
             alt_parsed = json.loads(alt_blob.split(")]}'\n", 1)[1])
             if isinstance(alt_parsed, list) and len(alt_parsed) > 0:
                 first_entry = alt_parsed[0]
                 if isinstance(first_entry, list):
-                    logger.debug("Using fallback data blob at initial_data[3][5].")
-                    return first_entry, "lean"
-        logger.debug("Fallback path [3][5] did not yield a usable list structure.")
-    except json.JSONDecodeError as e:
-        logger.debug(f"Error decoding fallback JSON string: {e}")
+                    return first_entry
     except Exception as e:
-        logger.debug(f"Unexpected error in fallback parsing: {e}")
+        logger.debug(f"Error parsing initial JSON data: {e}")
 
-    return None, None
+    return None
+
+
+def parse_preview_json(json_str: str):
+    """
+    Parses the Google Maps preview/place XHR response, extracting the inner rich data blob at actual_data[6].
+    """
+    if not json_str:
+        return None
+    try:
+        text = json_str.strip()
+        if text.startswith(")]}'\n"):
+            text = text.split(")]}'\n", 1)[1]
+        data = json.loads(text)
+        if isinstance(data, list) and len(data) > 6 and isinstance(data[6], list):
+            return data[6]
+    except Exception as e:
+        logger.debug(f"Error parsing preview JSON: {e}")
+    return None
 
 
 # --- Field Extraction Functions (Indices relative to the data_blob returned by parse_json_data) ---
@@ -180,47 +133,322 @@ def get_main_name(data):
 
 
 def get_place_id(data):
-    """Extracts the Google Place ID."""
-    return safe_get(data, 10)  # Updated index
+    """Extracts the Google Place ID (canonical ChIJ... or hex ID)."""
+    return safe_get(data, 78) or safe_get(data, 10)
 
 
 def get_latitude(data):
     lat = safe_get(data, 9, 2)
     if lat is not None:
         return lat
-    return None
+    return safe_get(data, 208, 0, 2)
 
 
 def get_longitude(data):
     lon = safe_get(data, 9, 3)
     if lon is not None:
         return lon
-    return None
+    return safe_get(data, 208, 0, 3)
 
 
 def get_complete_address(data):
     """Extracts structured address components and joins them."""
-    address_parts = safe_get(data, 2)  # Updated index
+    full_address = safe_get(data, 39)
+    if isinstance(full_address, str) and full_address.strip():
+        return full_address.strip()
+    address_parts = safe_get(data, 2)
     if isinstance(address_parts, list):
         formatted = ", ".join(filter(None, address_parts))
         return formatted if formatted else None
     return None
 
 
+def strip_accents(s: str) -> str:
+    """Removes diacritics/accents from a string for loose matching."""
+    return (
+        "".join(
+            c
+            for c in unicodedata.normalize("NFD", s)
+            if unicodedata.category(c) != "Mn"
+        )
+        .replace("đ", "d")
+        .replace("Đ", "D")
+    )
+
+
+def get_address_components(data) -> dict:
+    """
+    Extracts individual address components:
+      - street: House number and street/route name
+      - sublocality: Ward, neighborhood, or commune
+      - district: District, county, or borough
+      - city: City or province
+      - postal_code: Postal/ZIP code
+    """
+    res = {
+        "street": None,
+        "sublocality": None,
+        "district": None,
+        "city": None,
+        "postal_code": None,
+    }
+    if not data or not isinstance(data, list):
+        return res
+
+    raw_comp = safe_get(data, 183, 1)
+    if not raw_comp or not isinstance(raw_comp, list):
+        return res
+
+    # 1. Street
+    if len(raw_comp) > 1 and raw_comp[1]:
+        res["street"] = str(raw_comp[1]).strip()
+    elif len(raw_comp) > 2 and raw_comp[2]:
+        res["street"] = str(raw_comp[2]).strip()
+
+    # 2. City / Province
+    if len(raw_comp) > 3 and raw_comp[3]:
+        res["city"] = str(raw_comp[3]).strip()
+
+    # 3. Postal Code
+    if len(raw_comp) > 4 and raw_comp[4]:
+        res["postal_code"] = str(raw_comp[4]).strip()
+
+    # 4. District / County / Area
+    if len(raw_comp) > 5 and raw_comp[5]:
+        dist_raw = str(raw_comp[5]).strip()
+        if "," in dist_raw:
+            parts = [p.strip() for p in dist_raw.split(",") if p.strip()]
+            res["district"] = parts[0]
+        else:
+            res["district"] = dist_raw
+
+    # Sanity check: street cannot be identical to district or city
+    if res["street"]:
+        st_norm = strip_accents(res["street"]).lower()
+        if (res["district"] and st_norm == strip_accents(res["district"]).lower()) or (
+            res["city"] and st_norm == strip_accents(res["city"]).lower()
+        ):
+            res["street"] = None
+
+    # 5. Sublocality / Ward / Neighborhood
+    if len(raw_comp) > 0 and raw_comp[0]:
+        sub_raw = str(raw_comp[0]).strip()
+        dist = res["district"] or ""
+        city = res["city"] or ""
+        if dist and dist.lower() in sub_raw.lower():
+            cleaned = sub_raw
+            for sep in [", " + dist, "," + dist, dist]:
+                if cleaned.lower().endswith(sep.lower()):
+                    cleaned = cleaned[: len(cleaned) - len(sep)].rstrip(",").strip()
+                    break
+            if cleaned:
+                res["sublocality"] = cleaned
+        elif sub_raw.lower() != dist.lower() and sub_raw.lower() != city.lower():
+            res["sublocality"] = sub_raw
+
+    # 6. Enhance with accented local names from data[2] or data[183][0][0][1] if available
+    candidates = []
+    addr_parts = safe_get(data, 2)
+    if isinstance(addr_parts, list):
+        candidates.extend([str(x).strip() for x in addr_parts if x])
+
+    nested_tokens = safe_get(data, 183, 0, 0, 1)
+    if isinstance(nested_tokens, list):
+        for item in nested_tokens:
+            if isinstance(item, list) and len(item) > 0 and item[0]:
+                candidates.append(str(item[0]).strip())
+
+    for field in ["district", "city", "sublocality"]:
+        val = res.get(field)
+        if val:
+            val_norm = strip_accents(val).lower()
+            for cand in candidates:
+                cand_clean = cand.split(",")[0].strip()
+                if strip_accents(cand_clean).lower() == val_norm:
+                    res[field] = cand_clean
+                    break
+
+    return res
+
+
+def parse_address_string_fallback(address_str: str) -> dict:
+    """
+    Heuristic fallback to extract address components from formatted address string.
+    """
+    res = {
+        "street": None,
+        "sublocality": None,
+        "district": None,
+        "city": None,
+        "postal_code": None,
+    }
+    if not address_str or not isinstance(address_str, str):
+        return res
+
+    parts = [p.strip() for p in address_str.split(",") if p.strip()]
+    # Remove trailing country if present (e.g., Vietnam, United States)
+    if len(parts) >= 2 and parts[-1].lower() in [
+        "vietnam",
+        "việt nam",
+        "united states",
+        "usa",
+        "us",
+        "vn",
+    ]:
+        parts = parts[:-1]
+
+    if len(parts) >= 4:
+        res["street"] = parts[0]
+        res["sublocality"] = parts[1]
+        res["district"] = parts[2]
+        city_candidate = parts[3]
+        zip_m = re.search(r"\b(\d{5,6})\b", city_candidate)
+        if zip_m:
+            res["postal_code"] = zip_m.group(1)
+            city_candidate = city_candidate.replace(zip_m.group(1), "").strip()
+        res["city"] = city_candidate if city_candidate else None
+    elif len(parts) == 3:
+        res["street"] = parts[0]
+        res["district"] = parts[1]
+        res["city"] = parts[2]
+    elif len(parts) == 2:
+        # e.g. "Ha Dong, Ha Noi"
+        res["district"] = parts[0]
+        res["city"] = parts[1]
+    elif len(parts) == 1:
+        res["city"] = parts[0]
+    return res
+
+
 def get_rating(data):
     """Extracts the average star rating."""
-    return safe_get(data, 4, 7)
+    val = safe_get(data, 4, 7)
+    if val is not None:
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 def get_reviews_count(data):
     """Extracts the total number of reviews."""
-    return safe_get(data, 4, 8)
+    val = safe_get(data, 4, 8)
+    if val is not None:
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            pass
+    rev_str = safe_get(data, 4, 3, 1)
+    if isinstance(rev_str, str):
+        m = re.search(r"([0-9,]+)", rev_str)
+        if m:
+            return int(m.group(1).replace(",", ""))
+    return None
 
 
 def get_website(data):
     """Extracts the primary website link."""
     # Index based on debug_inner_data.json structure relative to data_blob (actual_data[6])
     return safe_get(data, 7, 0)
+
+
+def get_plus_code(data):
+    """Extracts the Google Plus Code / compound code."""
+    pc = safe_get(data, 183, 2, 2, 0)
+    if isinstance(pc, str) and pc.strip():
+        return pc.strip()
+    return None
+
+
+def get_price_level(data):
+    """Extracts the price tier/level."""
+    lvl = safe_get(data, 4, 2)
+    if isinstance(lvl, int) and lvl > 0:
+        return "$" * lvl
+    if isinstance(lvl, str) and lvl.strip():
+        return lvl.strip()
+    return None
+
+
+def get_open_status(data):
+    """Extracts real-time open/closed status string."""
+    status = safe_get(data, 203, 1, 4, 0) or safe_get(data, 203, 1, 8, 0)
+    if isinstance(status, str) and status.strip():
+        return status.strip()
+    return None
+
+
+def get_opening_hours(data):
+    """Extracts opening hours schedule dict."""
+    hours_raw = safe_get(data, 203, 0)
+    if hours_raw and isinstance(hours_raw, list):
+        res = {}
+        for entry in hours_raw:
+            if isinstance(entry, list) and len(entry) > 0:
+                day = entry[0]
+                time_str = safe_get(entry, 3, 0, 0)
+                if day and time_str:
+                    res[str(day)] = str(time_str)
+        if res:
+            return res
+    return None
+
+
+def get_timezone(data):
+    """Extracts local timezone."""
+    tz = safe_get(data, 30)
+    return tz if isinstance(tz, str) else None
+
+
+def get_amenities(data):
+    """Extracts business amenities, service options and accessibility features."""
+    amenities = []
+    groups = safe_get(data, 100, 1) or []
+    if isinstance(groups, list):
+        for group in groups:
+            items = safe_get(group, 2) or []
+            if isinstance(items, list):
+                for item in items:
+                    label = safe_get(item, 1)
+                    if label and isinstance(label, str) and label not in amenities:
+                        amenities.append(label)
+    return amenities if amenities else None
+
+
+def get_photos_count(data):
+    """Extracts total photo count."""
+    count = safe_get(data, 146, 0)
+    if isinstance(count, int):
+        return count
+    return None
+
+
+def get_photos(data):
+    """Extracts list of prominent photo URLs."""
+    photos = []
+    candidates = (safe_get(data, 72, 0) or []) + (safe_get(data, 51, 0) or [])
+    for p in candidates:
+        url = safe_get(p, 6, 0)
+        if url and isinstance(url, str) and url not in photos:
+            photos.append(url)
+    return photos if photos else None
+
+
+def get_is_claimed(data):
+    """Checks whether the business is claimed by its owner."""
+    return safe_get(data, 57, 1) is not None or safe_get(data, 57, 2) is not None
+
+
+def get_country_code(data):
+    """Extracts country code (e.g., VN)."""
+    cc = safe_get(data, 243)
+    if isinstance(cc, str) and cc.strip():
+        return cc.strip()
+    raw_comp = safe_get(data, 183, 1)
+    if isinstance(raw_comp, list) and len(raw_comp) > 6 and raw_comp[6]:
+        return str(raw_comp[6]).strip()
+    return None
 
 
 def _find_phone_recursively(data_structure):
@@ -262,73 +490,23 @@ def _find_phone_recursively(data_structure):
 
 def get_phone_number(data_blob):
     """
-    Extracts and standardizes the primary phone number by recursively searching
-    the data_blob for the phone icon pattern.
+    Extracts and standardizes the primary phone number by checking direct index
+    or recursively searching data_blob.
     """
-    # data_blob is the main list structure (e.g., actual_data[6])
-    found_phone = _find_phone_recursively(data_blob)
-    if found_phone:
-        return found_phone
-    else:
-        # logger.debug("Debug: Phone number pattern not found in data_blob.")
-        return None
+    phone = safe_get(data_blob, 178, 0, 0)
+    if isinstance(phone, str) and phone.strip():
+        return phone.strip()
+    return _find_phone_recursively(data_blob)
 
 
 def get_categories(data):
     """Extracts the list of categories/types."""
-    return safe_get(data, 13)
-
-
-# --- Fallback (lean structure) extraction helpers ---
-
-
-def get_main_name_lean(data):
-    return safe_get(data, 1)
-
-
-def get_place_id_lean(data):
-    return safe_get(data, 0)
-
-
-def get_latitude_lean(data):
-    return safe_get(data, 3, 2)
-
-
-def get_longitude_lean(data):
-    return safe_get(data, 3, 3)
-
-
-def get_address_lean(initial_data):
-    """Extract address from summary string in APP_INITIALIZATION_STATE[9][0]."""
-    summary = safe_get(initial_data, 9, 0)
-    if isinstance(summary, str) and "·" in summary:
-        parts = summary.split("·", 1)
-        if len(parts) > 1:
-            return parts[1].strip()
+    cats = safe_get(data, 13)
+    if isinstance(cats, list):
+        return cats
+    if isinstance(cats, str):
+        return [cats]
     return None
-
-
-def get_categories_lean(initial_data):
-    """
-    Extract categories from summary string or gcid marker.
-    """
-    summary = safe_get(initial_data, 9, 1)
-    if isinstance(summary, str) and "·" in summary:
-        cat = summary.split("·", 1)[1].strip()
-        if cat:
-            return [cat]
-
-    gcid = safe_get(initial_data, 2, 3, 0, 13, 0, 14)
-    if isinstance(gcid, str) and gcid.startswith("gcid:"):
-        cat = gcid.split(":", 1)[1].replace("_", " ").title()
-        return [cat]
-
-    return None
-
-
-def get_thumbnail_lean(initial_data):
-    thumb = safe_get(initial_data, 9, 2)
-    return thumb if isinstance(thumb, str) else None
 
 
 def parse_rating_reviews_from_html(html_content: str):
@@ -357,77 +535,357 @@ def parse_rating_reviews_from_html(html_content: str):
 
 def get_thumbnail(data):
     """Extracts the main thumbnail image URL."""
-    # This path might still be relative to the old structure, needs verification
-    # If data_blob is the list starting at actual_data[6], this index is likely wrong.
-    # We need to find the thumbnail within the new structure from debug_inner_data.json
-    # For now, returning None until verified.
-    # return safe_get(data, 72, 0, 1, 6, 0) # Placeholder index - LIKELY WRONG
-    # Tentative guess based on debug_inner_data structure (might be in a sublist like [14][0][0][6][0]?)
-    return safe_get(data, 14, 0, 0, 6, 0)  # Tentative guess
+    return (
+        safe_get(data, 72, 0, 0, 6, 0)
+        or safe_get(data, 37, 0, 1, 6, 0)
+        or safe_get(data, 51, 0, 0, 6, 0)
+        or safe_get(data, 14, 0, 0, 6, 0)
+    )
 
 
-# Add more extraction functions here as needed, using the indices
-# from omkarcloud/src/extract_data.py as a reference, BUT VERIFYING against debug_inner_data.json
-
-
-def extract_place_data(html_content: str) -> Dict | None:
+def parse_dom_from_html(html_content: str) -> dict:
     """
-    High-level function to orchestrate extraction from HTML content.
+    Extracts place attributes from rendered DOM HTML using BeautifulSoup.
+    Pure function without any side effects.
     """
-    json_str = extract_initial_json(html_content)
-    if not json_str:
-        logger.debug("Failed to extract JSON string from HTML.")
-        return None
-
-    data_blob, data_format = parse_json_data(json_str)
-    initial_data = None
+    if not html_content or not isinstance(html_content, str):
+        return {}
     try:
-        initial_data = json.loads(json_str)
-    except Exception:
-        initial_data = None
+        from bs4 import BeautifulSoup
 
-    if not data_blob:
-        logger.debug("Failed to parse JSON data or find expected structure.")
+        soup = BeautifulSoup(html_content, "html.parser")
+    except Exception as e:
+        logger.debug(f"BeautifulSoup parsing failed: {e}")
+        return {}
+
+    dom_data = {}
+    h1 = soup.find("h1")
+    if h1 and h1.get_text(strip=True):
+        dom_data["name"] = h1.get_text(strip=True)
+
+    # Plus code
+    pc_el = soup.select_one("[data-item-id='oloc'], [aria-label*='Plus code:']")
+    if pc_el:
+        label = pc_el.get("aria-label", "")
+        m = re.sub(r"^Plus code:\s*", "", label, flags=re.IGNORECASE).strip()
+        dom_data["plus_code"] = m or pc_el.get_text(strip=True)
+
+    # Address
+    addr_el = soup.select_one("[data-item-id='address'], [aria-label^='Address:']")
+    if addr_el:
+        label = addr_el.get("aria-label", "")
+        m = re.sub(r"^Address:\s*", "", label, flags=re.IGNORECASE).strip()
+        dom_data["address"] = m or addr_el.get_text(strip=True)
+
+    # Phone
+    phone_el = soup.select_one("[data-item-id^='phone:'], [aria-label^='Phone:']")
+    if phone_el:
+        label = phone_el.get("aria-label", "")
+        m = re.sub(r"^Phone:\s*", "", label, flags=re.IGNORECASE).strip()
+        dom_data["phone"] = m or phone_el.get_text(strip=True)
+
+    # Website
+    web_el = soup.select_one("[data-item-id='authority'], [aria-label^='Website:']")
+    if web_el:
+        dom_data["website"] = (
+            web_el.get("href")
+            or web_el.get("aria-label", "").replace("Website:", "").strip()
+        )
+
+    # Menu url
+    menu_el = soup.select_one("a[data-item-id='menu'], a[aria-label*='Menu']")
+    if menu_el and menu_el.get("href"):
+        dom_data["menu_url"] = menu_el.get("href")
+
+    # Price level
+    pr_el = soup.select_one(
+        "[aria-label*='Price:'], [aria-label*='Moderate'], [aria-label*='Inexpensive']"
+    )
+    if pr_el:
+        dom_data["price_level"] = (
+            pr_el.get("aria-label") or pr_el.get_text(strip=True)
+        ).strip()
+
+    # Open status
+    os_el = soup.select_one("[aria-label*='Open'], [aria-label*='Closed']")
+    if os_el:
+        dom_data["open_status"] = (
+            os_el.get("aria-label") or os_el.get_text(strip=True)
+        ).strip()
+
+    # Opening hours table
+    hours = {}
+    valid_days = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "thứ hai",
+        "thứ ba",
+        "thứ tư",
+        "thứ năm",
+        "thứ sáu",
+        "thứ bảy",
+        "chủ nhật",
+    ]
+    for tr in soup.select("table tr"):
+        tds = tr.find_all("td")
+        if len(tds) >= 2:
+            day = tds[0].get_text(strip=True)
+            if any(d in day.lower() for d in valid_days):
+                hours[day] = tds[1].get_text(strip=True)
+    if hours:
+        dom_data["opening_hours"] = hours
+
+    # Rating & Reviews
+    stars_el = soup.select_one("[aria-label*='stars']")
+    if stars_el:
+        m = re.search(
+            r"([0-9.]+)\s*stars", stars_el.get("aria-label", ""), re.IGNORECASE
+        )
+        if m:
+            try:
+                dom_data["rating"] = float(m.group(1))
+            except ValueError:
+                pass
+
+    rev_el = soup.select_one("[aria-label*='reviews']")
+    if rev_el:
+        m = re.search(
+            r"([0-9,]+)\s*reviews", rev_el.get("aria-label", ""), re.IGNORECASE
+        )
+        if m:
+            try:
+                dom_data["reviews_count"] = int(m.group(1).replace(",", ""))
+            except ValueError:
+                pass
+
+    # Categories
+    cat_el = soup.select_one("button[jsaction*='category']")
+    if cat_el and cat_el.get_text(strip=True):
+        dom_data["categories"] = [cat_el.get_text(strip=True)]
+
+    return dom_data
+
+
+def extract_place_data(
+    html_content: str | None = None,
+    preview_blob: list | None = None,
+    preview_json: str | None = None,
+    dom_data: dict | None = None,
+    fields: list[str] | set[str] | tuple[str] | None = None,
+) -> dict | None:
+    """
+    High-level function to orchestrate pure extraction from HTML content,
+    rich preview response blob/JSON, and/or DOM extracted data.
+    Completely free of side effects.
+
+    Args:
+        html_content: Raw HTML text of the page.
+        preview_blob: Pre-parsed Google Maps preview list structure.
+        preview_json: Raw string of /maps/preview/place response.
+        dom_data: Optional pre-extracted DOM dictionary.
+        fields: Optional list/set of field names to extract. If None, extracts all available fields.
+    """
+    # Parse preview JSON if provided as string
+    if preview_blob is None and preview_json:
+        preview_blob = parse_preview_json(preview_json)
+
+    # Automatically parse rendered DOM from HTML if dom_data was not explicitly supplied
+    if dom_data is None and html_content:
+        dom_data = parse_dom_from_html(html_content)
+
+    place_details: dict = {}
+    wanted = set(fields) if fields is not None else None
+
+    def is_wanted(f: str) -> bool:
+        return wanted is None or f in wanted
+
+    # 1. First priority: rich preview blob from /maps/preview/place
+    if preview_blob and isinstance(preview_blob, list):
+        addr_comps = {}
+        if wanted is None or not wanted.isdisjoint(
+            {"street", "sublocality", "district", "city", "postal_code"}
+        ):
+            addr_comps = get_address_components(preview_blob)
+
+        candidate_data = {
+            "name": get_main_name(preview_blob) if is_wanted("name") else None,
+            "place_id": get_place_id(preview_blob) if is_wanted("place_id") else None,
+            "latitude": get_latitude(preview_blob) if is_wanted("latitude") else None,
+            "longitude": get_longitude(preview_blob)
+            if is_wanted("longitude")
+            else None,
+            "plus_code": get_plus_code(preview_blob)
+            if is_wanted("plus_code")
+            else None,
+            "address": get_complete_address(preview_blob)
+            if is_wanted("address")
+            else None,
+            "street": addr_comps.get("street"),
+            "sublocality": addr_comps.get("sublocality"),
+            "district": addr_comps.get("district"),
+            "city": addr_comps.get("city"),
+            "postal_code": addr_comps.get("postal_code"),
+            "rating": get_rating(preview_blob) if is_wanted("rating") else None,
+            "reviews_count": get_reviews_count(preview_blob)
+            if is_wanted("reviews_count")
+            else None,
+            "price_level": get_price_level(preview_blob)
+            if is_wanted("price_level")
+            else None,
+            "categories": get_categories(preview_blob)
+            if is_wanted("categories")
+            else None,
+            "phone": get_phone_number(preview_blob) if is_wanted("phone") else None,
+            "website": get_website(preview_blob) if is_wanted("website") else None,
+            "open_status": get_open_status(preview_blob)
+            if is_wanted("open_status")
+            else None,
+            "opening_hours": get_opening_hours(preview_blob)
+            if is_wanted("opening_hours")
+            else None,
+            "timezone": get_timezone(preview_blob) if is_wanted("timezone") else None,
+            "amenities": get_amenities(preview_blob)
+            if is_wanted("amenities")
+            else None,
+            "photos_count": get_photos_count(preview_blob)
+            if is_wanted("photos_count")
+            else None,
+            "photos": get_photos(preview_blob) if is_wanted("photos") else None,
+            "thumbnail": get_thumbnail(preview_blob)
+            if is_wanted("thumbnail")
+            else None,
+            "is_claimed": get_is_claimed(preview_blob)
+            if is_wanted("is_claimed")
+            else None,
+            "country_code": get_country_code(preview_blob)
+            if is_wanted("country_code")
+            else None,
+        }
+        place_details = {
+            k: v for k, v in candidate_data.items() if v is not None and is_wanted(k)
+        }
+
+    # 2. Second priority: extract from HTML (APP_INITIALIZATION_STATE) if fields are missing
+    if html_content and (not place_details or len(place_details) < 4):
+        json_str = extract_initial_json(html_content)
+        if json_str:
+            data_blob = parse_json_data(json_str)
+            if data_blob:
+                addr_comps = {}
+                if wanted is None or not wanted.isdisjoint(
+                    {"street", "sublocality", "district", "city", "postal_code"}
+                ):
+                    addr_comps = get_address_components(data_blob)
+
+                html_details = {
+                    "name": get_main_name(data_blob) if is_wanted("name") else None,
+                    "place_id": get_place_id(data_blob)
+                    if is_wanted("place_id")
+                    else None,
+                    "latitude": get_latitude(data_blob)
+                    if is_wanted("latitude")
+                    else None,
+                    "longitude": get_longitude(data_blob)
+                    if is_wanted("longitude")
+                    else None,
+                    "plus_code": get_plus_code(data_blob)
+                    if is_wanted("plus_code")
+                    else None,
+                    "address": get_complete_address(data_blob)
+                    if is_wanted("address")
+                    else None,
+                    "street": addr_comps.get("street"),
+                    "sublocality": addr_comps.get("sublocality"),
+                    "district": addr_comps.get("district"),
+                    "city": addr_comps.get("city"),
+                    "postal_code": addr_comps.get("postal_code"),
+                    "rating": get_rating(data_blob) if is_wanted("rating") else None,
+                    "reviews_count": get_reviews_count(data_blob)
+                    if is_wanted("reviews_count")
+                    else None,
+                    "price_level": get_price_level(data_blob)
+                    if is_wanted("price_level")
+                    else None,
+                    "categories": get_categories(data_blob)
+                    if is_wanted("categories")
+                    else None,
+                    "phone": get_phone_number(data_blob)
+                    if is_wanted("phone")
+                    else None,
+                    "website": get_website(data_blob) if is_wanted("website") else None,
+                    "open_status": get_open_status(data_blob)
+                    if is_wanted("open_status")
+                    else None,
+                    "opening_hours": get_opening_hours(data_blob)
+                    if is_wanted("opening_hours")
+                    else None,
+                    "timezone": get_timezone(data_blob)
+                    if is_wanted("timezone")
+                    else None,
+                    "amenities": get_amenities(data_blob)
+                    if is_wanted("amenities")
+                    else None,
+                    "photos_count": get_photos_count(data_blob)
+                    if is_wanted("photos_count")
+                    else None,
+                    "photos": get_photos(data_blob) if is_wanted("photos") else None,
+                    "thumbnail": get_thumbnail(data_blob)
+                    if is_wanted("thumbnail")
+                    else None,
+                    "is_claimed": get_is_claimed(data_blob)
+                    if is_wanted("is_claimed")
+                    else None,
+                    "country_code": get_country_code(data_blob)
+                    if is_wanted("country_code")
+                    else None,
+                }
+                for k, v in html_details.items():
+                    if v is not None and k not in place_details and is_wanted(k):
+                        place_details[k] = v
+
+    # 3. Third priority: DOM data fallback for missing fields
+    if dom_data and isinstance(dom_data, dict):
+        for k, v in dom_data.items():
+            if (
+                v is not None
+                and is_wanted(k)
+                and (k not in place_details or place_details[k] is None)
+            ):
+                place_details[k] = v
+
+    # 4. Fallback HTML regex for rating & reviews if still missing
+    if html_content:
+        need_rating = is_wanted("rating") and "rating" not in place_details
+        need_reviews = (
+            is_wanted("reviews_count") and "reviews_count" not in place_details
+        )
+        if need_rating or need_reviews:
+            r, rc = parse_rating_reviews_from_html(html_content)
+            if r is not None and need_rating:
+                place_details["rating"] = r
+            if rc is not None and need_reviews:
+                place_details["reviews_count"] = rc
+
+    # 5. Fallback heuristic for address components if full address is available but components are missing
+    address_comp_keys = ["street", "sublocality", "district", "city", "postal_code"]
+    if "address" in place_details and any(
+        is_wanted(k) and k not in place_details for k in address_comp_keys
+    ):
+        fb_comps = parse_address_string_fallback(place_details["address"])
+        for k, v in fb_comps.items():
+            if v and is_wanted(k) and k not in place_details:
+                place_details[k] = v
+
+    if not place_details:
         return None
 
-    if data_format == "rich":
-        # Now extract individual fields using the helper functions
-        place_details = {
-            "name": get_main_name(data_blob),
-            "place_id": get_place_id(data_blob),
-            "latitude": get_latitude(data_blob),
-            "longitude": get_longitude(data_blob),
-            "address": get_complete_address(data_blob),
-            # "rating": get_rating(data_blob),
-            # "reviews_count": get_reviews_count(data_blob),
-            "categories": get_categories(data_blob),
-            # "website": get_website(data_blob),
-            # "phone": get_phone_number(data_blob), # Needs index verification
-            # "thumbnail": get_thumbnail(data_blob), # Needs index verification
-            # Add other fields as needed
-        }
-    elif data_format == "lean":
-        # Minimal fallback extraction for lean structure
-        place_details = {
-            "name": get_main_name_lean(data_blob),
-            "place_id": get_place_id_lean(data_blob),
-            "latitude": get_latitude_lean(data_blob),
-            "longitude": get_longitude_lean(data_blob),
-        }
+    # If specific fields are requested, return dict preserving the requested order
+    if fields is not None:
+        return {f: place_details.get(f, None) for f in fields if f != "link"}
 
-        if initial_data:
-            address = get_address_lean(initial_data)
-            if address:
-                place_details["address"] = address
-
-            categories = get_categories_lean(initial_data)
-            if categories:
-                place_details["categories"] = categories
-    else:
-        logger.debug("Unknown data format encountered during extraction.")
-        return None
-
-    # Filter out None values if desired
-    place_details = {k: v for k, v in place_details.items() if v is not None}
-
-    return place_details if place_details else None
+    return place_details

@@ -8,4 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Debug and temporary files
+debug/
+logs/
 *.png
+*.html
+
