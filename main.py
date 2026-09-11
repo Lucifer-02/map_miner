@@ -15,7 +15,7 @@ def main():
     pois = asyncio.run(
         scrape_google_maps(
             queries={"cafe"},
-            max_places=20,
+            max_places=10,
             lang="en",
             headless=False,
             geo_coordinates=Point(20.985322, 105.781289),
