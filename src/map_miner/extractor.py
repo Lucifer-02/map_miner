@@ -158,8 +158,11 @@ def get_complete_address(data):
         return full_address.strip()
     address_parts = safe_get(data, 2)
     if isinstance(address_parts, list):
-        formatted = ", ".join(filter(None, address_parts))
-        return formatted if formatted else None
+        str_parts = [
+            p.strip() for p in address_parts if isinstance(p, str) and p.strip()
+        ]
+        if str_parts:
+            return ", ".join(str_parts)
     return None
 
 

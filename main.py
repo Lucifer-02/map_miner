@@ -1,8 +1,13 @@
 import asyncio
+import logging
 
 from geopy.point import Point
 
-from scraper import scrape_google_maps
+from map_miner import scrape_google_maps
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 
 def main():
@@ -12,7 +17,7 @@ def main():
             queries={"cafe"},
             max_places=20,
             lang="en",
-            headless=True,
+            headless=False,
             geo_coordinates=Point(20.985322, 105.781289),
             zoom=18,
             fields=None,  # Or select specific fields, e.g. ["name", "address", "phone", "rating", "link"]

@@ -202,12 +202,18 @@ uv run main.py
 ## 6. Đánh Giá Hiện Trạng & Kế Hoạch Cải Tiến (Roadmap & Technical Debt)
 
 ### Các điểm tối ưu hóa đã hoàn tất (Code Cleanup Done):
-1. **[ĐÃ HOÀN TẤT] Dọn dẹp mã dư thừa trong `scraper.py`**:
-   - Loại bỏ các hàm thử nghiệm dư thừa (`process_link_2` và `process_link` cũ), hợp nhất và chuẩn hóa duy nhất một hàm `process_link` tối ưu với resource blocking.
-2. **[ĐÃ HOÀN TẤT] Mở khóa và mở rộng tối đa các trường dữ liệu**:
-   - Bắt gói API `/maps/preview/place` kết hợp trích xuất DOM đa tầng, trích xuất đầy đủ 22+ trường dữ liệu chi tiết (`rating`, `reviews_count`, `phone`, `website`, `opening_hours`, `open_status`, `plus_code`, `amenities`, `photos`, `price_level`, `is_claimed`...).
-3. **[ĐÃ HOÀN TẤT] Cơ chế lưu trữ file lỗi**:
-   - Toàn bộ ảnh chụp màn hình và mã HTML debug (`captcha_{ts}.png`, `failed_extract_{ts}.png`, `failed_{ts}.html`) được tự động lưu gọn gàng vào thư mục riêng `debug/`, đã được cấu hình trong `.gitignore`.
+1. **[ĐÃ HOÀN TẤT] Dọn dẹp mã dư thừa & Tách bạch kiến trúc (Architectural Separation)**:
+   - `scraper.py` thuần I/O và điều hướng mạng, không chứa code cào DOM; `extractor.py` là engine phân tích thuần túy (pure functions, zero side effects).
+   - Loại bỏ hoàn toàn chế độ `lean/rich`, thay thế bằng tham số `fields: list[str] | set[str] | None` cho phép người dùng tùy chọn bất kỳ trường nào cần lấy.
+2. **[ĐÃ HOÀN TẤT] Khai thác tối đa dữ liệu & Phân rã Địa chỉ (Address Components)**:
+   - Trích xuất 27 cột dữ liệu đầy đủ bao gồm các trường địa chỉ chi tiết (`street`, `sublocality`, `district`, `city`, `postal_code`, `country_code`) với thuật toán khôi phục dấu tiếng Việt chính xác.
+   - Xử lý mượt mà các biến thể dữ liệu lồng nhau trong `preview_blob` (tránh `TypeError` khi gặp mảng lồng).
+3. **[ĐÃ HOÀN TẤT] Gia cố độ ổn định tuyệt đối cho `scraper.py` (Stability Hardening)**:
+   - **Loại bỏ nguy cơ crash Chromium**: Gỡ bỏ cờ `--single-process` (nguyên nhân gây treo/segfault Chromium đa trang) và bật lại WebGL/Canvas (tránh bị Google Maps gắn cờ bot ngay từ khi tải trang).
+   - **Triệt tiêu hoàn toàn rò rỉ tài nguyên (Zero Page Leaks)**: Tất cả `search_page` và detail `page` đều được quản lý vòng đời chặt chẽ qua `try ... finally: await page.close()`.
+   - **Cơ chế Stealth sạch, tự nhiên**: Không phụ thuộc vào thư viện bên ngoài dễ lỗi runtime; tích hợp cờ `--disable-blink-features=AutomationControlled` kết hợp `context.add_init_script` chuẩn mực giúp ẩn hoàn toàn `navigator.webdriver`.
+   - **Chờ Adaptive & Tự động Retry**: Chờ bất đồng bộ thông minh theo sự kiện `preview_event` (tối đa 4.5s nhưng phản hồi ngay khi có dữ liệu ~0.8s - 1.2s), kèm cơ chế tự động thử lại (retry 2 lần) với jitter nhẹ khi mạng trễ.
+   - **Vượt Consent đa ngôn ngữ**: Nhận diện và tự động vượt banner chấp thuận cookie bằng regex cho nhiều ngôn ngữ (Anh, Việt, Đức, Pháp, Ý...).
 
 ### Kế hoạch phát triển tính năng (Feature Roadmap):
 - [ ] **Proxy Manager**: Tích hợp module tự động xoay vòng proxy pool (HTTP/SOCKS5) với tính năng đo lường độ trễ và tự động loại bỏ proxy hỏng.

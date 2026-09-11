@@ -1,20 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "map-miner"
 version = "0.1.0"
-description = "Add your description here"
+description = "High-performance asynchronous Google Maps scraper using Playwright"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "lucifer-02" }
+]
+keywords = ["google-maps", "scraper", "playwright", "crawler", "asyncio"]
 dependencies = [
     "aiohttp>=3.13.2",
-    "drissionpage>=4.1.1.2",
+    "beautifulsoup4>=4.12.0",
     "geopy>=2.4.1",
-    "ipython>=9.7.0",
-    "notebook>=7.4.7",
     "playwright>=1.55.0",
-    "playwright-stealth==1.0.6",
     "polars>=1.35.2",
     "pydub>=0.25.1",
-    "pytest>=9.0.1",
     "speechrecognition>=3.14.3",
     "xlsxwriter>=3.2.9",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+    "ipython>=9.7.0",
+    "notebook>=7.4.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/map_miner"]
