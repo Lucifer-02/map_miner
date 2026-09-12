@@ -5,13 +5,15 @@ import random
 import re
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, unquote
 
 import polars as pl
 from geopy.point import Point
 from playwright.async_api import (
-    ChromiumBrowserContext,
+    Browser,
+    BrowserContext,
     Page,
     ProxySettings,
     Route,
@@ -34,6 +36,9 @@ DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
 MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
     5  # Allow enough attempts for slow network / lazy load
 )
+DEFAULT_CACHE_DIR = Path(".cache") / "chromium_cache"
+DEFAULT_DISK_CACHE_SIZE = 1073741824  # 1 GB
+DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com"
 
 # Stable launch args: headless/stealth-safe, avoids crashes on multi-page Chromium
 LAUNCH_ARGS = [
@@ -72,6 +77,9 @@ BLOCKED_URL_PATTERNS = [
     "play.google.com/log",
     "stats.g.doubleclick.net",
     "/gen_204",
+    "client_204",
+    "cspreport",
+    "/maps/photometa",
     "googleusercontent.com",
     "ggpht.com",
     "streetviewpixels",
@@ -123,6 +131,113 @@ async def global_route_handler(route: Route) -> None:
             await route.continue_()
         except PlaywrightError:
             pass
+
+
+def _normalize_proxy(proxy: Any) -> ProxySettings | None:
+    """Normalizes proxy input into a valid Playwright ProxySettings dict."""
+    if isinstance(proxy, dict) and "server" in proxy:
+        norm: dict[str, Any] = dict(proxy)
+        norm["server"] = str(norm["server"]).strip()
+        if "bypass" in norm and norm["bypass"] is not None:
+            norm["bypass"] = str(norm["bypass"]).strip()
+        return norm  # type: ignore[return-value]
+    if isinstance(proxy, str) and proxy.strip():
+        return {"server": proxy.strip()}
+    return None
+
+
+class ProxyRotator:
+    """
+    Manages proxy allocation with round-robin rotation support for single or multiple proxies.
+    """
+
+    def __init__(
+        self,
+        proxy: (
+            ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None
+        ) = None,
+    ) -> None:
+        self._proxies: list[ProxySettings] = []
+        if proxy is not None:
+            if isinstance(proxy, (dict, str)):
+                norm = _normalize_proxy(proxy)
+                if norm:
+                    self._proxies.append(norm)
+            elif isinstance(proxy, Sequence):
+                for item in proxy:
+                    norm = _normalize_proxy(item)
+                    if norm:
+                        self._proxies.append(norm)
+            else:
+                logger.warning("Unsupported proxy configuration type: %s", type(proxy))
+        self._index: int = 0
+
+    @property
+    def total(self) -> int:
+        """Total number of valid configured proxies."""
+        return len(self._proxies)
+
+    def get(self) -> ProxySettings | None:
+        """
+        Returns the next proxy configuration using round-robin allocation,
+        or None if no proxy is configured.
+        """
+        if not self._proxies:
+            return None
+        selected = self._proxies[self._index % len(self._proxies)]
+        self._index = (self._index + 1) % len(self._proxies)
+        return selected
+
+
+async def create_browser_context(
+    browser: Browser,
+    geo_coordinates: Point | None = None,
+    lang: str = "en",
+    proxy: ProxySettings | None = None,
+) -> BrowserContext:
+    """
+    Creates and configures an isolated BrowserContext with proxy settings,
+    stealth overrides, geolocation, and global resource blocking.
+    """
+    context_options: dict[str, Any] = {
+        "user_agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "java_script_enabled": True,
+        "accept_downloads": False,
+        "viewport": {
+            "width": 1920 + random.randint(-50, 50),
+            "height": 1080 + random.randint(-50, 50),
+        },
+        "permissions": ["geolocation"],
+        "timezone_id": "Asia/Ho_Chi_Minh",
+        "locale": lang,
+    }
+
+    if geo_coordinates is not None:
+        context_options["geolocation"] = {
+            "latitude": geo_coordinates.latitude,
+            "longitude": geo_coordinates.longitude,
+        }
+
+    if proxy is not None:
+        context_options["proxy"] = proxy
+
+    context = await browser.new_context(**context_options)
+
+    # Lightweight stealth override
+    await context.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        if (!window.chrome) { window.chrome = {}; }
+        window.chrome.runtime = window.chrome.runtime || {};
+    """)
+
+    # Context-wide bandwidth-saving route handler
+    await context.route("**/*", global_route_handler)
+
+    return context
 
 
 def make_place_url(
@@ -303,7 +418,7 @@ def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
 
 
 async def get_place_urls(
-    context: ChromiumBrowserContext,
+    context: BrowserContext,
     max_places: int,
     query: str,
     geo_coordinates: Point,
@@ -409,7 +524,7 @@ async def get_place_urls(
 
 
 async def scrape_query_spa(
-    context: ChromiumBrowserContext,
+    context: BrowserContext,
     query: str,
     geo_coordinates: Point,
     zoom: float,
@@ -494,7 +609,6 @@ async def scrape_query_spa(
                     return is_preview_response_for_link(resp, target)
 
                 click_succeeded = False
-                preview_json: str | None = None
 
                 try:
                     async with search_page.expect_response(
@@ -606,7 +720,7 @@ async def scrape_query_spa(
 
 
 async def process_link(
-    context: ChromiumBrowserContext,
+    context: BrowserContext,
     link: str,
     semaphore: asyncio.Semaphore,
     count: int,
@@ -749,13 +863,14 @@ async def scrape_google_maps(
     queries: set[str],
     geo_coordinates: Point,
     zoom: float,
-    proxy: ProxySettings | None = None,
+    proxy: ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None = None,
     max_places: int = 120,
     lang: str = "en",
     headless: bool = False,
     n_semaphore: int = 8,
     fields: Sequence[str] | set[str] | None = None,
     use_spa: bool = True,
+    cache_dir: str | Path | None = DEFAULT_CACHE_DIR,
 ) -> pl.DataFrame:
     """
     Scrapes Google Maps for places based on queries.
@@ -764,77 +879,77 @@ async def scrape_google_maps(
         queries (set[str]): Search queries (e.g. {"cafe", "restaurant"}).
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
-        proxy (ProxySettings, optional): Proxy configuration for Playwright.
+        proxy (ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None, optional): Single proxy
+            or sequence of proxies for round-robin rotation. Defaults to None.
         max_places (int, optional): Maximum places to collect per query. Defaults to 120.
         lang (str, optional): Language code for Google Maps. Defaults to "en".
         headless (bool, optional): Whether to run headless browser. Defaults to False.
         n_semaphore (int, optional): Maximum concurrent browser tabs/queries. Defaults to 8.
         fields (Sequence[str] | set[str], optional): Selected fields to extract. Defaults to None (all fields).
         use_spa (bool, optional): Whether to use high-speed SPA navigation. Defaults to True.
+        cache_dir (str | Path | None, optional): Directory to store persistent Chromium disk cache.
+            Defaults to DEFAULT_CACHE_DIR (".cache/chromium_cache"). If None, disk caching
+            flags will not be passed.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.
     """
     results: list[dict[str, Any]] = []
     browser = None
+    proxy_rotator = ProxyRotator(proxy)
+
+    launch_args = list(LAUNCH_ARGS)
+    if cache_dir is not None:
+        resolved_cache = Path(cache_dir).resolve()
+        resolved_cache.mkdir(parents=True, exist_ok=True)
+        launch_args.extend(
+            [
+                f"--disk-cache-dir={resolved_cache}",
+                f"--disk-cache-size={DEFAULT_DISK_CACHE_SIZE}",
+            ]
+        )
 
     async with async_playwright() as p:
         try:
             browser = await p.chromium.launch(
                 headless=headless,
-                proxy=proxy,
-                args=LAUNCH_ARGS,
+                args=launch_args,
             )
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                java_script_enabled=True,
-                accept_downloads=False,
-                viewport={
-                    "width": 1920 + random.randint(-50, 50),
-                    "height": 1080 + random.randint(-50, 50),
-                },
-                permissions=["geolocation"],
-                geolocation={
-                    "latitude": geo_coordinates.latitude,
-                    "longitude": geo_coordinates.longitude,
-                },
-                timezone_id="Asia/Ho_Chi_Minh",
-                locale=lang,
-            )
-
-            # Lightweight stealth override
-            await context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                if (!window.chrome) { window.chrome = {}; }
-                window.chrome.runtime = window.chrome.runtime || {};
-            """)
-
-            # Context-wide bandwidth-saving route handler
-            await context.route("**/*", global_route_handler)
 
             query_semaphore = asyncio.Semaphore(n_semaphore)
 
             if use_spa:
                 logger.info(
-                    "Scraping in SPA Navigation mode (max concurrency: %d)...",
+                    "Scraping in SPA Navigation mode (max concurrency: %d, proxies: %d)...",
                     n_semaphore,
+                    proxy_rotator.total,
                 )
 
                 async def run_spa_query(q: str):
                     async with query_semaphore:
-                        return await scrape_query_spa(
-                            context=context,
-                            query=q.replace("_", " "),
+                        allocated_proxy = proxy_rotator.get()
+                        context = await create_browser_context(
+                            browser=browser,
                             geo_coordinates=geo_coordinates,
-                            zoom=zoom,
-                            max_places=max_places,
                             lang=lang,
-                            fields=fields,
+                            proxy=allocated_proxy,
                         )
+                        try:
+                            return await scrape_query_spa(
+                                context=context,
+                                query=q.replace("_", " "),
+                                geo_coordinates=geo_coordinates,
+                                zoom=zoom,
+                                max_places=max_places,
+                                lang=lang,
+                                fields=fields,
+                            )
+                        finally:
+                            if context:
+                                try:
+                                    await context.close()
+                                except PlaywrightError:
+                                    pass
 
                 spa_tasks = [run_spa_query(query) for query in queries]
                 list_of_results = await asyncio.gather(*spa_tasks)
@@ -847,14 +962,28 @@ async def scrape_google_maps(
                 # Multi-page fallback mode
                 async def run_get_urls(q: str):
                     async with query_semaphore:
-                        return await get_place_urls(
-                            context=context,
-                            max_places=max_places,
-                            query=q.replace("_", " "),
+                        allocated_proxy = proxy_rotator.get()
+                        context = await create_browser_context(
+                            browser=browser,
                             geo_coordinates=geo_coordinates,
-                            zoom=zoom,
                             lang=lang,
+                            proxy=allocated_proxy,
                         )
+                        try:
+                            return await get_place_urls(
+                                context=context,
+                                max_places=max_places,
+                                query=q.replace("_", " "),
+                                geo_coordinates=geo_coordinates,
+                                zoom=zoom,
+                                lang=lang,
+                            )
+                        finally:
+                            if context:
+                                try:
+                                    await context.close()
+                                except PlaywrightError:
+                                    pass
 
                 tasks = [run_get_urls(query) for query in queries]
                 list_of_sets_of_links = await asyncio.gather(*tasks)
@@ -871,16 +1000,33 @@ async def scrape_google_maps(
                 total = len(place_links)
                 detail_semaphore = asyncio.Semaphore(n_semaphore)
 
+                async def run_process_link(idx: int, link: str):
+                    async with detail_semaphore:
+                        allocated_proxy = proxy_rotator.get()
+                        context = await create_browser_context(
+                            browser=browser,
+                            geo_coordinates=geo_coordinates,
+                            lang=lang,
+                            proxy=allocated_proxy,
+                        )
+                        try:
+                            return await process_link(
+                                context,
+                                link,
+                                asyncio.Semaphore(1),
+                                idx + 1,
+                                total,
+                                fields=fields,
+                            )
+                        finally:
+                            if context:
+                                try:
+                                    await context.close()
+                                except PlaywrightError:
+                                    pass
+
                 detail_tasks = [
-                    process_link(
-                        context,
-                        link,
-                        detail_semaphore,
-                        i + 1,
-                        total,
-                        fields=fields,
-                    )
-                    for i, link in enumerate(place_links)
+                    run_process_link(i, link) for i, link in enumerate(place_links)
                 ]
                 raw_results = await asyncio.gather(*detail_tasks)
                 results = [r for r in raw_results if r is not None]

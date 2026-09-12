@@ -10,10 +10,16 @@ from map_miner.scraper import (
     BLOCKED_RESOURCE_TYPES,
     BLOCKED_URL_PATTERNS,
     CONSENT_BUTTON_REGEX,
+    DEFAULT_CACHE_DIR,
+    DEFAULT_DISK_CACHE_SIZE,
+    DEFAULT_PROXY_BYPASS,
     FEED_FALLBACK_SELECTORS,
     PreviewInterceptor,
+    ProxyRotator,
+    create_browser_context,
     is_preview_response_for_link,
     make_place_url,
+    scrape_google_maps,
 )
 
 
@@ -396,3 +402,529 @@ def test_spa_field_filtering_few_fields_without_name():
         assert "name" not in results[0]
 
     asyncio.run(_run())
+
+
+def test_proxy_rotator_empty_and_none():
+    rotator_none = ProxyRotator(None)
+    assert rotator_none.total == 0
+    assert rotator_none.get() is None
+
+    rotator_empty = ProxyRotator([])
+    assert rotator_empty.total == 0
+    assert rotator_empty.get() is None
+
+    rotator_invalid = ProxyRotator([None, ""])
+    assert rotator_invalid.total == 0
+    assert rotator_invalid.get() is None
+
+
+def test_proxy_rotator_single_proxy():
+    proxy_dict = {
+        "server": "http://gate.decodo.com:10000",
+        "username": "user",
+        "password": "password",
+    }
+    rotator = ProxyRotator(proxy_dict)
+    assert rotator.total == 1
+    assert rotator.get() == proxy_dict
+    assert rotator.get() == proxy_dict
+    assert rotator.get() == proxy_dict
+
+    rotator_str = ProxyRotator("http://gate.decodo.com:10000")
+    assert rotator_str.total == 1
+    assert rotator_str.get() == {"server": "http://gate.decodo.com:10000"}
+
+
+def test_proxy_rotator_list_round_robin():
+    proxies = [{"server": f"http://proxy{i}:8080"} for i in range(1, 4)]
+    rotator = ProxyRotator(proxies)
+    assert rotator.total == 3
+
+    assert rotator.get() == {"server": "http://proxy1:8080"}
+    assert rotator.get() == {"server": "http://proxy2:8080"}
+    assert rotator.get() == {"server": "http://proxy3:8080"}
+    # Round-robin loop back
+    assert rotator.get() == {"server": "http://proxy1:8080"}
+    assert rotator.get() == {"server": "http://proxy2:8080"}
+
+    # Test with tuple of strings
+    rotator_tuple = ProxyRotator(("http://p1:8080", "http://p2:8080"))
+    assert rotator_tuple.total == 2
+    assert rotator_tuple.get() == {"server": "http://p1:8080"}
+    assert rotator_tuple.get() == {"server": "http://p2:8080"}
+    assert rotator_tuple.get() == {"server": "http://p1:8080"}
+
+
+def test_proxy_rotator_with_bypass():
+    assert DEFAULT_PROXY_BYPASS == "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com"
+
+    proxy_dict = {
+        "server": "http://gate.decodo.com:10000",
+        "username": "user",
+        "password": "password",
+        "bypass": DEFAULT_PROXY_BYPASS,
+    }
+    rotator = ProxyRotator(proxy_dict)
+    assert rotator.total == 1
+    selected = rotator.get()
+    assert selected == proxy_dict
+    assert selected["bypass"] == DEFAULT_PROXY_BYPASS
+
+    proxies = [
+        {"server": "http://proxy1:8080", "bypass": DEFAULT_PROXY_BYPASS},
+        {"server": "http://proxy2:8080", "bypass": "custom.domain.com"},
+    ]
+    rotator_multi = ProxyRotator(proxies)
+    assert rotator_multi.total == 2
+    first = rotator_multi.get()
+    assert first["bypass"] == DEFAULT_PROXY_BYPASS
+    second = rotator_multi.get()
+    assert second["bypass"] == "custom.domain.com"
+
+
+def test_create_browser_context_with_proxy():
+    async def _run():
+        browser = AsyncMock()
+        mock_context = AsyncMock()
+        browser.new_context.return_value = mock_context
+
+        proxy_config = {
+            "server": "http://gate.decodo.com:10000",
+            "username": "user",
+            "password": "pass",
+        }
+        point = Point(21.018785, 105.830415)
+        context = await create_browser_context(
+            browser=browser,
+            geo_coordinates=point,
+            lang="vi",
+            proxy=proxy_config,
+        )
+
+        assert context == mock_context
+        browser.new_context.assert_awaited_once()
+        kwargs = browser.new_context.await_args.kwargs
+        assert kwargs["proxy"] == proxy_config
+        assert kwargs["locale"] == "vi"
+        assert kwargs["geolocation"] == {
+            "latitude": point.latitude,
+            "longitude": point.longitude,
+        }
+        assert kwargs["permissions"] == ["geolocation"]
+        assert "width" in kwargs["viewport"]
+        assert "height" in kwargs["viewport"]
+        mock_context.add_init_script.assert_awaited_once()
+        mock_context.route.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_create_browser_context_with_proxy_bypass():
+    async def _run():
+        browser = AsyncMock()
+        mock_context = AsyncMock()
+        browser.new_context.return_value = mock_context
+
+        proxy_config = {
+            "server": "http://gate.decodo.com:10000",
+            "username": "user",
+            "password": "pass",
+            "bypass": DEFAULT_PROXY_BYPASS,
+        }
+        context = await create_browser_context(
+            browser=browser,
+            proxy=proxy_config,
+        )
+
+        assert context == mock_context
+        browser.new_context.assert_awaited_once()
+        kwargs = browser.new_context.await_args.kwargs
+        assert kwargs["proxy"] == proxy_config
+        assert kwargs["proxy"]["bypass"] == DEFAULT_PROXY_BYPASS
+
+    asyncio.run(_run())
+
+
+def test_create_browser_context_without_proxy():
+    async def _run():
+        browser = AsyncMock()
+        mock_context = AsyncMock()
+        browser.new_context.return_value = mock_context
+
+        context = await create_browser_context(
+            browser=browser,
+            geo_coordinates=None,
+            lang="en",
+            proxy=None,
+        )
+
+        assert context == mock_context
+        kwargs = browser.new_context.await_args.kwargs
+        assert "proxy" not in kwargs
+        assert "geolocation" not in kwargs
+        assert kwargs["locale"] == "en"
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_context_isolation_and_rotation_spa():
+    async def _run():
+        from unittest.mock import patch
+
+        created_contexts = []
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx._kwargs = kwargs
+                ctx.close = AsyncMock()
+                created_contexts.append(ctx)
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        proxies = [
+            {"server": "http://proxy1:8080"},
+            {"server": "http://proxy2:8080"},
+        ]
+
+        async def mock_spa(context, query, **kwargs):
+            return [{"name": f"Place for {query}", "link": f"http://maps/{query}"}]
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.scrape_query_spa", side_effect=mock_spa),
+        ):
+            df = await scrape_google_maps(
+                queries={"cafe", "restaurant", "hospital"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                proxy=proxies,
+                use_spa=True,
+            )
+
+        assert len(df) == 3
+        # Chromium launched without browser-level proxy
+        launch_kwargs = mock_playwright.chromium.launch.await_args.kwargs
+        assert "proxy" not in launch_kwargs
+
+        # Each query got its own isolated context
+        assert len(created_contexts) == 3
+
+        # Check proxy rotation across contexts
+        assigned_proxies = [ctx._kwargs.get("proxy") for ctx in created_contexts]
+        assert {"server": "http://proxy1:8080"} in assigned_proxies
+        assert {"server": "http://proxy2:8080"} in assigned_proxies
+
+        # Zero leaks: all contexts were properly closed
+        for ctx in created_contexts:
+            ctx.close.assert_awaited_once()
+
+        # Browser closed
+        fake_browser.close.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_context_isolation_fallback_mode():
+    async def _run():
+        from unittest.mock import patch
+
+        created_contexts = []
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx._kwargs = kwargs
+                ctx.close = AsyncMock()
+                created_contexts.append(ctx)
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        async def mock_get_urls(context, query, **kwargs):
+            return {f"http://maps.google.com/place/{query}_1"}
+
+        async def mock_process(
+            context, link, semaphore, count, total, fields=None, max_retries=2
+        ):
+            return {"name": f"Place {link}", "link": link}
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.get_place_urls", side_effect=mock_get_urls),
+            patch("map_miner.scraper.process_link", side_effect=mock_process),
+        ):
+            df = await scrape_google_maps(
+                queries={"cafe", "gym"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                proxy=[
+                    {"server": "http://p1:8080"},
+                    {"server": "http://p2:8080"},
+                ],
+                use_spa=False,
+            )
+
+        assert len(df) == 2
+        # 2 queries for get_place_urls + 2 detail tasks for process_link = 4 contexts
+        assert len(created_contexts) == 4
+        for ctx in created_contexts:
+            ctx.close.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_context_cleanup_on_error():
+    """Verifies that if a query fails, its context is still safely closed (Zero Leaks)."""
+
+    async def _run():
+        from unittest.mock import patch
+
+        created_contexts = []
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx._kwargs = kwargs
+                ctx.close = AsyncMock()
+                created_contexts.append(ctx)
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        async def mock_spa_fail(context, query, **kwargs):
+            raise PlaywrightError("Browser crashed or tab disconnected")
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.scrape_query_spa", side_effect=mock_spa_fail),
+        ):
+            df = await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                proxy={"server": "http://gate:10000"},
+                use_spa=True,
+            )
+
+        assert len(df) == 0
+        assert len(created_contexts) == 1
+        # Crucial test: context MUST be closed even when scrape_query_spa crashes
+        created_contexts[0].close.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_with_cache_dir(tmp_path):
+    """Verifies that --disk-cache-dir and --disk-cache-size flags are passed to chromium.launch."""
+
+    async def _run():
+        from unittest.mock import patch
+
+        custom_cache = tmp_path / "test_cache"
+        assert not custom_cache.exists()
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx.close = AsyncMock()
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch(
+                "map_miner.scraper.scrape_query_spa", return_value=[{"name": "Cafe A"}]
+            ),
+        ):
+            df = await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                cache_dir=custom_cache,
+            )
+
+        assert len(df) == 1
+        assert custom_cache.exists()
+        mock_playwright.chromium.launch.assert_awaited_once()
+        launch_kwargs = mock_playwright.chromium.launch.call_args.kwargs
+        launch_args = launch_kwargs.get("args", [])
+        assert any(
+            f"--disk-cache-dir={custom_cache.resolve()}" in arg for arg in launch_args
+        )
+        assert f"--disk-cache-size={DEFAULT_DISK_CACHE_SIZE}" in launch_args
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_without_cache_dir():
+    """Verifies that disk cache flags are omitted when cache_dir is None."""
+
+    async def _run():
+        from unittest.mock import patch
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx.close = AsyncMock()
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.scrape_query_spa", return_value=[]),
+        ):
+            await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                cache_dir=None,
+            )
+
+        mock_playwright.chromium.launch.assert_awaited_once()
+        launch_kwargs = mock_playwright.chromium.launch.call_args.kwargs
+        launch_args = launch_kwargs.get("args", [])
+        assert not any("--disk-cache-dir" in arg for arg in launch_args)
+        assert not any("--disk-cache-size" in arg for arg in launch_args)
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_default_cache_dir():
+    """Verifies that default cache_dir is DEFAULT_CACHE_DIR and creates the directory."""
+
+    async def _run():
+        from unittest.mock import patch
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx.close = AsyncMock()
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.scrape_query_spa", return_value=[]),
+        ):
+            await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+            )
+
+        mock_playwright.chromium.launch.assert_awaited_once()
+        launch_kwargs = mock_playwright.chromium.launch.call_args.kwargs
+        launch_args = launch_kwargs.get("args", [])
+        resolved_default = DEFAULT_CACHE_DIR.resolve()
+        assert any(f"--disk-cache-dir={resolved_default}" in arg for arg in launch_args)
+        assert f"--disk-cache-size={DEFAULT_DISK_CACHE_SIZE}" in launch_args
+
+    asyncio.run(_run())
+
+
+def test_blocked_url_patterns_includes_telemetry():
+    """Verifies that BLOCKED_URL_PATTERNS includes additional telemetry and photometa patterns."""
+    assert "client_204" in BLOCKED_URL_PATTERNS
+    assert "cspreport" in BLOCKED_URL_PATTERNS
+    assert "/maps/photometa" in BLOCKED_URL_PATTERNS

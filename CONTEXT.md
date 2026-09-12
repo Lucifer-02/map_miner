@@ -2,60 +2,83 @@
 
 ## 1. Tổng Quan Dự Án (Project Overview)
 
-**`map_miner`** là công cụ cào dữ liệu (web scraper) bất đồng bộ hiệu năng cao dành riêng cho Google Maps. Dự án được thiết kế để thu thập thông tin địa điểm (Points of Interest - POIs) theo từ khóa và tọa độ địa lý chỉ định (vĩ độ, kinh độ, mức zoom), sau đó xuất dữ liệu thành [Polars](https://pola.rs/) DataFrame.
+**`map_miner`** (phiên bản `0.1.1`) là thư viện Python và công cụ cào dữ liệu (web scraper) bất đồng bộ hiệu năng cao dành riêng cho Google Maps. Dự án được thiết kế để thu thập thông tin địa điểm (Points of Interest - POIs) chi tiết theo từ khóa và tọa độ địa lý chỉ định (vĩ độ, kinh độ, mức zoom), sau đó chuẩn hóa và xuất dữ liệu thành [Polars](https://pola.rs/) DataFrame (`pl.DataFrame`).
 
 ### Mục tiêu thiết kế chính:
 
-- **Tối ưu tốc độ vượt trội**: Sử dụng [Playwright](https://playwright.dev/python/) Async kết hợp chặn tải tài nguyên không cần thiết (ảnh, font chữ, CSS, media) giúp giảm 70-80% thời gian tải trang và tiết kiệm băng thông.
-- **Trích xuất dữ liệu bền vững (Resilient Extraction)**: Không phụ thuộc vào các CSS selector / DOM query dễ vỡ của Google Maps. Thay vào đó, trích xuất trực tiếp dữ liệu thô từ cấu trúc JSON nhúng `window.APP_INITIALIZATION_STATE`.
-- **Cơ chế vượt kiểm duyệt tự động (Anti-Detection & CAPTCHA Bypass)**:
-  - Tự động bỏ qua màn hình Cookie Consent của Google ("Reject all").
-  - Tích hợp bộ giải tự động reCAPTCHA v2 bằng phương pháp âm thanh (Audio Challenge) kết hợp mô hình nhận dạng giọng nói.
-  - Tinh chỉnh Browser Launch Flags và giả lập hành vi người dùng (human-like mouse movements, scroll intervals).
-- **Hỗ trợ Proxy & Xoay IP**: Tích hợp sẵn cấu hình proxy HTTP/SOCKS5 (đặc biệt hỗ trợ mạng Tor với IP rotation).
+- **Kiến trúc SPA Navigation đột phá**: Mặc định điều hướng client-side trực tiếp trên trang kết quả tìm kiếm Google Maps (`use_spa=True`), kích hoạt sự kiện click thẻ địa điểm và chặn bắt trực tiếp gói tin XHR `/maps/preview/place`. Phương pháp này giúp giảm **85% – 90%** số lượng HTTP requests, triệt tiêu việc reload trang và tăng tốc độ cào lên đến **~0.3s – 0.5s / địa điểm**.
+- **Chế độ dự phòng đa trang (Multi-page Fallback Mode)**: Hỗ trợ chế độ cào truyền thống song song qua `asyncio.Semaphore` (`use_spa=False`) mở từng tab địa điểm độc lập khi cần cô lập môi trường duyệt.
+- **Tối ưu hóa băng thông & tài nguyên toàn cục (Bandwidth & Resource Optimization)**: Sử dụng handler định tuyến mạng toàn cục [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L106-L133) kết hợp Chromium launch flags để chặn tải hình ảnh, font chữ, media, map vector/satellite tiles (`/maps/vt`, `khms`), telemetry & tracking (`google-analytics`, `gen_204`, `client_204`, `cspreport`, `play.google.com/log`, `/maps/photometa`). Đặc biệt, tích hợp **Persistent Disk Cache** (`--disk-cache-dir`, `--disk-cache-size=1GB`) chia sẻ cache static assets giữa các `BrowserContext`, giảm **~94.5%** dung lượng mạng truyền tải (từ ~3.13 MB xuống còn 0.17 MB) cho các lượt cào tiếp theo và giữa các phiên xoay proxy, trong khi vẫn bảo toàn 100% luồng xác thực reCAPTCHA.
+- **Định tuyến Direct cho Static Assets (Proxy Bypass)**: Cung cấp hằng số tiện ích [`DEFAULT_PROXY_BYPASS`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L41) (`"maps.gstatic.com,*.gstatic.com,fonts.googleapis.com"`) và bảo toàn trường `bypass` trong `ProxySettings` qua [`ProxyRotator`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L149-L190). Cho phép trình duyệt định tuyến trực tiếp các static CDN assets của Google mà không đi qua proxy server, tiết kiệm tối đa băng thông dân cư đắt đỏ và loại bỏ độ trễ tunnel không cần thiết cho tài nguyên tĩnh.
+- **Trích xuất dữ liệu đa tầng bền vững (Multi-tier Resilient Extraction)**: Động cơ bóc tách thuần túy [`extractor.py`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) không có side effect, kết hợp 4 tầng dữ liệu (Payload Preview XHR `actual_data[6]`, nhúng `APP_INITIALIZATION_STATE`, DOM BeautifulSoup fallback, và bộ phân tích địa chỉ chi tiết kèm thuật toán khôi phục dấu tiếng Việt chuẩn xác bằng candidate matching).
+- **Cơ chế vượt kiểm duyệt & Chẩn đoán CAPTCHA tự động (Anti-Detection & CAPTCHA Diagnostics)**:
+  - Tự động phát hiện và vượt qua màn hình Cookie Consent đa ngôn ngữ (`pass_consent`).
+  - Tích hợp bộ giải tự động reCAPTCHA v2 bằng phương pháp âm thanh (Audio Challenge) kết hợp mô hình nhận dạng giọng nói (`speech_recognition` + `pydub`) thông qua [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388).
+  - Tự động chụp và lưu vết chẩn đoán (`save_captcha_diagnostics`) gồm screenshot, HTML source, `sitekey`, token bảo mật `data-s`, cookies, IP bị chặn và thông số form phục vụ phân tích.
+- **Hỗ trợ Proxy & Xoay IP Thực Sự (Real Proxy Rotation & Context Isolation)**: Hỗ trợ cấu hình linh hoạt `ProxySettings | Sequence[ProxySettings] | None`. Sử dụng [`ProxyRotator`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L140-L185) cấp phát proxy round-robin. Khởi tạo `BrowserContext` cô lập cho từng truy vấn/luồng xử lý qua [`create_browser_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L188-L245), triệt tiêu socket pooling của Chromium và kích hoạt xoay IP thật sự trên các rotating proxy gateway (Decodo, Smartproxy, BrightData, Tor...) kèm cơ chế giải phóng an toàn (`finally: await context.close()`).
 
 ---
 
 ## 2. Kiến Trúc Hệ Thống (System Architecture)
 
+Sơ đồ dưới đây minh họa toàn bộ vòng đời xử lý của `map_miner`, bao gồm hai nhánh hoạt động chính: **SPA Navigation Mode** (mặc định) và **Multi-page Fallback Mode**, cùng luồng bóc tách dữ liệu đa tầng độc lập:
+
 ```mermaid
 flowchart TD
-    A["User Input / main.py\n(queries, coordinates, zoom, proxy)"] --> B["scraper.py: scrape_google_maps()"]
+    A["User Input / main.py\n(queries, coordinates, zoom, proxy, fields, use_spa)"] --> B["scraper.py: scrape_google_maps()"]
 
-    subgraph Browser_Init ["1. Khởi tạo Trình duyệt"]
-        B --> C["Playwright Async Chromium\n(Stealth Flags + Randomized Viewport)"]
+    subgraph Browser_Init ["1. Khởi tạo Trình duyệt & Bộ xoay Proxy"]
+        B --> PR["ProxyRotator(proxy)\n(Hỗ trợ single gateway hoặc pool round-robin)"]
+        PR --> C["Playwright Async Chromium Launch\n(Stealth Flags + imagesEnabled=false + disable-remote-fonts)"]
     end
 
-    subgraph URL_Discovery ["2. Thu thập Danh sách Địa điểm"]
-        C --> D["get_place_urls()"]
-        D --> E{"Kiểm tra màn hình phụ"}
-        E -- "Consent Page" --> F["pass_consent()\n(Click 'Reject all')"]
-        E -- "CAPTCHA Detected" --> G["RecaptchaSolver.solveCaptcha()"]
-        E -- "Bình thường" --> H["Scroll Feed [role='feed']"]
-        H --> I["Thu thập Place URLs (/maps/place/...)"]
+    C --> ModeSwitch{"Kiểm tra tham số\nuse_spa"}
+
+    subgraph SPA_Mode ["2A. Chế độ SPA Navigation (Mặc định: use_spa=True)"]
+        ModeSwitch -- "use_spa = True" --> SPA_Task["Lặp qua từng query\n(query_semaphore)"]
+        SPA_Task --> SPA_Ctx["create_browser_context(browser, proxy=proxy_rotator.get())\n- TCP tunnel độc lập (xoay IP thực sự)\n- Stealth, geolocation, global_route_handler"]
+        SPA_Ctx --> SPA1["scrape_query_spa(context=...)"]
+        SPA1 --> SPA2["Mở duy nhất 1 tab search_page"]
+        SPA2 --> SPA3{"Kiểm tra màn hình"}
+        SPA3 -- "Consent Banner" --> SPA_C["pass_consent()\n(Đa ngôn ngữ)"]
+        SPA3 -- "CAPTCHA Detected" --> SPA_CAP["handle_captcha_if_present()\n(RecaptchaSolver)"]
+        SPA3 -- "Bình thường" --> SPA4["Scroll Results Feed [role='feed']"]
+        SPA4 --> SPA5["Lặp qua các thẻ địa điểm (a[href*='/maps/place/'])"]
+        SPA5 --> SPA6["Click thẻ địa điểm client-side:\nel.evaluate('e => e.click()')"]
+        SPA6 --> SPA7["search_page.expect_response(is_preview_response_for_link)\n- So khớp hex id 0x...:0x...\n- Chống race condition"]
+        SPA7 --> SPA8["Thu nhận preview_json thô\n(Không reload HTML)"]
     end
 
-    subgraph Place_Scraping ["3. Cào Chi tiết Địa điểm (Đồng thời)"]
-        I --> J["asyncio.Semaphore (Giới hạn n_semaphore)"]
-        J --> K["process_link()"]
-        K --> L["Chặn Request: images, fonts, styles"]
-        K --> M["Lấy mã nguồn HTML & Preview JSON thô"]
+    subgraph Fallback_Mode ["2B. Chế độ Multi-page Fallback (use_spa=False)"]
+        ModeSwitch -- "use_spa = False" --> FB1["get_place_urls()"]
+        FB1 --> FB2["Cuộn Feed & Thu thập Place URLs (/maps/place/...)"]
+        FB2 --> FB3["asyncio.Semaphore(n_semaphore)"]
+        FB3 --> FB4["process_link() (Chạy song song)"]
+        FB4 --> FB5["Mở tab riêng + PreviewInterceptor\ntry ... finally: await page.close()"]
+        FB5 --> FB6["Lấy preview_json thô hoặc html_content"]
     end
 
-    subgraph Data_Extraction ["4. Bóc tách Dữ liệu (extractor.py)"]
-        M --> N["extract_place_data(html, preview_json, fields)"]
-        N --> O["1. Phân tích preview_json (actual_data[6])"]
-        N --> P["2. Phân tích APP_INITIALIZATION_STATE"]
-        N --> Q["3. Phân tích DOM HTML (BeautifulSoup fallback)"]
-        N --> R["4. Phân rã Address Components & Lọc theo 'fields'"]
-        O --> S["Dữ liệu địa điểm chuẩn hóa"]
-        P --> S
-        Q --> S
-        R --> S
+    SPA8 --> ExtractorEntry["src/map_miner/extractor.py: extract_place_data()"]
+    FB6 --> ExtractorEntry
+
+    subgraph Data_Extraction ["3. Luồng Bóc Tách Đa Tầng (Pure Functions)"]
+        ExtractorEntry --> T1{"Tầng 1: Có preview_json\nhoặc preview_blob?"}
+        T1 -- "Có" --> T1_Parse["parse_preview_json()\nTrích xuất actual_data[6]"]
+        T1 -- "Không/Thiếu" --> T2{"Tầng 2: Có html_content?"}
+        T2 -- "Có" --> T2_Parse["extract_initial_json() -> parse_json_data()\n(Bóc window.APP_INITIALIZATION_STATE)"]
+        T2 -- "Không" --> T3
+        T1_Parse --> T3{"Tầng 3: Thiếu trường dữ liệu\nhoặc DOM có sẵn?"}
+        T2_Parse --> T3
+        T3 -- "Có HTML" --> T3_DOM["parse_dom_from_html(BeautifulSoup)\n(Bổ sung rating, reviews, hours, phone,...)"]
+        T3 -- "Đã đủ" --> T4
+        T3_DOM --> T4["Tầng 4: Phân rã địa chỉ & Khôi phục dấu tiếng Việt\n- get_address_components()\n- Candidate matching (data[2], data[183])\n- strip_accents() đối soát NFD"]
+        T4 --> Filter["Lọc & Sắp xếp theo tham số fields\n(Nếu fields=None: Giữ toàn bộ 27+ trường)"]
     end
 
-    subgraph Output ["5. Đầu ra Dữ liệu"]
-        S --> T["Polars DataFrame (pl.DataFrame)"]
+    subgraph Output ["4. Chuẩn Hóa & Xuất Dữ Liệu"]
+        Filter --> NormDict["Dict địa điểm hoàn chỉnh (gắn canonical link)"]
+        NormDict --> OutDF["polars.from_dicts(results, infer_schema_length=None)"]
+        OutDF --> Final["Polars DataFrame (pl.DataFrame)"]
     end
 ```
 
@@ -63,197 +86,350 @@ flowchart TD
 
 ## 3. Chi Tiết Các Thành Phần Cốt Lõi (Core Modules)
 
-### 3.1. [main.py](file:///data/IMPORTANT/map_miner/main.py) - Entry Point
+Cấu trúc mã nguồn chuẩn của dự án được tổ chức theo tiêu chuẩn Python package hiện đại bên trong thư mục `src/map_miner/`:
 
-Module điều phối chính để khởi chạy tác vụ cào dữ liệu mẫu.
-
-- **Thiết lập tham số**:
-  - `queries`: Tập hợp từ khóa tìm kiếm (ví dụ: `{"cafe"}`).
-  - `geo_coordinates`: Tọa độ trung tâm theo [Point](file:///data/IMPORTANT/map_miner/main.py#L3) (`Point(lat, lon)`).
-  - `zoom`: Độ phóng đại bản đồ (mặc định: 18).
-  - `max_places`: Số lượng địa điểm tối đa cần thu thập.
-  - `proxy`: Cấu hình máy chủ proxy (hỗ trợ HTTP/SOCKS5) hoặc `None`.
-  - `n_semaphore`: Số tab cào chi tiết chạy song song đồng thời (mặc định: 8).
-- **Đầu ra**: In bảng dữ liệu và danh sách cột của Polars DataFrame ra màn hình.
-
----
-
-### 3.2. [scraper.py](file:///data/IMPORTANT/map_miner/scraper.py) - Tác Vụ I/O & Thu Thập Nội Dung Thô
-
-Tuân thủ nguyên tắc **chỉ thực hiện I/O và lấy nội dung thô**, không chứa logic trích xuất hay phân tích dữ liệu:
-
-- **Quản lý Trình duyệt & Mạng**:
-  - Cắt giảm tài nguyên thừa qua `page.route` (`image`, `font`, `media`, `stylesheet`, `other`).
-  - Lắng nghe response ngầm `/maps/preview/place` và lưu lại chuỗi JSON thô (`preview_json`).
-  - Điều hướng, cuộn trang, vượt CAPTCHA/Consent qua `RecaptchaSolver`.
-- **Lấy Nội dung Thô**:
-  - Lấy mã nguồn trang thô bằng `await page.content()`.
-- **Bàn giao dữ liệu**:
-  - Chuyển toàn bộ nội dung thô (`html_content`, `preview_json`) sang [`extractor.py`](file:///data/IMPORTANT/map_miner/extractor.py) để thực hiện bóc tách, sau đó gắn `link` vào kết quả.
+```
+map_miner/
+├── pyproject.toml                     # Cấu hình dự án & đóng gói phiên bản 0.1.1
+├── main.py                            # Entrypoint khởi chạy ví dụ
+├── src/
+│   └── map_miner/
+│       ├── __init__.py                # Package exports (__version__ = "0.1.1")
+│       ├── scraper.py                 # Điều phối mạng, Playwright I/O & SPA navigation
+│       ├── extractor.py               # Engine trích xuất dữ liệu thuần túy (pure functions)
+│       └── recaptcha_solver.py        # Giải reCAPTCHA v2 & lưu trữ chẩn đoán
+├── tests/
+│   ├── fixtures/
+│   │   ├── real_place.html            # Snapshot DOM & APP_INITIALIZATION_STATE thực tế
+│   │   └── real_preview.txt           # Snapshot XHR preview/place thực tế
+│   ├── test_extractor.py              # Kiểm thử bộ bóc tách, DOM fallback, địa chỉ
+│   ├── test_real_web_extraction.py    # Kiểm thử schema 27+ trường và dấu tiếng Việt
+│   ├── test_recaptcha.py              # Kiểm thử solver initialization & aliases
+│   └── test_scraper.py                # Kiểm thử route blocking, hex matching, SPA error recovery
+└── note.md                            # Hướng dẫn cấu hình proxy xoay IP qua Tor
+```
 
 ---
 
-### 3.3. [extractor.py](file:///data/IMPORTANT/map_miner/extractor.py) - Engine Bóc Tách Nội Dung Thuần Túy (Pure / No Side Effects)
+### 3.1. [main.py](file:///data/IMPORTANT/map_miner/main.py) - Điểm Khởi Chạy (Entry Point)
 
-Tuân thủ nguyên tắc **chỉ trích xuất nội dung - không có side effect**:
+Tệp [`main.py`](file:///data/IMPORTANT/map_miner/main.py) đóng vai trò làm mẫu ứng dụng để cấu hình và gọi hàm thực thi [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L748-L904).
 
-- **Hàm thuần (Pure Functions)**: Nhận dữ liệu đầu vào (`html_content`, `preview_json` / `preview_blob`) và trả về `dict` kết quả. Không ghi file, không gọi mạng, không phụ thuộc trình duyệt hay thay đổi biến toàn cục.
-- **Chiến lược bóc tách đa tầng**:
-  1. _Tầng 1 (Ưu tiên cao nhất)_: Phân tích `preview_json` (payload XHR `/maps/preview/place`) để lấy toàn bộ 27+ trường dữ liệu giàu có.
-  2. _Tầng 2_: Bóc tách `APP_INITIALIZATION_STATE` nhúng sẵn trong `html_content`.
-  3. _Tầng 3_: Bóc tách DOM HTML thông qua `parse_dom_from_html` (dùng `BeautifulSoup` thuần Python).
-  4. _Tầng 4_: Phân tích thành phần địa chỉ chi tiết (`street`, `sublocality`, `district`, `city`, `postal_code`) và khôi phục dấu tiếng Việt chuẩn xác.
-
-- **Hàm [`extract_initial_json`](file:///data/IMPORTANT/map_miner/extractor.py#L38)**:
-  - Dùng biểu thức chính quy (Regex) bắt khối script:
-    `;window\.APP_INITIALIZATION_STATE\s*=\s*(.*?);window\.APP_FLAGS`
-- **Hàm [`parse_json_data`](file:///data/IMPORTANT/map_miner/extractor.py#L63)**:
-  - Giải mã JSON gốc, loại bỏ tiền tố bảo vệ XSSI của Google (`)]}'\n`).
-  - Lấy khối dữ liệu chuẩn `actual_data[6]` hoặc khối dự phòng `[3][5]` mà không phân nhánh `lean`/`rich`.
-- **Hàm [`safe_get`](file:///data/IMPORTANT/map_miner/extractor.py#L9)**: Hàm tiện ích truy cập sâu vào dict/list nhiều tầng, ngăn chặn lỗi `KeyError`, `IndexError`, `TypeError`.
-- **Tham số lựa chọn trường (`fields`)**:
-  - Cho phép người dùng linh hoạt chỉ định danh sách trường cần lấy (ví dụ: `fields=["name", "address", "phone", "rating"]`).
-  - Nếu `fields=None`, hệ thống tự động bóc tách và trả về toàn bộ 27+ trường dữ liệu có sẵn.
-  - Tối ưu hóa hiệu năng: Tự động bỏ qua việc bóc tách các trường không được yêu cầu.
+- **Tập hợp tham số đầy đủ**:
+  - `queries: set[str]`: Tập hợp các từ khóa tìm kiếm (ví dụ: `{"cafe", "restaurant", "hospital"}`).
+  - `geo_coordinates: Point`: Tọa độ trung tâm tìm kiếm sử dụng [`Point(latitude, longitude)`](file:///data/IMPORTANT/map_miner/main.py#L30) từ `geopy.point`.
+  - `zoom: float`: Mức zoom bản đồ của Google Maps (ví dụ: `18`).
+  - `max_places: int = 120`: Giới hạn số lượng địa điểm tối đa cần thu thập trên mỗi từ khóa (mặc định: `120`, hoặc truyền `None` để cào đến khi hết feed).
+  - `proxy: ProxySettings | None = None`: Từ điển cấu hình proxy (hỗ trợ `server`, `username`, `password`, `bypass`), ví dụ proxy xoay IP dân cư hoặc Tor proxy cục bộ kèm hằng số `DEFAULT_PROXY_BYPASS`.
+  - `n_semaphore: int = 8`: Giới hạn mức độ tương tranh tối đa (số truy vấn chạy đồng thời trong chế độ SPA, hoặc số tab mở song song trong chế độ fallback).
+  - `lang: str = "en"`: Mã ngôn ngữ giao diện Google Maps (ví dụ: `"vi"`, `"en"`, `"fr"`).
+  - `headless: bool = False`: Chế độ chạy trình duyệt ẩn (`True`) hoặc hiện cửa sổ trực quan (`False`).
+  - `fields: Sequence[str] | set[str] | None = None`: Danh sách các trường dữ liệu tùy biến cần lấy. Nếu là `None`, bóc tách toàn bộ 27+ trường dữ liệu chuẩn.
+  - `use_spa: bool = True`: Bật chế độ SPA Navigation tốc độ cao (mặc định: `True`).
+- **Xử lý đầu ra**:
+  - Nhận về đối tượng `polars.DataFrame`.
+  - Hỗ trợ xuất dữ liệu trực tiếp sang Excel (`pois.write_excel("out.xlsx")`), Parquet hoặc CSV.
 
 ---
 
-### 3.4. [RecaptchaSolver.py](file:///data/IMPORTANT/map_miner/RecaptchaSolver.py) - Giải CAPTCHA Bằng Giọng Nói
+### 3.2. [src/map_miner/scraper.py](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) - Tác Vụ I/O, Điều Hướng Trình Duyệt & Băng Thông
 
-Tự động giải quyết Google reCAPTCHA v2 khi hệ thống phát hiện hành vi bot:
+Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua Playwright, tuyệt đối tuân thủ nguyên tắc **chỉ thu thập nội dung thô và bàn giao cho extractor**:
 
-1. **Kiểm tra Checkbox ban đầu**: Nhắm vào iframe reCAPTCHA (`iframe[title*="reCAPTCHA"]`), nhấp vào `#recaptcha-anchor`. Nếu thành công ngay (dựa trên `aria-checked="true"`), hoàn tất tác vụ.
-2. **Kích hoạt Audio Challenge**: Nếu hiện modal câu đố hình ảnh, chuyển sang iframe challenge (`iframe[title*="recaptcha challenge expires in two minutes"]`) và bấm `#recaptcha-audio-button`.
-3. **Tải file âm thanh**: Bóc thuộc tính `src` từ thẻ audio `#audio-source`, tải file MP3 về thư mục tạm (`/tmp/` trên Linux hoặc `%TEMP%` trên Windows) bằng `aiohttp`.
-4. **Chuyển đổi định dạng**: Dùng `pydub` chuyển từ MP3 sang WAV.
-5. **Speech-to-Text**: Sử dụng thư viện `speech_recognition` gửi file WAV đến Google Speech Recognition API (`recognizer.recognize_google`) để chuyển lời thoại thành văn bản.
-6. **Nhập kết quả**: Gửi chuỗi ký tự nhận diện được vào ô `#audio-response`, nhấn `Enter` và xác thực lại trạng thái giải quyết qua `isSolved()`.
+#### 1. Kiến trúc Hai Chế Độ Vận Hành:
+- **Chế độ SPA Navigation ([`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L411-L605) - Mặc định `use_spa=True`)**:
+  - Khởi tạo **duy nhất 1 tab trình duyệt** cho mỗi truy vấn tìm kiếm.
+  - Sau khi trang feed hiển thị, duyệt qua các phần tử thẻ địa điểm (`a[href*="/maps/place/"]`).
+  - Kích hoạt sự kiện click client-side: `await el.evaluate("e => e.click()")` (hoặc fallback `el.click(force=True)` nếu bị che khuất).
+  - Lắng nghe response XHR tương ứng bằng `search_page.expect_response(is_matching_preview, timeout=5000)`.
+  - Triệt tiêu 85-90% lượng request mạng thừa do không cần mở tab mới và không phải tải lại mã nguồn ứng dụng web nặng nề của Google Maps.
+  - Cơ chế tự phục hồi: Thẻ địa điểm chỉ được đánh dấu là `processed_links` sau khi click thành công, đảm bảo các phần tử chưa click được sẽ được thử lại trong các lượt cuộn kế tiếp.
+- **Chế độ Multi-page Fallback ([`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L305-L409) -> [`process_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L608-L745) - Khi `use_spa=False`)**:
+  - `get_place_urls`: Cuộn feed tìm kiếm và thu thập toàn bộ danh sách URL `/maps/place/...`.
+  - `process_link`: Mở tab con riêng biệt cho từng URL dưới sự kiểm soát của `asyncio.Semaphore(n_semaphore)`, hỗ trợ cơ chế Early Exit khi nhận preview XHR, tự động thử lại 2 lần khi gặp lỗi mạng.
+
+#### 2. Cơ Chế Chống Race Condition ([`is_preview_response_for_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L281-L302)):
+- Trong môi trường SPA hoặc mạng trễ, gói tin XHR của địa điểm click trước đó có thể phản hồi muộn khi tab đang xử lý địa điểm mới.
+- [`is_preview_response_for_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L281-L302) phân tích chuỗi định danh Hex ID đặc thù dạng `0x[0-9a-fA-F]+:0x[0-9a-fA-F]+` trong canonical link và kiểm tra sự hiện diện chính xác của Hex ID này trong URL của gói tin preview XHR `/maps/preview/place`.
+- Chuẩn hóa toàn bộ URL và xử lý triệt để ký tự phân cách mã hóa phần trăm (`%3a` hoặc `%3A`), loại bỏ hoàn toàn hiện tượng rò rỉ dữ liệu chéo (cross-place data leakage).
+
+#### 3. Quản Lý Tài Nguyên & Tối Ưu Băng Thông Toàn Cục ([`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L106-L133)):
+- Đăng ký bộ định tuyến mạng toàn ngữ cảnh (`context.route("**/*", global_route_handler)`):
+  - **Chặn loại tài nguyên nặng (`BLOCKED_RESOURCE_TYPES`)**: `image`, `media`, `font`.
+  - **Chặn các URL ngốn băng thông & tracking (`BLOCKED_URL_PATTERNS`)**: Gói gạch bản đồ vector và ảnh vệ tinh (`/maps/vt`, `/vt/pb=`, `/vt/data=`, `khms`, `/kh/v=`, `google.com/vt`), telemetry & logging (`google-analytics.com`, `play.google.com/log`, `stats.g.doubleclick.net`, `/gen_204`, `client_204`, `cspreport`, `/maps/photometa`), CDN hình ảnh (`googleusercontent.com`, `ggpht.com`, `streetviewpixels`).
+  - **Bảo toàn lưu lượng xác thực**: Luôn cho phép mọi request chứa chuỗi `recaptcha` đi qua bình thường (`await route.continue_()`).
+- **Cờ khởi chạy Chromium tối ưu hóa tài nguyên**:
+  - `--blink-settings=imagesEnabled=false`, `--disable-remote-fonts`, `--mute-audio`, `--disable-background-networking`.
+- **Persistent Disk Cache Cho Static Assets (`--disk-cache-dir`, `--disk-cache-size`)**:
+  - Mặc định khởi tạo `cache_dir=DEFAULT_CACHE_DIR` (`.cache/chromium_cache`) và giới hạn dung lượng `DEFAULT_DISK_CACHE_SIZE=1073741824` (1 GB) ở cấp độ browser instance của Chromium.
+  - Tự động tạo thư mục cache trên đĩa cứng nếu chưa tồn tại (`resolved_cache.mkdir(parents=True, exist_ok=True)`).
+  - Tái sử dụng các gói static JavaScript/CSS nặng của Google Maps (`maps.gstatic.com/...`) qua các `BrowserContext` cô lập độc lập khi xoay proxy, cắt giảm tới **94.5%** lưu lượng truyền tải thực tế (wire bytes transferred từ ~3.13 MB xuống còn 0.17 MB).
+  - Cho phép người dùng tùy biến đường dẫn lưu trữ hoặc vô hiệu hóa (`cache_dir=None`) để chạy hoàn toàn ephemeral không ghi đĩa.
+- **Định tuyến Direct cho Static Assets (Proxy Bypass)**:
+  - Khai báo hằng số tiện ích [`DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com"`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L41).
+  - Hàm [`_normalize_proxy`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L136-L146) và [`ProxyRotator`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L149-L190) chuẩn hóa và bảo toàn nguyên vẹn trường `bypass` trong `ProxySettings`.
+  - [`create_browser_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L192-L241) chuyển giao trực tiếp `proxy` (gồm `server`, `username`, `password`, `bypass`) vào `browser.new_context`, kích hoạt cơ chế bypass proxy của Playwright / Chromium cho các domain static assets, tiết kiệm băng thông proxy dân cư và giảm độ trễ tải trang.
+
+#### 4. Vượt Cookie Consent & Phát Hiện CAPTCHA:
+- [`pass_consent`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L139-L168): Sử dụng biểu thức chính quy đa ngôn ngữ `CONSENT_BUTTON_REGEX` nhận diện các nút từ chối/chấp nhận (Reject all, Từ chối tất cả, Alle ablehnen, Tout refuser, Rechazar todo, Rifiuta tutto...) cùng fallback form nút bấm.
+- [`handle_captcha_if_present`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L171-L193): Tự động phát hiện URL `sorry/index` hoặc văn bản thông báo *"Our systems have detected unusual traffic"*, kích hoạt [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388).
+
+#### 5. Quản Lý Vòng Đời Trang An Toàn (Zero Page Leaks) & Stealth:
+- Toàn bộ các đối tượng trang `search_page` và detail `page` được bọc chặt chẽ trong khối `try ... finally: if page and not page.is_closed(): await page.close()`, triệt tiêu hoàn toàn nguy cơ rò rỉ tab trình duyệt hoặc cạn kiệt RAM.
+- Ẩn dấu vết tự động hóa bằng cách xóa thuộc tính `navigator.webdriver` qua `context.add_init_script`, giả lập viewport ngẫu nhiên và cờ `--disable-blink-features=AutomationControlled`.
+- Chuyển đổi dữ liệu sang Polars bằng `pl.from_dicts(results, infer_schema_length=None)` quét toàn bộ tập dữ liệu, ngăn chặn lỗi schema inference khi các hàng đầu tiên chứa giá trị null ở các cột phức tạp (`opening_hours`, `photos`).
 
 ---
 
-### 3.5. [note.md](file:///data/IMPORTANT/map_miner/note.md) - Cấu Hình Xoay IP Qua Tor
+### 3.3. [src/map_miner/extractor.py](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) - Engine Bóc Tách Nội Dung Thuần Túy (Pure Functions)
+
+[`extractor.py`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) được xây dựng theo mô hình **Functional Programming**: tất cả các hàm đều là pure functions, không thực hiện bất kỳ tác vụ I/O, không gọi mạng, không ghi tệp và không phụ thuộc trạng thái bên ngoài:
+
+#### 1. Chiến Lược Bóc Tách Đa Tầng (Multi-tier Strategy):
+1. **Tầng 1 (Ưu tiên số 1 - Rich Preview XHR)**:
+   - Hàm [`parse_preview_json`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L103-L118) giải mã chuỗi phản hồi `/maps/preview/place`, bóc bỏ tiền tố bảo mật XSSI `)]}'\n` và trích xuất khối mảng dữ liệu giàu có tại `actual_data[6]`.
+2. **Tầng 2 (Dự phòng HTML State - Initial State)**:
+   - Khi không có preview XHR hoặc dữ liệu chưa đầy đủ, [`extract_initial_json`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L38-L59) trích xuất chuỗi JSON từ thẻ script `;window.APP_INITIALIZATION_STATE\s*=\s*(.*?);window.APP_FLAGS`.
+   - Hàm [`parse_json_data`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L61-L100) giải mã đường dẫn chính `[3][6]` (hoặc nhánh thay thế `[3][5]`).
+3. **Tầng 3 (Dự phòng DOM HTML - BeautifulSoup)**:
+   - Hàm [`parse_dom_from_html`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L542-L674) sử dụng `BeautifulSoup` phân tích cây DOM để bù đắp các trường dữ liệu còn thiếu (`name`, `rating`, `reviews_count`, `phone`, `website`, `menu_url`, `opening_hours`, `price_level`, `open_status`, `categories`).
+4. **Tầng 4 (Phân rã Địa chỉ & Khôi phục Dấu Tiếng Việt)**:
+   - Hàm [`get_address_components`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L178-L270) bóc tách cấu trúc địa chỉ từ mảng `data[183][1]` thành các thành phần: `street`, `sublocality`, `district`, `city`, `postal_code`.
+   - **Thuật toán Khôi phục Dấu Tiếng Việt chuẩn xác**:
+     - Google Maps thường trả về các thành phần địa chỉ chi tiết ở dạng không dấu hoặc thiếu dấu trong mảng `data[183][1]` (ví dụ: *"Ha Dong"*, *"Ha Noi"*, *"Lang Viet kieu Chau Au"*).
+     - Thuật toán thu thập danh sách ứng viên có dấu đầy đủ từ mảng địa chỉ tổng quát `data[2]` và các token lồng nhau tại `data[183][0][0][1]`.
+     - Sử dụng hàm chuẩn hóa [`strip_accents`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L165-L175) (chuẩn Unicode NFD, chuyển `đ/Đ` -> `d/D`) để đối soát không dấu giữa thành phần địa chỉ rút gọn và danh sách ứng viên; khi khớp, tự động gán lại chuỗi có dấu nguyên vẹn (ví dụ: khôi phục thành *"Hà Đông"*, *"Hà Nội"*, *"Làng Việt kiều Châu Âu"*).
+   - Hàm [`parse_address_string_fallback`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L273-L320): Thuật toán dự phòng dựa trên biểu thức chính quy tách chuỗi địa chỉ định dạng đầy đủ khi thiếu khối cấu trúc.
+
+#### 2. Hàm Tiện Ích An Toàn & Lọc Trường:
+- [`safe_get`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L13-L35): Truy cập an toàn vào cây dữ liệu đa tầng kết hợp dict/list, bắt gọn mọi ngoại lệ `IndexError`, `TypeError`, `KeyError`.
+- **Lọc trường dữ liệu ([`fields`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py#L754))**: Cho phép truyền vào danh sách các cột cần trích xuất (ví dụ: `fields=["name", "address", "phone", "rating"]`). Hệ thống tối ưu hóa bằng cách bỏ qua các phép tính cho các trường không được yêu cầu và trả về dictionary bảo toàn đúng thứ tự các khóa đã chỉ định.
+
+---
+
+### 3.4. [src/map_miner/recaptcha_solver.py](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py) - Giải CAPTCHA Bằng Giọng Nói & Thu Thập Dữ Liệu Chẩn Đoán
+
+Class [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388) chịu trách nhiệm tự động vượt qua reCAPTCHA v2 và hỗ trợ điều tra hành vi chặn bot:
+
+#### 1. Quy Trình Giải reCAPTCHA v2 Bằng Giọng Nói:
+1. **Kiểm tra Checkbox ban đầu**: Truy cập frame reCAPTCHA (`iframe[title*="reCAPTCHA"]`), nhấp vào `#recaptcha-anchor`. Kiểm tra trạng thái hoàn thành qua [`is_solved`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L366-L383) (`aria-checked="true"` hoặc class `recaptcha-checkbox-checked`).
+2. **Kích hoạt Audio Challenge**: Nếu hiển thị popup giải đố hình ảnh, chuyển sang frame câu đố (`iframe[title*="recaptcha challenge expires in two minutes"]`) và bấm `#recaptcha-audio-button`.
+3. **Tải file âm thanh bất đồng bộ**: Bóc tách URL nguồn `#audio-source`, sử dụng `aiohttp.ClientSession` để tải file MP3 về thư mục làm việc mà không làm block event loop.
+4. **Chuyển đổi âm thanh MP3 sang WAV**: Sử dụng thư viện `pydub.AudioSegment`. Tác vụ chuyển đổi được đưa vào worker thread riêng biệt thông qua [`asyncio.to_thread`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L310).
+5. **Nhận dạng giọng nói (Speech-to-Text)**: Sử dụng thư viện `speech_recognition` (`sr.Recognizer().recognize_google`) đưa vào worker thread qua [`asyncio.to_thread`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L325) để chuyển đổi âm thanh thành văn bản tiếng Anh.
+6. **Điền kết quả & Xác thực**: Nhập kết quả nhận diện vào ô `#audio-response`, nhấn `Enter` và kiểm tra lại bằng [`is_solved`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L366-L383).
+
+#### 2. Tự Động Thu Thập Dữ Liệu Chẩn Đoán ([`save_captcha_diagnostics`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L70-L196)):
+Khi gặp trang chặn (sorry page hoặc phát hiện bất thường), hệ thống tự động khởi tạo thư mục lưu trữ tại `debug/captchas/captcha_{YYYYMMDD_HHMMSS}_{rand}/` chứa:
+- `screenshot.png`: Ảnh chụp toàn bộ trang màn hình lúc bị chặn.
+- `page.html`: Toàn bộ mã nguồn HTML tại thời điểm chặn.
+- `meta.json`: Tệp siêu dữ liệu phân tích chuyên sâu gồm:
+  - Khóa định danh `sitekey` (bóc tách từ tham số URL iframe `k=` hoặc thuộc tính `data-sitekey`).
+  - Token bảo mật thời gian thực `data-s` (bóc tách từ tham số iframe `s=` hoặc thuộc tính `data-s`).
+  - Địa chỉ IP bị chặn (`ip_address`) và thời điểm chặn (`block_time`) hiển thị trên trang sorry.
+  - Cấu trúc và tham số biểu mẫu `form` (`continue`, `q`, action, method).
+  - Toàn bộ danh sách `cookies` phiên duyệt hiện tại, chuỗi `user_agent`, `viewport`, timestamp và trạng thái giải pháp.
+
+#### 3. Bí Danh Tương Thích Ngược (Backward Compatibility Aliases):
+- `solveCaptcha = solve_captcha`
+- `solveAudioCaptcha = solve_audio_captcha`
+- `isSolved = is_solved`
+
+---
+
+### 3.5. [note.md](file:///data/IMPORTANT/map_miner/note.md) - Cấu Hình Xoay IP Qua Tor Proxy
 
 Tài liệu hướng dẫn thiết lập IP rotation tự động cho Tor proxy cục bộ (`socks5://127.0.0.1:9050`):
-
 - File cấu hình: `/etc/tor/torrc`
-- Tham số: `MaxCircuitDirtiness 120` (xoay chuyển circuit/IP mới sau mỗi 120 giây).
+- Tham số cấu hình: `MaxCircuitDirtiness 120` (xoay chuyển circuit/IP mới sau mỗi 120 giây).
 
 ---
 
 ## 4. Bảng Quy Chuẩn Dữ Liệu Đầu Ra (Output Schema)
 
-Kết quả cuối cùng trả về dưới dạng `polars.DataFrame` chứa toàn diện các thuộc tính:
+Kết quả bóc tách cuối cùng được chuẩn hóa thành `polars.DataFrame` bao gồm 28 trường dữ liệu chi tiết:
 
-| Cột (Column)    | Kiểu dữ liệu    | Mô tả                                                                      |
-| :-------------- | :-------------- | :------------------------------------------------------------------------- |
-| `name`          | `String`        | Tên chính thức của địa điểm / doanh nghiệp                                 |
-| `place_id`      | `String`        | Mã định danh duy nhất (Canonical Google Place ID, vd: `ChIJ...`)           |
-| `latitude`      | `Float64`       | Vĩ độ địa lý                                                               |
-| `longitude`     | `Float64`       | Kinh độ địa lý                                                             |
-| `plus_code`     | `String`        | Mã Plus Code toàn cầu (vd: `XQMM+PF Ha Dong, Ha Noi, Vietnam`)             |
-| `address`       | `String`        | Địa chỉ đầy đủ hoàn chỉnh                                                  |
-| `street`        | `String`        | Số nhà, tên đường hoặc ngõ ngách                                           |
-| `sublocality`   | `String`        | Phường, xã, hoặc khu đô thị / khu dân cư                                   |
-| `district`      | `String`        | Quận, huyện, thị xã hoặc thành phố trực thuộc                              |
-| `city`          | `String`        | Tỉnh / Thành phố trực thuộc trung ương                                     |
-| `postal_code`   | `String`        | Mã bưu chính (Zip / Postal Code) nếu có                                    |
-| `rating`        | `Float64`       | Điểm đánh giá sao trung bình (vd: `4.5`)                                   |
-| `reviews_count` | `Int64`         | Tổng số lượng bài đánh giá (vd: `253`)                                     |
-| `price_level`   | `String`        | Phân khúc giá / mức chi tiêu (vd: `₫1–100,000` hoặc `$$`)                  |
-| `categories`    | `List[String]`  | Danh sách danh mục, ngành nghề kinh doanh                                  |
-| `phone`         | `String`        | Số điện thoại liên hệ chuẩn hóa                                            |
-| `website`       | `String`        | Đường dẫn trang web chính thức của địa điểm                                |
-| `open_status`   | `String`        | Trạng thái phục vụ theo thời gian thực (vd: `Open · Closes 11 PM`)         |
-| `opening_hours` | `Struct / Dict` | Lịch mở cửa chi tiết theo từng ngày trong tuần                             |
-| `timezone`      | `String`        | Múi giờ địa phương (vd: `Asia/Saigon`)                                     |
-| `amenities`     | `List[String]`  | Danh sách tiện ích, dịch vụ & hỗ trợ (Dine-in, Takeout, Wi-Fi, Parking...) |
-| `photos_count`  | `Int64`         | Tổng số lượng hình ảnh của địa điểm                                        |
-| `photos`        | `List[String]`  | Danh sách URL các hình ảnh nổi bật                                         |
-| `thumbnail`     | `String`        | URL hình ảnh đại diện chính                                                |
-| `menu_url`      | `String`        | Đường dẫn xem thực đơn (Menu) nếu có                                       |
-| `is_claimed`    | `Boolean`       | Doanh nghiệp đã được chủ sở hữu xác nhận quyền chính chủ                   |
-| `country_code`  | `String`        | Mã quốc gia (vd: `VN`)                                                     |
-| `link`          | `String`        | Đường dẫn URL trực tiếp tới địa điểm trên Google Maps                      |
+| Cột (Column)    | Kiểu dữ liệu Polars | Mô tả chi tiết                                                              |
+| :-------------- | :------------------ | :-------------------------------------------------------------------------- |
+| `name`          | `String`            | Tên chính thức của địa điểm / doanh nghiệp                                  |
+| `place_id`      | `String`            | Mã định danh duy nhất (Canonical Google Place ID `ChIJ...` hoặc Hex ID)     |
+| `latitude`      | `Float64`           | Vĩ độ địa lý WGS84                                                          |
+| `longitude`     | `Float64`           | Kinh độ địa lý WGS84                                                        |
+| `plus_code`     | `String`            | Mã Plus Code toàn cầu (vd: `XQMM+PF Ha Dong, Ha Noi, Vietnam`)              |
+| `address`       | `String`            | Địa chỉ đầy đủ hoàn chỉnh                                                   |
+| `street`        | `String`            | Số nhà, tên đường hoặc ngõ ngách chi tiết                                   |
+| `sublocality`   | `String`            | Phường, xã, hoặc khu đô thị / khu dân cư (đã khôi phục dấu tiếng Việt)      |
+| `district`      | `String`            | Quận, huyện, thị xã hoặc thành phố trực thuộc (đã khôi phục dấu tiếng Việt) |
+| `city`          | `String`            | Tỉnh / Thành phố trực thuộc trung ương (đã khôi phục dấu tiếng Việt)        |
+| `postal_code`   | `String`            | Mã bưu chính (Zip / Postal Code) nếu có                                     |
+| `rating`        | `Float64`           | Điểm đánh giá sao trung bình (vd: `4.5`)                                    |
+| `reviews_count` | `Int64`             | Tổng số lượng bài đánh giá của người dùng (vd: `253`)                       |
+| `price_level`   | `String`            | Phân khúc giá / mức chi tiêu (vd: `₫1–100,000` hoặc `$$`)                   |
+| `categories`    | `List[String]`      | Danh sách danh mục, ngành nghề kinh doanh                                   |
+| `phone`         | `String`            | Số điện thoại liên hệ chuẩn hóa                                             |
+| `website`       | `String`            | Đường dẫn trang web chính thức của địa điểm                                 |
+| `open_status`   | `String`            | Trạng thái phục vụ thời gian thực (vd: `Open · Closes 11 PM`)               |
+| `opening_hours` | `Struct / Dict`     | Lịch mở cửa chi tiết theo từng ngày trong tuần                              |
+| `timezone`      | `String`            | Múi giờ địa phương của địa điểm (vd: `Asia/Saigon`)                         |
+| `amenities`     | `List[String]`      | Danh sách tiện ích, dịch vụ hỗ trợ (Dine-in, Takeout, Wi-Fi, Parking...)    |
+| `photos_count`  | `Int64`             | Tổng số lượng hình ảnh của địa điểm                                         |
+| `photos`        | `List[String]`      | Danh sách URL các hình ảnh nổi bật                                          |
+| `thumbnail`     | `String`            | URL hình ảnh đại diện chính của địa điểm                                    |
+| `menu_url`      | `String`            | Đường dẫn xem thực đơn (Menu) nếu có                                        |
+| `is_claimed`    | `Boolean`           | Doanh nghiệp đã được chủ sở hữu xác nhận quyền chính chủ                    |
+| `country_code`  | `String`            | Mã quốc gia chuẩn ISO (vd: `VN`, `US`)                                      |
+| `link`          | `String`            | Đường dẫn URL trực tiếp tới địa điểm trên Google Maps                       |
 
 ---
 
-## 5. Hướng Dẫn Thiết Lập & Khởi Chạy (Setup & Usage)
+## 5. Hướng Dẫn Thiết Lập, Sử Dụng & Kiểm Thử (Setup, Usage & Testing)
 
-### 5.1. Yêu cầu môi trường
-
-- Python >= 3.12
-- [uv](https://github.com/astral-sh/uv) (trình quản lý gói & môi trường ảo tốc độ cao)
-- `ffmpeg` (yêu cầu bởi `pydub` để chuyển đổi âm thanh MP3 sang WAV)
+### 5.1. Yêu Cầu Môi Trường
+- **Python**: `>= 3.12`
+- **uv**: Trình quản lý môi trường và gói tốc độ cao của Astral.
+- **ffmpeg**: Công cụ xử lý đa phương tiện (yêu cầu bởi `pydub` để chuyển đổi MP3 sang WAV phục vụ giải CAPTCHA).
 
 ```bash
-# Cài đặt ffmpeg (trên Ubuntu/Debian)
+# Cài đặt ffmpeg trên Ubuntu/Debian
 sudo apt update && sudo apt install -y ffmpeg
 ```
 
-### 5.2. Cài đặt thư viện & Browser
+### 5.2. Cài Đặt Package & Browser
+
+Dự án đã được chuẩn hóa thành Python package phiên bản `0.1.1` (khai báo trong [`pyproject.toml`](file:///data/IMPORTANT/map_miner/pyproject.toml)):
 
 ```bash
-# Cài đặt toàn bộ dependencies theo uv.lock
+# Cách 1: Cài đặt trực tiếp qua uv cho môi trường phát triển
 uv sync
 
-# Cài đặt Chromium browser cho Playwright
+# Cài đặt Chromium browser và các dependencies hệ thống cho Playwright
 uv run playwright install chromium
+
+# Cách 2: Cài đặt như một thư viện thông qua pip (nếu build từ wheel/source)
+pip install map_miner
 ```
 
-### 5.3. Khởi chạy
+### 5.3. Khởi Chạy Ứng Dụng
 
-Chạy trực tiếp thông qua `Makefile` hoặc lệnh `uv`:
+Chạy file điều phối chính:
 
 ```bash
-# Sử dụng Makefile
-make run
-
-# Hoặc chạy trực tiếp qua uv
+# Khởi chạy qua lệnh uv
 uv run main.py
+
+# Hoặc thông qua Makefile
+make run
 ```
+
+### 5.4. Bộ Kiểm Thử Tự Động Toàn Diện (Unit Tests)
+
+Dự án sở hữu bộ kiểm thử tự động gồm **41 unit tests độc lập** chạy hoàn toàn offline không phụ thuộc mạng bên ngoài, thực thi nhanh chóng (~0.4s – 0.6s) và đạt tỷ lệ pass **100%**, tuân thủ 0 lỗi linter từ Ruff:
+
+```bash
+# Chạy toàn bộ 41 unit tests
+uv run pytest
+
+# Kiểm tra cú pháp và định dạng mã nguồn chuẩn PEP 8
+uv run ruff check .
+uv run ruff format .
+```
+
+#### Phân bổ 41 Unit Tests trong Codebase:
+1. **[`tests/test_extractor.py`](file:///data/IMPORTANT/map_miner/tests/test_extractor.py) (8 tests)**:
+   - `test_safe_get`: Kiểm thử truy cập an toàn trên cấu trúc lồng nhau sâu.
+   - `test_strip_accents`: Kiểm thử loại bỏ dấu tiếng Việt chuẩn Unicode NFD.
+   - `test_parse_address_string_fallback`: Kiểm thử bóc tách địa chỉ bằng heuristic regex.
+   - `test_parse_dom_from_html`: Kiểm thử bóc tách DOM HTML qua BeautifulSoup.
+   - `test_extract_place_data_blob`: Kiểm thử bóc tách trực tiếp từ mảng mock preview blob.
+   - `test_extract_place_data_dom_fallback`: Kiểm thử fallback tự động sang DOM khi thiếu JSON.
+   - `test_extract_place_data_field_filtering`: Kiểm thử lọc trường dữ liệu theo yêu cầu `fields`.
+   - `test_parse_json_data_xssi_variations`: Kiểm thử xử lý tiền tố XSSI `)]}'\r\n` và khoảng trắng bất thường.
+2. **[`tests/test_real_web_extraction.py`](file:///data/IMPORTANT/map_miner/tests/test_real_web_extraction.py) (6 tests)**:
+   - Sử dụng snapshot dữ liệu thực tế tại [`tests/fixtures/real_preview.txt`](file:///data/IMPORTANT/map_miner/tests/fixtures/real_preview.txt) và [`tests/fixtures/real_place.html`](file:///data/IMPORTANT/map_miner/tests/fixtures/real_place.html).
+   - `test_real_preview_json_parsing`: Kiểm thử parse cấu trúc XHR preview thực tế.
+   - `test_real_preview_json_full_extraction`: Xác thực trích xuất toàn bộ 27+ trường với dữ liệu thực của địa điểm (MỘC LAB, Hà Đông, Hà Nội).
+   - `test_real_html_extraction`: Xác thực trích xuất dữ liệu từ mã nguồn HTML thực tế.
+   - `test_real_data_fields_filtering`: Xác thực tính năng lọc trường và giữ đúng thứ tự khóa trên dữ liệu thực tế.
+   - `test_real_address_components_direct`: Xác thực khôi phục dấu tiếng Việt chuẩn xác cho `street`, `sublocality`, `district`, `city`.
+   - `test_output_schema_conformance`: Xác thực tính tuân thủ 100% schema Mục 4 về sự hiện diện và kiểu dữ liệu chuẩn (`str`, `float`, `int`, `list`, `dict`, `bool`).
+3. **[`tests/test_recaptcha.py`](file:///data/IMPORTANT/map_miner/tests/test_recaptcha.py) (2 tests)**:
+   - `test_recaptcha_solver_init`: Kiểm thử khởi tạo đối tượng solver và trạng thái debug.
+   - `test_recaptcha_solver_aliases`: Kiểm thử các bí danh tương thích ngược (`solveCaptcha`, `solveAudioCaptcha`, `isSolved`).
+4. **[`tests/test_scraper.py`](file:///data/IMPORTANT/map_miner/tests/test_scraper.py) (25 tests)**:
+   - `test_make_place_url`: Kiểm thử xây dựng URL tìm kiếm Google Maps định dạng tọa độ & ngôn ngữ.
+   - `test_consent_regex`: Kiểm thử nhận diện nút consent trên 6+ ngôn ngữ khác nhau.
+   - `test_blocked_resources_and_urls`: Kiểm thử danh mục tài nguyên bị chặn (images, fonts, tiles, analytics).
+   - `test_feed_selectors`: Kiểm thử danh sách selector thùng chứa kết quả tìm kiếm.
+   - `test_is_preview_response_for_link_exact_hex`: Kiểm thử so khớp Hex ID chống race condition.
+   - `test_is_preview_response_for_link_no_hex`: Kiểm thử fallback khi URL không chứa Hex ID.
+   - `test_is_preview_response_for_link_percent_encoding`: Kiểm thử xử lý mã hóa phần trăm hoa/thường (`%3a` và `%3A`).
+   - `test_preview_interceptor_validates_structure_not_magic_length`: Kiểm thử kiểm tra cấu trúc JSON thực tế thay vì độ dài chuỗi ký tự.
+   - `test_polars_schema_infer_length_none`: Kiểm thử ngăn ngừa lỗi schema Polars khi gặp cột chứa null ở 100 dòng đầu.
+   - `test_spa_processed_links_only_on_successful_click`: Kiểm thử cơ chế chỉ đánh dấu đã xử lý khi click thẻ địa điểm thành công.
+   - `test_spa_field_filtering_few_fields_without_name`: Kiểm thử không loại bỏ bản ghi khi người dùng chỉ yêu cầu một vài trường không có `name` (như `latitude`, `longitude`).
+   - `test_proxy_rotator_empty_and_none`: Kiểm thử khởi tạo `ProxyRotator` với cấu hình rỗng/None.
+   - `test_proxy_rotator_single_proxy`: Kiểm thử cấp phát proxy đơn lẻ (dict hoặc string URL gateway).
+   - `test_proxy_rotator_list_round_robin`: Kiểm thử xoay vòng proxy round-robin qua danh sách nhiều proxy.
+   - `test_proxy_rotator_with_bypass`: Kiểm thử khởi tạo và xoay vòng proxy có thuộc tính `bypass`, bảo toàn `DEFAULT_PROXY_BYPASS` và bypass tùy chỉnh.
+   - `test_create_browser_context_with_proxy`: Kiểm thử khởi tạo `BrowserContext` cô lập với cấu hình proxy, geolocation, stealth script và route handler.
+   - `test_create_browser_context_with_proxy_bypass`: Kiểm thử truyền chính xác thuộc tính `bypass` trong `ProxySettings` vào Playwright `browser.new_context`.
+   - `test_create_browser_context_without_proxy`: Kiểm thử khởi tạo `BrowserContext` khi không cấu hình proxy.
+   - `test_scrape_google_maps_context_isolation_and_rotation_spa`: Kiểm thử cô lập context và xoay proxy trên từng query ở chế độ SPA, Chromium launch không proxy, và đóng sạch context.
+   - `test_scrape_google_maps_context_isolation_fallback_mode`: Kiểm thử cô lập context và xoay proxy trên chế độ multi-page fallback.
+   - `test_scrape_google_maps_context_cleanup_on_error`: Kiểm thử bảo toàn nguyên tắc Zero Leaks khi tác vụ cào gặp ngoại lệ.
+   - `test_scrape_google_maps_with_cache_dir`: Kiểm thử gán đúng cờ `--disk-cache-dir` và `--disk-cache-size` khi truyền `cache_dir`, tự động tạo thư mục cache trên đĩa.
+   - `test_scrape_google_maps_without_cache_dir`: Kiểm thử không gán cờ disk cache khi `cache_dir=None`.
+   - `test_scrape_google_maps_default_cache_dir`: Kiểm thử gán cache mặc định `DEFAULT_CACHE_DIR` (`.cache/chromium_cache`) và kích hoạt cờ disk cache.
+   - `test_blocked_url_patterns_includes_telemetry`: Kiểm thử các mẫu URL lọc telemetry và photometa mới (`client_204`, `cspreport`, `/maps/photometa`).
 
 ---
 
 ## 6. Đánh Giá Hiện Trạng & Kế Hoạch Cải Tiến (Roadmap & Technical Debt)
 
-### Các điểm tối ưu hóa đã hoàn tất (Code Cleanup Done):
+### Các hạng mục kỹ thuật cốt lõi đã hoàn tất (Completed Milestones):
 
-1. **[ĐÃ HOÀN TẤT] Dọn dẹp mã dư thừa & Tách bạch kiến trúc (Architectural Separation)**:
-   - `scraper.py` thuần I/O và điều hướng mạng, không chứa code cào DOM; `extractor.py` là engine phân tích thuần túy (pure functions, zero side effects).
-   - Loại bỏ hoàn toàn chế độ `lean/rich`, thay thế bằng tham số `fields: list[str] | set[str] | None` cho phép người dùng tùy chọn bất kỳ trường nào cần lấy.
-2. **[ĐÃ HOÀN TẤT] Khai thác tối đa dữ liệu & Phân rã Địa chỉ (Address Components)**:
-   - Trích xuất 27 cột dữ liệu đầy đủ bao gồm các trường địa chỉ chi tiết (`street`, `sublocality`, `district`, `city`, `postal_code`, `country_code`) với thuật toán khôi phục dấu tiếng Việt chính xác.
-   - Xử lý mượt mà các biến thể dữ liệu lồng nhau trong `preview_blob` (tránh `TypeError` khi gặp mảng lồng).
-3. **[ĐÃ HOÀN TẤT] Gia cố độ ổn định tuyệt đối cho `scraper.py` (Stability Hardening)**:
-   - **Loại bỏ nguy cơ crash Chromium**: Gỡ bỏ cờ `--single-process` (nguyên nhân gây treo/segfault Chromium đa trang) và bật lại WebGL/Canvas (tránh bị Google Maps gắn cờ bot ngay từ khi tải trang).
-   - **Triệt tiêu hoàn toàn rò rỉ tài nguyên (Zero Page Leaks)**: Tất cả `search_page` và detail `page` đều được quản lý vòng đời chặt chẽ qua `try ... finally: await page.close()`.
-   - **Cơ chế Stealth sạch, tự nhiên**: Không phụ thuộc vào thư viện bên ngoài dễ lỗi runtime; tích hợp cờ `--disable-blink-features=AutomationControlled` kết hợp `context.add_init_script` chuẩn mực giúp ẩn hoàn toàn `navigator.webdriver`.
-   - **Chờ Adaptive & Tự động Retry**: Chờ bất đồng bộ thông minh theo sự kiện `preview_event` (tối đa 4.5s nhưng phản hồi ngay khi có dữ liệu ~0.8s - 1.2s), kèm cơ chế tự động thử lại (retry 2 lần) với jitter nhẹ khi mạng trễ.
-   - **Vượt Consent đa ngôn ngữ**: Nhận diện và tự động vượt banner chấp thuận cookie bằng regex cho nhiều ngôn ngữ (Anh, Việt, Đức, Pháp, Ý...).
-4. **[ĐÃ HOÀN TẤT] Tối ưu hóa lưu lượng mạng & Băng thông (Bandwidth & Traffic Minimization)**:
-   - **Chặn tài nguyên toàn cục (`context.route`)**: Áp dụng bộ lọc tài nguyên trên toàn bộ `ChromiumBrowserContext`, bao gồm cả trang tìm kiếm (`search_page`) khi cuộn feed và các trang chi tiết (`process_link`).
-   - **Mở rộng danh mục chặn**: Tự động chặn hình ảnh, media, font chữ, CSS, và đặc biệt là các gói gạch bản đồ vector/vệ tinh (`/maps/vt`, `khms`), tracking & telemetry (`google-analytics`, `play.google.com/log`, `/gen_204`) trong khi vẫn giữ nguyên các yêu cầu giải reCAPTCHA.
-   - **Bật cờ Chromium tiết kiệm băng thông**: `--blink-settings=imagesEnabled=false`, `--disable-remote-fonts`, `--mute-audio`, `--disable-background-networking`.
-   - **Cơ chế Early Exit khi nhận `preview_json`**: Trích xuất dữ liệu và đóng trang ngay khi nhận được XHR `/maps/preview/place`, triệt tiêu thời gian chờ đợi DOM và hủy các luồng tải dở dang.
-5. **[ĐÃ HOÀN TẤT] Kiến trúc điều hướng SPA (Single Page Application Navigation)**:
-   - **Tích hợp `scrape_query_spa`**: Điều hướng trực tiếp trên trang feed tìm kiếm bằng client-side click (`a.hfpxzc.evaluate('e => e.click()')`) thay vì mở hàng chục tab mới và tải lại toàn bộ ứng dụng web Google Maps.
-   - **Giảm 85% – 90% số lượng HTTP requests**: Mỗi địa điểm chỉ kích hoạt đúng 1 request XHR tới `/maps/preview/place`, triệt tiêu 15–20 requests tải script JS/HTML thừa thãi.
-   - **Tăng tốc độ thu thập**: Giảm thời gian bóc tách mỗi địa điểm xuống chỉ còn ~0.3s – 0.5s.
-   - **Tương thích ngược**: Bổ sung cờ `use_spa: bool = True` vào `scrape_google_maps` (mặc định kích hoạt SPA, vẫn giữ chế độ cào đa trang truyền thống làm phương án dự phòng).
-6. **[ĐÃ HOÀN TẤT] Tự động thu thập dữ liệu chẩn đoán CAPTCHA (Automatic CAPTCHA Diagnostic Capture)**:
-   - **Tích hợp `save_captcha_diagnostics`**: Khi phát hiện CAPTCHA (URL `sorry/index` hoặc cảnh báo traffic bất thường), hệ thống tự động khởi tạo một thư mục riêng biệt tại `debug/captchas/captcha_{timestamp}_{id}/`.
-   - **Trích xuất thông số kỹ thuật phục vụ giải CAPTCHA**: Tự động bóc tách `sitekey` (tham số `k=`), token bảo mật `data-s` (tham số `s=`), form inputs (`continue`, `q`), cookies phiên duyệt, User-Agent, địa chỉ IP bị chặn vào tệp `meta.json`.
-7. **[ĐÃ HOÀN TẤT] Bộ Kiểm Thử Tự Động Dựa Trên Dữ Liệu Web Thực Tế (Real Web Data Unit Tests)**:
-   - **Đóng gói Test Fixtures thực tế**: Lưu trữ snapshot dữ liệu thực từ Google Maps tại `tests/fixtures/real_preview.txt` (payload XHR `/maps/preview/place`) và `tests/fixtures/real_place.html` (`APP_INITIALIZATION_STATE` cùng cấu trúc DOM hoàn chỉnh).
-   - **Kiểm thử Schema & Kiểu dữ liệu theo Mục 4**: Xác thực toàn bộ 27+ thuộc tính dữ liệu (`name`, `place_id`, `latitude`, `longitude`, `plus_code`, `address`, `street`, `sublocality`, `district`, `city`, `postal_code`, `country_code`, `rating`, `reviews_count`, `price_level`, `categories`, `phone`, `website`, `open_status`, `opening_hours`, `timezone`, `amenities`, `photos_count`, `photos`, `thumbnail`, `is_claimed`).
-   - **Kiểm thử Khôi phục Dấu Tiếng Việt**: Đảm bảo các trường địa chỉ chi tiết (`street`, `sublocality`, `district`, `city`) giữ nguyên và phục hồi chính xác dấu tiếng Việt.
-   - **Kiểm thử Lọc Trường Tùy Biến (`fields`)**: Xác thực khả năng trích xuất đúng tập thuộc tính được chỉ định và giữ nguyên thứ tự mong muốn.
-   - **Kiểm thử Helpers & Solver**: Kiểm thử URL builder, regex vượt consent đa ngôn ngữ, selector feed, và các alias của `RecaptchaSolver`.
-   - **Chạy hoàn toàn Offline & Tốc độ cao**: 19 unit tests chạy độc lập không cần mạng trong ~0.4s, vượt qua 100% `ruff check` (0 lỗi) và `ruff format`.
+1. **[ĐÃ HOÀN TẤT] Đóng gói thư viện chuẩn Python Package (`0.1.1`)**:
+   - Tái cấu trúc mã nguồn vào thư mục chuẩn `src/map_miner/` với [`pyproject.toml`](file:///data/IMPORTANT/map_miner/pyproject.toml) xây dựng bằng `hatchling`.
+   - Đồng bộ exports sạch tại [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) (`__version__ = "0.1.1"`, `scrape_google_maps`, `extract_place_data`, `RecaptchaSolver`, `ProxyRotator`, `create_browser_context`, `DEFAULT_PROXY_BYPASS`).
+   - Đổi tên tệp chuẩn hóa `recaptcha_solver.py` (chứa class [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388)).
+2. **[ĐÃ HOÀN TẤT] Kiến trúc SPA Navigation Mode mặc định (`use_spa=True`)**:
+   - Triển khai [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L411-L605) duyệt và click trực tiếp trên feed, giảm **85% – 90%** số lượng HTTP requests thừa và tăng tốc thu thập dữ liệu lên ~0.3s – 0.5s/địa điểm.
+   - Duy trì chế độ Multi-page Fallback Mode (`use_spa=False`, `get_place_urls` -> `process_link`) làm giải pháp dự phòng linh hoạt.
+3. **[ĐÃ HOÀN TẤT] Chống Race Condition & Rò rỉ Dữ liệu Chéo**:
+   - Triển khai [`is_preview_response_for_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L281-L302) so khớp Hex ID `0x...:0x...`, triệt tiêu lỗi gán nhầm dữ liệu giữa các địa điểm khi mạng trễ.
+4. **[ĐÃ HOÀN TẤT] Tối ưu Băng thông Mạng & Chặn Tài Nguyên Toàn Cục**:
+   - [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L106-L133) chặn toàn bộ ảnh, fonts, media, map vector/satellite tiles (`/maps/vt`, `khms`), telemetry & tracking.
+   - Bật cờ Chromium tiết kiệm băng thông (`imagesEnabled=false`, `--disable-remote-fonts`, `--disable-background-networking`).
+5. **[ĐÃ HOÀN TẤT] Tách biệt Kiến trúc Tuyệt đối (Architectural Separation)**:
+   - [`scraper.py`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) thuần I/O & Playwright navigation; [`extractor.py`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) là pure functions zero side effects.
+   - Quản lý vòng đời trang nghiêm ngặt qua `try ... finally: await page.close()`, triệt tiêu hoàn toàn rò rỉ bộ nhớ (Zero Page Leaks).
+6. **[ĐÃ HOÀN TẤT] Khôi phục Dấu Tiếng Việt & Phân rã Địa chỉ Đa Tầng**:
+   - Thuật toán candidate matching đối soát NFD phục hồi trọn vẹn dấu tiếng Việt cho `street`, `sublocality`, `district`, `city`.
+   - Trích xuất đầy đủ 28 trường dữ liệu theo chuẩn Output Schema Mục 4.
+7. **[ĐÃ HOÀN TẤT] Tự động Thu thập Dữ liệu Chẩn đoán CAPTCHA**:
+   - Tích hợp [`save_captcha_diagnostics`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L70-L196) xuất ảnh screenshot, HTML nguồn, token `sitekey`, `data-s`, cookies, IP bị chặn vào thư mục `debug/captchas/`.
+8. **[ĐÃ HOÀN TẤT] Hệ thống Unit Tests Tự Động Độc Lập**:
+   - Đạt 100% pass với fixtures dữ liệu thực tế (`real_preview.txt`, `real_place.html`), kiểm thử offline hoàn toàn trong ~0.5s, 0 lỗi linter Ruff.
+9. **[ĐÃ HOÀN TẤT] Cơ Chế Xoay Proxy Thật Sự & Cô Lập Context (Proxy Rotation & Zero Leaks)**:
+   - Triển khai [`ProxyRotator`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L149-L190) hỗ trợ cấu hình proxy đơn lẻ (`ProxySettings`, string) hoặc danh sách đa proxy (`Sequence[ProxySettings]`) với cơ chế round-robin linh hoạt.
+   - Triển khai helper [`create_browser_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L192-L241) cô lập hoàn toàn `BrowserContext` cho từng truy vấn/luồng xử lý, tích hợp proxy độc lập, geolocation, stealth script và `global_route_handler`.
+   - Triệt tiêu socket/connection pooling và HTTP/2 multiplexing của Chromium, buộc các rotating proxy gateway (Decodo, Smartproxy, BrightData...) phải mở TCP tunnel mới và xoay IP thực sự.
+   - Bảo đảm nguyên tắc Zero Leaks: mọi context đều được dọn dẹp sạch sẽ trong khối `finally: await context.close()`.
+10. **[ĐÃ HOÀN TẤT] Tích Hợp Persistent Disk Cache & Mở Rộng Bộ Lọc Telemetry**:
+    - Gán cờ `--disk-cache-dir` và `--disk-cache-size=1GB` cho Chromium instance, chia sẻ cache tĩnh giữa các `BrowserContext` khi xoay proxy, tiết kiệm ~94.5% dung lượng truyền tải mạng (từ ~3.13 MB xuống còn 0.17 MB).
+    - Tự động tạo thư mục cache và hỗ trợ tùy biến hoặc tắt qua `cache_dir=None`.
+    - Mở rộng `BLOCKED_URL_PATTERNS` chặn các request telemetry và log dư thừa (`client_204`, `cspreport`, `/maps/photometa`).
+11. **[ĐÃ HOÀN TẤT] Định Tuyến Direct Cho Static Assets (Proxy Bypass)**:
+    - Khai báo hằng số tiện ích `DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com"`, export trực tiếp tại root package `map_miner`.
+    - Chuẩn hóa `_normalize_proxy` và `ProxyRotator` bảo toàn trường `bypass` trong Playwright `ProxySettings`.
+    - Tích hợp bypass vào cấu hình proxy mẫu trong `main.py`.
+    - Tiết kiệm lưu lượng và chi phí proxy dân cư, đồng thời tăng tốc độ tải trang do các static assets được tải trực tiếp từ CDN Google với độ trễ tối thiểu.
+    - Bổ sung 2 unit tests chuyên biệt (`test_proxy_rotator_with_bypass`, `test_create_browser_context_with_proxy_bypass`), nâng tổng số unit tests lên 41 tests, đạt 100% pass.
 
-### Kế hoạch phát triển tính năng (Feature Roadmap):
+---
 
-- [ ] **Proxy Manager**: Tích hợp module tự động xoay vòng proxy pool (HTTP/SOCKS5) với tính năng đo lường độ trễ và tự động loại bỏ proxy hỏng.
-- [ ] **Data Exporter**: Bổ sung hàm xuất linh hoạt ra CSV, JSON Lines, Parquet hoặc nạp trực tiếp vào cơ sở dữ liệu (PostgreSQL, MongoDB).
-- [ ] **Search Grid Tiling**: Chia nhỏ khu vực địa lý lớn thành lưới tọa độ (Bounding Box Grid) để cào quét toàn bộ địa điểm của một thành phố/khu vực mà không bị giới hạn 120 địa điểm từ Google Search.
-- [ ] **CLI Interface**: Xây dựng giao diện dòng lệnh (CLI) với `typer` hoặc `argparse` cho phép tùy biến tham số tìm kiếm mà không cần sửa `main.py`.
+### Kế hoạch phát triển tính năng tương lai (Feature Roadmap):
+
+- [ ] **Data Exporter CLI & Database Loaders**: Mở rộng các hàm xuất dữ liệu đa dạng sang Parquet, JSON Lines, SQLite, hoặc nạp trực tiếp vào cơ sở dữ liệu (PostgreSQL, MongoDB).
+- [ ] **Search Grid Tiling**: Thuật toán chia nhỏ khu vực địa lý lớn thành lưới ô bàn cờ (Bounding Box Grid Tiling) để quét toàn diện hàng nghìn địa điểm trong một thành phố mà không bị giới hạn 120 kết quả từ Google Maps Search.
+- [ ] **CLI Interface**: Cung cấp giao diện dòng lệnh chuyên nghiệp (dựa trên `typer` hoặc `argparse`) cho phép tùy biến từ khóa, tọa độ, số lượng và bộ lọc mà không cần chỉnh sửa trực tiếp vào mã nguồn `main.py`.

@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Cache directory
+.cache/
+
 # Debug and temporary files
 debug/
 logs/
