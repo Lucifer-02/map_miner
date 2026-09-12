@@ -1,13 +1,12 @@
 import asyncio
 import itertools
 import logging
-import os
 import random
 import re
 import time
-import traceback
+from collections.abc import Sequence
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, unquote
 
 import polars as pl
 from geopy.point import Point
@@ -15,16 +14,20 @@ from playwright.async_api import (
     ChromiumBrowserContext,
     Page,
     ProxySettings,
+    Route,
     async_playwright,
+)
+from playwright.async_api import (
+    Error as PlaywrightError,
 )
 from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
-from .extractor import extract_place_data
+from .extractor import extract_place_data, parse_preview_json
 from .recaptcha_solver import RecaptchaSolver
 
-logger = logging.getLogger("root.scraper")
+logger = logging.getLogger(__name__)
 
 # --- Constants ---
 DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
@@ -55,7 +58,6 @@ LAUNCH_ARGS = [
 ]
 
 # Resource types to abort across all pages (Search and Detail)
-# Note: 'stylesheet' is preserved so Google Maps can compute layout and infinite scroll correctly
 BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
 
 # URL substrings to abort (Map vector/satellite tiles, tracking, telemetry, photo CDN)
@@ -75,8 +77,26 @@ BLOCKED_URL_PATTERNS = [
     "streetviewpixels",
 ]
 
+CONSENT_BUTTON_REGEX = re.compile(
+    r"(?i)(?:reject all|từ chối tất cả|alle ablehnen|tout refuser|rechazar todo|"
+    r"rifiuta tutto|accept all|chấp nhận tất cả|alle akzeptieren|tout accepter|i agree|tôi đồng ý)"
+)
 
-async def global_route_handler(route):
+FEED_FALLBACK_SELECTORS = [
+    '[role="feed"]',
+    'div[aria-label*="Results for"]',
+    'div[aria-label*="Kết quả cho"]',
+    'div[role="main"] div[tabindex="-1"]',
+]
+
+END_OF_FEED_XPATHS = [
+    '//span[contains(text(), "reached the end of the list")]',
+    '//span[contains(text(), "hết danh sách")]',
+    '//div[contains(text(), "reached the end")]',
+]
+
+
+async def global_route_handler(route: Route) -> None:
     """
     Context-wide route handler to block heavy resources and tracking,
     saving significant network bandwidth while preserving reCAPTCHA and core APIs.
@@ -90,21 +110,18 @@ async def global_route_handler(route):
             await route.continue_()
             return
 
-        # Block by resource type (images, media, fonts, stylesheets)
-        if req.resource_type in BLOCKED_RESOURCE_TYPES:
-            await route.abort()
-            return
-
-        # Block by URL pattern (Map vector tiles, tracking, telemetry, photo CDN)
-        if any(pattern in url for pattern in BLOCKED_URL_PATTERNS):
+        # Block by resource type or URL pattern
+        if req.resource_type in BLOCKED_RESOURCE_TYPES or any(
+            pattern in url for pattern in BLOCKED_URL_PATTERNS
+        ):
             await route.abort()
             return
 
         await route.continue_()
-    except Exception:
+    except PlaywrightError:
         try:
             await route.continue_()
-        except Exception:
+        except PlaywrightError:
             pass
 
 
@@ -113,39 +130,27 @@ def make_place_url(
 ) -> str:
     """Builds a localized Google Maps search URL."""
     encoded_query = quote_plus(query)
-    return f"https://www.google.com/maps/search/{encoded_query}/@{geo_coordinates.latitude},{geo_coordinates.longitude},{zoom}z?hl={lang}"
+    return (
+        f"https://www.google.com/maps/search/{encoded_query}/"
+        f"@{geo_coordinates.latitude},{geo_coordinates.longitude},{zoom}z?hl={lang}"
+    )
 
 
 async def pass_consent(page: Page) -> bool:
     """
-    Attempts to bypass or dismiss Google's cookie/privacy consent banner
-    across multiple languages safely without crashing.
+    Attempts to dismiss Google's cookie/privacy consent banner
+    across multiple languages safely.
     """
     logger.debug("Checking for consent dialog...")
-    consent_patterns = [
-        r"(?i)reject all",
-        r"(?i)từ chối tất cả",
-        r"(?i)alle ablehnen",
-        r"(?i)tout refuser",
-        r"(?i)rechazar todo",
-        r"(?i)rifiuta tutto",
-        r"(?i)accept all",
-        r"(?i)chấp nhận tất cả",
-        r"(?i)alle akzeptieren",
-        r"(?i)tout accepter",
-        r"(?i)i agree",
-        r"(?i)tôi đồng ý",
-    ]
-    for pattern in consent_patterns:
-        try:
-            button = page.get_by_role("button", name=re.compile(pattern))
-            if await button.count() > 0 and await button.first.is_visible():
-                await button.first.click()
-                await asyncio.sleep(1.0)
-                logger.debug(f"Consent dismissed with button matching: {pattern}")
-                return True
-        except Exception:
-            continue
+    try:
+        button = page.get_by_role("button", name=CONSENT_BUTTON_REGEX)
+        if await button.count() > 0 and await button.first.is_visible():
+            await button.first.click()
+            await asyncio.sleep(1.0)
+            logger.debug("Consent dismissed via button.")
+            return True
+    except PlaywrightError as e:
+        logger.debug("Consent button check error: %s", e)
 
     # Fallback to standard Google consent forms
     try:
@@ -157,10 +162,144 @@ async def pass_consent(page: Page) -> bool:
                 await asyncio.sleep(1.0)
                 logger.debug("Consent dismissed via form button.")
                 return True
-    except Exception:
-        pass
+    except PlaywrightError as e:
+        logger.debug("Consent form check error: %s", e)
 
     return False
+
+
+async def handle_captcha_if_present(page: Page, context_label: str = "") -> bool:
+    """Detects and attempts to solve reCAPTCHA if encountered."""
+    is_captcha = "sorry/index" in page.url
+    if not is_captcha:
+        try:
+            loc = page.locator('text="Our systems have detected unusual traffic"')
+            if asyncio.iscoroutine(loc):
+                loc = await loc
+            is_captcha = (await loc.count()) > 0
+        except PlaywrightError:
+            pass
+
+    if is_captcha:
+        tag = f" ({context_label})" if context_label else ""
+        logger.warning("🚨 CAPTCHA detected%s!", tag)
+        solver = RecaptchaSolver(page)
+        try:
+            return await solver.solve_captcha()
+        except (PlaywrightError, RuntimeError, OSError) as e:
+            logger.error("Failed to solve CAPTCHA: %s", e)
+            return False
+
+    return False
+
+
+async def find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
+    """Locates the results feed container selector on a Google Maps search page."""
+    try:
+        await page.wait_for_selector('[role="feed"]', state="visible", timeout=timeout)
+        return '[role="feed"]'
+    except PlaywrightTimeoutError:
+        for selector in FEED_FALLBACK_SELECTORS[1:]:
+            if await page.locator(selector).count() > 0:
+                return selector
+    return None
+
+
+async def scroll_feed(page: Page, feed_selector: str) -> None:
+    """Scrolls down the search results feed container."""
+    try:
+        feed_locator = page.locator(feed_selector)
+        await feed_locator.hover()
+        await page.mouse.wheel(0, 5000)
+    except PlaywrightError as e:
+        logger.debug("Wheel scroll error: %s", e)
+
+    try:
+        await page.evaluate(
+            """(sel) => {
+                const el = document.querySelector(sel);
+                if (el) el.scrollTop = el.scrollHeight;
+            }""",
+            feed_selector,
+        )
+    except PlaywrightError as e:
+        logger.debug("Scroll evaluation error: %s", e)
+
+    await asyncio.sleep(random.uniform(1.0, 1.6))
+
+
+async def is_feed_at_end(page: Page) -> bool:
+    """Checks if any multi-lingual end of results list marker is visible."""
+    for xpath in END_OF_FEED_XPATHS:
+        try:
+            loc = page.locator(xpath)
+            if asyncio.iscoroutine(loc):
+                loc = await loc
+            if await loc.count() > 0 and await loc.first.is_visible():
+                return True
+        except PlaywrightError:
+            continue
+    return False
+
+
+class PreviewInterceptor:
+    """
+    Listens for /maps/preview/place XHR responses on a Page,
+    capturing the rich place detail payload.
+    """
+
+    def __init__(self, page: Page) -> None:
+        self.preview_json: str | None = None
+        self.preview_event = asyncio.Event()
+        self._page = page
+        page.on("response", self._handle_response)
+
+    async def _handle_response(self, response: Any) -> None:
+        if "maps/preview/place" in response.url:
+            try:
+                text = await response.text()
+                if text and parse_preview_json(text) is not None:
+                    self.preview_json = text
+                    self.preview_event.set()
+            except PlaywrightError:
+                pass
+
+    def reset(self) -> None:
+        """Clears the captured payload and resets the wait event."""
+        self.preview_json = None
+        self.preview_event.clear()
+
+    async def wait_for_preview(self, timeout: float = 3.5) -> str | None:
+        """Waits up to timeout seconds for a rich preview payload."""
+        try:
+            await asyncio.wait_for(self.preview_event.wait(), timeout=timeout)
+            return self.preview_json
+        except TimeoutError:
+            return None
+
+
+def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
+    """
+    Validates whether an intercepted HTTP response corresponds to the place preview
+    for a specific canonical link, avoiding race conditions and cross-place data leakage.
+    """
+    raw_url = getattr(response, "url", "")
+    status = getattr(response, "status", 0)
+    ok = getattr(response, "ok", status == 200)
+
+    if "maps/preview/place" not in raw_url or (status != 200 and not ok):
+        return False
+
+    decoded_canonical = unquote(canonical_link)
+    decoded_url = unquote(raw_url).lower()
+
+    hex_match = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", decoded_canonical)
+    if hex_match:
+        place_hex_id = hex_match.group(0).lower()
+        if place_hex_id not in decoded_url:
+            return False
+
+    return True
 
 
 async def get_place_urls(
@@ -173,7 +312,7 @@ async def get_place_urls(
 ) -> set[str]:
     """
     Navigates the search feed and scrolls to collect place links.
-    Ensures safe resource cleanup and resilient selector handling.
+    Used in multi-page fallback mode.
     """
     search_page = await context.new_page()
     if not search_page:
@@ -185,7 +324,7 @@ async def get_place_urls(
         search_url = make_place_url(
             query=query, geo_coordinates=geo_coordinates, zoom=zoom, lang=lang
         )
-        logger.info(f"Navigating to search URL: {search_url}")
+        logger.info("Navigating to search URL: %s", search_url)
 
         await search_page.goto(
             search_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT
@@ -193,23 +332,9 @@ async def get_place_urls(
         await asyncio.sleep(random.uniform(1.0, 2.5))
 
         if "consent" in search_page.url:
-            logger.debug("Consent page detected, attempting bypass...")
             await pass_consent(search_page)
 
-        # CAPTCHA check
-        if (
-            "sorry/index" in search_page.url
-            or await search_page.locator(
-                'text="Our systems have detected unusual traffic"'
-            ).count()
-            > 0
-        ):
-            logger.warning("🚨 CAPTCHA detected on search page!")
-            recaptcha_solver = RecaptchaSolver(search_page)
-            await recaptcha_solver.save_captcha_diagnostics(
-                reason="get_place_urls_captcha"
-            )
-            await recaptcha_solver.solveCaptcha()
+        await handle_captcha_if_present(search_page, context_label="search_page")
 
         # Check if single result redirect happened
         if "/maps/place/" in search_page.url:
@@ -217,80 +342,42 @@ async def get_place_urls(
             place_links.add(search_page.url)
             return place_links
 
-        feed_selector = '[role="feed"]'
-        active_feed_selector = None
-        try:
-            await search_page.wait_for_selector(
-                feed_selector, state="visible", timeout=15000
-            )
-            active_feed_selector = feed_selector
-        except PlaywrightTimeoutError:
-            for fallback in [
-                'div[aria-label*="Results for"]',
-                'div[aria-label*="Kết quả cho"]',
-                'div[role="main"] div[tabindex="-1"]',
-            ]:
-                if await search_page.locator(fallback).count() > 0:
-                    active_feed_selector = fallback
-                    break
-
+        active_feed_selector = await find_feed_selector(search_page)
         if not active_feed_selector:
-            # Check once more for single place page
             if "/maps/place/" in search_page.url:
                 place_links.add(search_page.url)
                 return place_links
             logger.error("Could not find results feed selector on search page.")
             return place_links
 
-        feed_locator = search_page.locator(active_feed_selector)
         last_height = await search_page.evaluate(
-            f"document.querySelector('{active_feed_selector}').scrollHeight"
+            "(sel) => document.querySelector(sel)?.scrollHeight || 0",
+            active_feed_selector,
         )
         scroll_attempts_no_new = 0
 
         while True:
-            # Scroll feed down using mouse wheel and container scroll
-            try:
-                await feed_locator.hover()
-                await search_page.mouse.wheel(0, 5000)
-            except Exception:
-                pass
-            await search_page.evaluate(
-                f"const el = document.querySelector('{active_feed_selector}'); if (el) el.scrollTop = el.scrollHeight;"
-            )
-            await asyncio.sleep(random.uniform(1.0, 1.6))
+            await scroll_feed(search_page, active_feed_selector)
 
-            # Extract place links from feed
             current_links_list = await search_page.locator(
                 f'{active_feed_selector} a[href*="/maps/place/"]'
             ).evaluate_all("elements => elements.map(a => a.href)")
             current_links = set(current_links_list)
             new_links = current_links - place_links
             place_links.update(current_links)
-            logger.debug(f"Found {len(place_links)} unique place links so far...")
+            logger.debug("Found %d unique place links so far...", len(place_links))
 
             if max_places is not None and len(place_links) >= max_places:
-                logger.debug(f"Reached max_places limit ({max_places}).")
+                logger.debug("Reached max_places limit (%d).", max_places)
                 place_links = set(itertools.islice(place_links, max_places))
                 break
 
             new_height = await search_page.evaluate(
-                f"document.querySelector('{active_feed_selector}').scrollHeight"
+                "(sel) => document.querySelector(sel)?.scrollHeight || 0",
+                active_feed_selector,
             )
 
-            # Check for end of list markers (multi-lingual)
-            end_markers = [
-                '//span[contains(text(), "reached the end of the list")]',
-                '//span[contains(text(), "hết danh sách")]',
-                '//div[contains(text(), "reached the end")]',
-            ]
-            is_at_end = False
-            for marker in end_markers:
-                loc = search_page.locator(marker)
-                if await loc.count() > 0 and await loc.first.is_visible():
-                    is_at_end = True
-                    break
-
+            is_at_end = await is_feed_at_end(search_page)
             if is_at_end and not new_links:
                 logger.debug("Reached end of results list marker and no new links.")
                 break
@@ -298,24 +385,24 @@ async def get_place_urls(
             if new_height == last_height and not new_links:
                 scroll_attempts_no_new += 1
                 logger.debug(
-                    f"Scroll height unchanged and no new links. Attempt {scroll_attempts_no_new}/{MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS}"
+                    "Scroll height unchanged (%d/%d).",
+                    scroll_attempts_no_new,
+                    MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS,
                 )
-                # Adaptive pause when no new items appear
                 await asyncio.sleep(1.5)
                 if scroll_attempts_no_new >= MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS:
-                    logger.debug("Stopping scroll due to lack of new links.")
                     break
             else:
                 last_height = new_height
                 scroll_attempts_no_new = 0
 
-    except Exception as e:
-        logger.error(f"Error during get_place_urls: {e}")
+    except PlaywrightError as e:
+        logger.error("Playwright error during get_place_urls: %s", e)
     finally:
         if search_page and not search_page.is_closed():
             try:
                 await search_page.close()
-            except Exception:
+            except PlaywrightError:
                 pass
 
     return place_links
@@ -328,14 +415,14 @@ async def scrape_query_spa(
     zoom: float,
     max_places: int = 120,
     lang: str = "en",
-    fields: list[str] | set[str] | None = None,
+    fields: Sequence[str] | set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Scrapes Google Maps places using client-side SPA (Single Page Application) navigation:
+    Scrapes Google Maps places using client-side SPA navigation:
     - Navigates once to the search feed URL.
     - Clicks each place card in the feed client-side without full page reloads.
-    - Intercepts /maps/preview/place XHR payloads (saving ~90% requests and bandwidth).
-    - Dynamically scrolls the feed when all visible cards have been processed.
+    - Intercepts /maps/preview/place XHR payloads (~90% request savings).
+    - Dynamically scrolls the feed as items are consumed.
     """
     search_page = await context.new_page()
     if not search_page:
@@ -348,7 +435,7 @@ async def scrape_query_spa(
         search_url = make_place_url(
             query=query, geo_coordinates=geo_coordinates, zoom=zoom, lang=lang
         )
-        logger.info(f"Navigating to search URL (SPA mode): {search_url}")
+        logger.info("Navigating to search URL (SPA mode): %s", search_url)
 
         await search_page.goto(
             search_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT
@@ -356,23 +443,9 @@ async def scrape_query_spa(
         await asyncio.sleep(random.uniform(1.0, 2.0))
 
         if "consent" in search_page.url:
-            logger.debug("Consent page detected, attempting bypass...")
             await pass_consent(search_page)
 
-        # CAPTCHA check
-        if (
-            "sorry/index" in search_page.url
-            or await search_page.locator(
-                'text="Our systems have detected unusual traffic"'
-            ).count()
-            > 0
-        ):
-            logger.warning("🚨 CAPTCHA detected on search page (SPA)!")
-            recaptcha_solver = RecaptchaSolver(search_page)
-            await recaptcha_solver.save_captcha_diagnostics(
-                reason="search_page_spa_captcha"
-            )
-            await recaptcha_solver.solveCaptcha()
+        await handle_captcha_if_present(search_page, context_label="spa_search")
 
         # Check if single result redirect happened
         if "/maps/place/" in search_page.url:
@@ -385,51 +458,18 @@ async def scrape_query_spa(
                 results.append(place_data)
             return results
 
-        feed_selector = '[role="feed"]'
-        active_feed_selector = None
-        try:
-            await search_page.wait_for_selector(
-                feed_selector, state="visible", timeout=15000
-            )
-            active_feed_selector = feed_selector
-        except PlaywrightTimeoutError:
-            for fallback in [
-                'div[aria-label*="Results for"]',
-                'div[aria-label*="Kết quả cho"]',
-                'div[role="main"] div[tabindex="-1"]',
-            ]:
-                if await search_page.locator(fallback).count() > 0:
-                    active_feed_selector = fallback
-                    break
-
+        active_feed_selector = await find_feed_selector(search_page)
         if not active_feed_selector:
             logger.error("Could not find results feed selector on search page.")
             return results
 
-        # Intercept rich preview responses on search_page
-        preview_json: str | None = None
-        preview_event = asyncio.Event()
-
-        async def handle_response(response):
-            nonlocal preview_json
-            if "maps/preview/place" in response.url:
-                try:
-                    text = await response.text()
-                    if text and len(text) > 1500 and ")]}'" in text:
-                        preview_json = text
-                        preview_event.set()
-                except Exception:
-                    pass
-
-        search_page.on("response", handle_response)
-
         scroll_attempts_no_new = 0
         last_height = await search_page.evaluate(
-            f"document.querySelector('{active_feed_selector}').scrollHeight"
+            "(sel) => document.querySelector(sel)?.scrollHeight || 0",
+            active_feed_selector,
         )
 
         while max_places is None or len(results) < max_places:
-            # Locate all place links currently rendered in the feed
             link_elements = await search_page.locator(
                 f'{active_feed_selector} a[href*="/maps/place/"]'
             ).all()
@@ -448,76 +488,81 @@ async def scrape_query_spa(
                 if canonical_link in processed_links:
                     continue
 
-                processed_links.add(canonical_link)
-                found_new_in_batch = True
+                def is_matching_preview(
+                    resp: Any, target: str = canonical_link
+                ) -> bool:
+                    return is_preview_response_for_link(resp, target)
 
-                # Clear preview event and trigger client-side click
-                preview_json = None
-                preview_event.clear()
+                click_succeeded = False
+                preview_json: str | None = None
 
                 try:
-                    await el.evaluate("e => e.click()")
-                except Exception:
-                    try:
-                        await el.scroll_into_view_if_needed(timeout=1000)
-                        await el.click(force=True, timeout=1000)
-                    except Exception:
-                        continue
+                    async with search_page.expect_response(
+                        is_matching_preview,
+                        timeout=5000,
+                    ) as response_info:
+                        try:
+                            await el.evaluate("e => e.click()")
+                            click_succeeded = True
+                        except PlaywrightError:
+                            await el.scroll_into_view_if_needed(timeout=1000)
+                            await el.click(force=True, timeout=1000)
+                            click_succeeded = True
 
-                # Adaptive wait for preview XHR response (typical 0.2s - 0.8s, max 3.5s)
-                try:
-                    await asyncio.wait_for(preview_event.wait(), timeout=3.5)
-                except TimeoutError:
+                    response = await response_info.value
+                    preview_json = await response.text()
+                except (PlaywrightTimeoutError, PlaywrightError) as e:
+                    if click_succeeded:
+                        # Click succeeded but preview timed out; mark to avoid repeated attempts
+                        processed_links.add(canonical_link)
                     logger.warning(
-                        f"  ⚠️ Timeout waiting for SPA preview: {canonical_link}"
+                        "  ⚠️ Error or timeout waiting for SPA preview: %s (%s)",
+                        canonical_link,
+                        e,
                     )
                     continue
 
-                if preview_json:
-                    place_data = extract_place_data(
-                        html_content=None,
-                        preview_json=preview_json,
-                        fields=fields,
-                    )
-                    if place_data and ("name" in place_data or len(place_data) >= 3):
-                        if fields is None or "link" in fields:
-                            place_data["link"] = link
-                        results.append(place_data)
-                        logger.info(
-                            f"  ✅ [SPA {len(results)}/{max_places}] Extracted: {place_data.get('name', canonical_link)}"
-                        )
+                # Add to processed_links only after click succeeded
+                processed_links.add(canonical_link)
+                found_new_in_batch = True
 
-                # Brief pause between clicks
+                preview_blob = (
+                    parse_preview_json(preview_json) if preview_json else None
+                )
+                if not preview_blob:
+                    logger.warning(
+                        "  ⚠️ Invalid preview JSON structure for: %s",
+                        canonical_link,
+                    )
+                    continue
+
+                place_data = extract_place_data(
+                    html_content=None,
+                    preview_blob=preview_blob,
+                    preview_json=preview_json,
+                    fields=fields,
+                )
+                if place_data and (
+                    fields is not None or "name" in place_data or len(place_data) >= 3
+                ):
+                    if fields is None or "link" in fields:
+                        place_data["link"] = link
+                    results.append(place_data)
+                    logger.info(
+                        "  ✅ [SPA %d/%s] Extracted: %s",
+                        len(results),
+                        str(max_places),
+                        place_data.get("name", canonical_link),
+                    )
+
                 await asyncio.sleep(random.uniform(0.15, 0.35))
 
             if max_places is not None and len(results) >= max_places:
                 break
 
-            # Scroll feed down to load more items
-            feed_locator = search_page.locator(active_feed_selector)
-            try:
-                await feed_locator.hover()
-                await search_page.mouse.wheel(0, 5000)
-            except Exception:
-                pass
-            await search_page.evaluate(
-                f"const el = document.querySelector('{active_feed_selector}'); if (el) el.scrollTop = el.scrollHeight;"
-            )
-            await asyncio.sleep(random.uniform(1.0, 1.6))
+            await scroll_feed(search_page, active_feed_selector)
 
-            # Check for end of list markers (multi-lingual)
-            end_markers = [
-                '//span[contains(text(), "reached the end of the list")]',
-                '//span[contains(text(), "hết danh sách")]',
-                '//div[contains(text(), "reached the end")]',
-            ]
-            is_at_end = False
-            for marker in end_markers:
-                loc = search_page.locator(marker)
-                if await loc.count() > 0 and await loc.first.is_visible():
-                    is_at_end = True
-                    break
-
+            is_at_end = await is_feed_at_end(search_page)
             remaining_links = await search_page.locator(
                 f'{active_feed_selector} a[href*="/maps/place/"]'
             ).evaluate_all("els => els.map(a => a.href.split('?')[0])")
@@ -530,7 +575,8 @@ async def scrape_query_spa(
                 break
 
             new_height = await search_page.evaluate(
-                f"document.querySelector('{active_feed_selector}').scrollHeight"
+                "(sel) => document.querySelector(sel)?.scrollHeight || 0",
+                active_feed_selector,
             )
 
             if (
@@ -547,14 +593,13 @@ async def scrape_query_spa(
                 last_height = new_height
                 scroll_attempts_no_new = 0
 
-    except Exception as e:
-        logger.error(f"Error during scrape_query_spa: {e}")
-        traceback.print_exc()
+    except PlaywrightError as e:
+        logger.error("Playwright error during scrape_query_spa: %s", e)
     finally:
         if search_page and not search_page.is_closed():
             try:
                 await search_page.close()
-            except Exception:
+            except PlaywrightError:
                 pass
 
     return results
@@ -566,11 +611,11 @@ async def process_link(
     semaphore: asyncio.Semaphore,
     count: int,
     total: int,
-    fields: list[str] | set[str] | None = None,
+    fields: Sequence[str] | set[str] | None = None,
     max_retries: int = 2,
 ) -> dict[str, Any] | None:
     """
-    Processes a single place link to extract data:
+    Processes a single place link in multi-page fallback mode:
     - Pure I/O: intercepts rich network payload or collects HTML content
     - Pure extraction: delegates parsing to extractor.py
     - Includes automatic retry and resilient page lifecycle cleanup
@@ -581,27 +626,15 @@ async def process_link(
             page: Page | None = None
             try:
                 logger.info(
-                    f"Processing link [{count}/{total}] (attempt {attempt}/{max_retries}): {link}"
+                    "Processing link [%d/%d] (attempt %d/%d): %s",
+                    count,
+                    total,
+                    attempt,
+                    max_retries,
+                    link,
                 )
                 page = await context.new_page()
-
-                # Intercept Google Maps rich place preview API response
-                preview_json: str | None = None
-                preview_event = asyncio.Event()
-
-                async def handle_response(response):
-                    nonlocal preview_json
-                    if "maps/preview/place" in response.url:
-                        try:
-                            text = await response.text()
-                            # Rich place detail payload is large and begins with Google's XSSI prefix
-                            if text and len(text) > 1500 and ")]}'" in text:
-                                preview_json = text
-                                preview_event.set()
-                        except Exception:
-                            pass
-
-                page.on("response", handle_response)
+                interceptor = PreviewInterceptor(page)
 
                 await page.set_extra_http_headers(
                     {
@@ -612,32 +645,32 @@ async def process_link(
 
                 try:
                     await page.goto(
-                        link, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT
+                        link,
+                        wait_until="domcontentloaded",
+                        timeout=DEFAULT_TIMEOUT,
                     )
                 except PlaywrightTimeoutError:
-                    logger.warning(f"  ❌ Timeout navigating to: {link}")
+                    logger.warning("  ❌ Timeout navigating to: %s", link)
                     if attempt < max_retries:
                         await asyncio.sleep(random.uniform(0.8, 1.5))
                         continue
                     return None
-                except Exception as e:
-                    logger.error(f"  ❌ Navigation error for {link}: {e}")
+                except PlaywrightError as e:
+                    logger.error("  ❌ Navigation error for %s: %s", link, e)
                     if attempt < max_retries:
                         await asyncio.sleep(random.uniform(0.8, 1.5))
                         continue
                     return None
 
-                # Adaptive wait for preview API response (usually arrives within 0.3s - 1.5s, max wait 4.5s)
-                try:
-                    await asyncio.wait_for(preview_event.wait(), timeout=4.5)
-                except TimeoutError:
-                    # Fallback wait for main title element if preview API is delayed
+                # Wait for preview API response
+                preview_json = await interceptor.wait_for_preview(timeout=4.5)
+                if not preview_json:
                     try:
                         await page.wait_for_selector("h1, [role='main']", timeout=2000)
-                    except Exception:
+                    except PlaywrightError:
                         pass
 
-                # Early exit: if rich preview JSON was intercepted, extract immediately without waiting for DOM
+                # Early exit if rich preview JSON was intercepted
                 if preview_json:
                     place_data = extract_place_data(
                         html_content=None,
@@ -645,57 +678,33 @@ async def process_link(
                         fields=fields,
                     )
                     if place_data is not None and (
-                        "name" in place_data or len(place_data) >= 3
+                        fields is not None
+                        or "name" in place_data
+                        or len(place_data) >= 3
                     ):
                         if fields is None or "link" in fields:
                             place_data["link"] = link
                         elapsed = time.time() - start_time
                         logger.info(
-                            f"  ✅ Extracted (early preview): {link} in {elapsed:.2f}s"
+                            "  ✅ Extracted (early preview): %s in %.2fs",
+                            link,
+                            elapsed,
                         )
                         return place_data
 
-                # Anti-bot human jitter: slight random scroll & mouse move (fallback path)
-                try:
-                    await page.mouse.move(
-                        random.randint(100, 400), random.randint(100, 400)
-                    )
-                    await page.mouse.wheel(0, random.randint(150, 400))
-                except Exception:
-                    pass
-
                 # CAPTCHA verification
-                current_url = page.url
-                if "sorry/index" in current_url:
-                    logger.warning("  🚨 CAPTCHA detected (URL)!")
-                    solver = RecaptchaSolver(page)
-                    await solver.save_captcha_diagnostics(
-                        reason="process_link_sorry_url"
-                    )
-                    if attempt < max_retries:
-                        await asyncio.sleep(random.uniform(1.0, 2.0))
-                        continue
-                    return None
+                captcha_solved = await handle_captcha_if_present(
+                    page, context_label="process_link"
+                )
+                if (
+                    not captcha_solved
+                    and "sorry/index" in page.url
+                    and attempt < max_retries
+                ):
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                    continue
 
-                try:
-                    body_text = await page.inner_text("body", timeout=1500)
-                    if "Our systems have detected unusual traffic" in body_text:
-                        logger.warning("  🚨 CAPTCHA detected (Text check)!")
-                        solver = RecaptchaSolver(page)
-                        await solver.save_captcha_diagnostics(
-                            reason="process_link_unusual_traffic_text"
-                        )
-                        if attempt < max_retries:
-                            await asyncio.sleep(random.uniform(1.0, 2.0))
-                            continue
-                        return None
-                except Exception:
-                    pass
-
-                # Retrieve raw HTML for DOM fallback parsing
                 html_content = await page.content()
-
-                # Delegate pure extraction to extractor.py (no side-effects)
                 place_data = extract_place_data(
                     html_content=html_content,
                     preview_json=preview_json,
@@ -706,28 +715,22 @@ async def process_link(
                     if fields is None or "link" in fields:
                         place_data["link"] = link
                     elapsed = time.time() - start_time
-                    logger.info(f"  ✅ Extracted: {link} in {elapsed:.2f}s")
+                    logger.info("  ✅ Extracted: %s in %.2fs", link, elapsed)
                     return place_data
-                else:
-                    logger.warning(f"  ⚠️ Extraction returned None: {link}")
-                    if attempt < max_retries:
-                        await asyncio.sleep(random.uniform(0.8, 1.5))
-                        continue
-                    else:
-                        os.makedirs("debug", exist_ok=True)
-                        await page.screenshot(
-                            path=f"debug/failed_{int(start_time)}.png"
-                        )
-                        with open(
-                            f"debug/failed_{int(start_time)}.html",
-                            "w",
-                            encoding="utf-8",
-                        ) as f:
-                            f.write(html_content)
-                        return None
 
-            except Exception as e:
-                logger.error(f"  ❌ Error processing {link} (attempt {attempt}): {e}")
+                logger.warning("  ⚠️ Extraction returned None: %s", link)
+                if attempt < max_retries:
+                    await asyncio.sleep(random.uniform(0.8, 1.5))
+                    continue
+                return None
+
+            except PlaywrightError as e:
+                logger.error(
+                    "  ❌ Error processing %s (attempt %d): %s",
+                    link,
+                    attempt,
+                    e,
+                )
                 if attempt < max_retries:
                     await asyncio.sleep(random.uniform(0.8, 1.5))
                 else:
@@ -736,7 +739,7 @@ async def process_link(
                 if page and not page.is_closed():
                     try:
                         await page.close()
-                    except Exception:
+                    except PlaywrightError:
                         pass
 
         return None
@@ -751,7 +754,7 @@ async def scrape_google_maps(
     lang: str = "en",
     headless: bool = False,
     n_semaphore: int = 8,
-    fields: list[str] | set[str] | None = None,
+    fields: Sequence[str] | set[str] | None = None,
     use_spa: bool = True,
 ) -> pl.DataFrame:
     """
@@ -761,18 +764,18 @@ async def scrape_google_maps(
         queries (set[str]): Search queries (e.g. {"cafe", "restaurant"}).
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
-        proxy (dict, optional): Proxy configuration for Playwright.
+        proxy (ProxySettings, optional): Proxy configuration for Playwright.
         max_places (int, optional): Maximum places to collect per query. Defaults to 120.
         lang (str, optional): Language code for Google Maps. Defaults to "en".
         headless (bool, optional): Whether to run headless browser. Defaults to False.
-        n_semaphore (int, optional): Maximum concurrent browser tabs/queries running simultaneously. Defaults to 8.
-        fields (list[str] | set[str], optional): Selected fields to extract. Defaults to None (all fields).
-        use_spa (bool, optional): Whether to use high-speed SPA navigation (~90% less requests). Defaults to True.
+        n_semaphore (int, optional): Maximum concurrent browser tabs/queries. Defaults to 8.
+        fields (Sequence[str] | set[str], optional): Selected fields to extract. Defaults to None (all fields).
+        use_spa (bool, optional): Whether to use high-speed SPA navigation. Defaults to True.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.
     """
-    results = []
+    results: list[dict[str, Any]] = []
     browser = None
 
     async with async_playwright() as p:
@@ -783,7 +786,11 @@ async def scrape_google_maps(
                 args=LAUNCH_ARGS,
             )
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
                 java_script_enabled=True,
                 accept_downloads=False,
                 viewport={
@@ -798,21 +805,23 @@ async def scrape_google_maps(
                 timezone_id="Asia/Ho_Chi_Minh",
                 locale=lang,
             )
-            # Lightweight, bug-free stealth override across all pages
+
+            # Lightweight stealth override
             await context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
                 if (!window.chrome) { window.chrome = {}; }
                 window.chrome.runtime = window.chrome.runtime || {};
             """)
 
-            # Register context-wide bandwidth-saving route handler (search & detail pages)
+            # Context-wide bandwidth-saving route handler
             await context.route("**/*", global_route_handler)
 
             query_semaphore = asyncio.Semaphore(n_semaphore)
 
             if use_spa:
                 logger.info(
-                    f"Scraping in SPA Navigation mode (high-speed, ~90% less requests, max concurrency: {n_semaphore})..."
+                    "Scraping in SPA Navigation mode (max concurrency: %d)...",
+                    n_semaphore,
                 )
 
                 async def run_spa_query(q: str):
@@ -831,7 +840,8 @@ async def scrape_google_maps(
                 list_of_results = await asyncio.gather(*spa_tasks)
                 results = list(itertools.chain.from_iterable(list_of_results))
                 logger.info(
-                    f"\n✅ Successfully collected {len(results)} places via SPA Navigation."
+                    "✅ Successfully collected %d places via SPA Navigation.",
+                    len(results),
                 )
             else:
                 # Multi-page fallback mode
@@ -851,36 +861,43 @@ async def scrape_google_maps(
                 place_links = list(
                     set(itertools.chain.from_iterable(list_of_sets_of_links))
                 )
-                logger.info(f"Collected {len(place_links)} unique place URLs.")
+                logger.info("Collected %d unique place URLs.", len(place_links))
 
                 logger.info(
-                    f"\nScraping details for {len(place_links)} places (concurrency: {n_semaphore})..."
+                    "Scraping details for %d places (concurrency: %d)...",
+                    len(place_links),
+                    n_semaphore,
                 )
                 total = len(place_links)
-                semaphore = asyncio.Semaphore(n_semaphore)
+                detail_semaphore = asyncio.Semaphore(n_semaphore)
 
                 detail_tasks = [
-                    process_link(context, link, semaphore, i + 1, total, fields=fields)
+                    process_link(
+                        context,
+                        link,
+                        detail_semaphore,
+                        i + 1,
+                        total,
+                        fields=fields,
+                    )
                     for i, link in enumerate(place_links)
                 ]
                 raw_results = await asyncio.gather(*detail_tasks)
-
                 results = [r for r in raw_results if r is not None]
-                logger.info(f"\n✅ Successfully collected {len(results)} places.")
+                logger.info("✅ Successfully collected %d places.", len(results))
 
         except PlaywrightTimeoutError:
             logger.error("Playwright timeout error during scraping process.")
-        except Exception as e:
-            logger.error(f"Unexpected error during scraping: {e}")
-            traceback.print_exc()
+        except Exception as e:  # noqa: BLE001
+            logger.error("Unexpected error during scraping: %s", e)
         finally:
             if browser and browser.is_connected():
                 try:
                     await browser.close()
-                except Exception:
+                except PlaywrightError:
                     pass
 
     if not results:
         return pl.DataFrame()
 
-    return pl.from_dicts(results)
+    return pl.from_dicts(results, infer_schema_length=None)

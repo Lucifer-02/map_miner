@@ -2,11 +2,15 @@ import json
 import logging
 import re
 import unicodedata
+from collections.abc import Sequence
+from typing import Any
+
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 
-def safe_get(data, *keys):
+def safe_get(data: Any, *keys: Any) -> Any:
     """
     Safely retrieves nested data from a dictionary or list using a sequence of keys/indices.
     Returns None if any key/index is not found or if the data structure is invalid.
@@ -18,24 +22,20 @@ def safe_get(data, *keys):
                 if isinstance(key, int) and 0 <= key < len(current):
                     current = current[key]
                 else:
-                    # logger.debug(f"Index {key} out of bounds or invalid for list.")
                     return None
             elif isinstance(current, dict):
                 if key in current:
                     current = current[key]
                 else:
-                    # logger.debug(f"Key {key} not found in dict.")
                     return None
             else:
-                # logger.debug(f"Cannot access key {key} on non-dict/list item: {type(current)}")
                 return None
         except (IndexError, TypeError, KeyError):
-            # logger.debug(f"Error accessing key {key}: {e}")
             return None
     return current
 
 
-def extract_initial_json(html_content: str):
+def extract_initial_json(html_content: str) -> str | None:
     """
     Extracts the JSON string assigned to window.APP_INITIALIZATION_STATE from HTML content.
     """
@@ -49,18 +49,16 @@ def extract_initial_json(html_content: str):
             json_str = match.group(1)
             if json_str.strip().startswith(("[", "{")):
                 return json_str
-            else:
-                logger.debug("Extracted content doesn't look like valid JSON start.")
-                return None
-        else:
-            logger.debug("APP_INITIALIZATION_STATE pattern not found.")
+            logger.debug("Extracted content doesn't look like valid JSON start.")
             return None
-    except Exception as e:
-        logger.debug(f"Error extracting JSON string: {e}")
+        logger.debug("APP_INITIALIZATION_STATE pattern not found.")
+        return None
+    except (re.error, TypeError) as e:
+        logger.debug("Error extracting JSON string: %s", e)
         return None
 
 
-def parse_json_data(json_str: str):
+def parse_json_data(json_str: str) -> list | None:
     """
     Parses the window.APP_INITIALIZATION_STATE JSON string to extract the inner data blob.
     Returns the data blob list or None.
@@ -80,10 +78,8 @@ def parse_json_data(json_str: str):
             data_blob_or_str = initial_data[3][6]
             if isinstance(data_blob_or_str, list):
                 return data_blob_or_str
-            elif isinstance(data_blob_or_str, str) and data_blob_or_str.startswith(
-                ")]}'\n"
-            ):
-                json_str_inner = data_blob_or_str.split(")]}'\n", 1)[1]
+            if isinstance(data_blob_or_str, str) and ")]}'" in data_blob_or_str:
+                json_str_inner = data_blob_or_str.split(")]}'", 1)[1].strip()
                 actual_data = json.loads(json_str_inner)
                 if isinstance(actual_data, list) and len(actual_data) > 6:
                     potential_data_blob = safe_get(actual_data, 6)
@@ -92,19 +88,19 @@ def parse_json_data(json_str: str):
 
         # Check alternative path [3][5]
         alt_blob = safe_get(initial_data, 3, 5)
-        if isinstance(alt_blob, str) and alt_blob.startswith(")]}'\n"):
-            alt_parsed = json.loads(alt_blob.split(")]}'\n", 1)[1])
+        if isinstance(alt_blob, str) and ")]}'" in alt_blob:
+            alt_parsed = json.loads(alt_blob.split(")]}'", 1)[1].strip())
             if isinstance(alt_parsed, list) and len(alt_parsed) > 0:
                 first_entry = alt_parsed[0]
                 if isinstance(first_entry, list):
                     return first_entry
-    except Exception as e:
-        logger.debug(f"Error parsing initial JSON data: {e}")
+    except (json.JSONDecodeError, IndexError, TypeError, KeyError) as e:
+        logger.debug("Error parsing initial JSON data: %s", e)
 
     return None
 
 
-def parse_preview_json(json_str: str):
+def parse_preview_json(json_str: str) -> list | None:
     """
     Parses the Google Maps preview/place XHR response, extracting the inner rich data blob at actual_data[6].
     """
@@ -112,46 +108,46 @@ def parse_preview_json(json_str: str):
         return None
     try:
         text = json_str.strip()
-        if text.startswith(")]}'\n"):
-            text = text.split(")]}'\n", 1)[1]
+        if text.startswith(")]}'"):
+            text = text.split(")]}'", 1)[1].strip()
         data = json.loads(text)
         if isinstance(data, list) and len(data) > 6 and isinstance(data[6], list):
             return data[6]
-    except Exception as e:
-        logger.debug(f"Error parsing preview JSON: {e}")
+    except (json.JSONDecodeError, IndexError, TypeError) as e:
+        logger.debug("Error parsing preview JSON: %s", e)
     return None
 
 
 # --- Field Extraction Functions (Indices relative to the data_blob returned by parse_json_data) ---
 
 
-def get_main_name(data):
+def get_main_name(data: list) -> str | None:
     """Extracts the main name of the place."""
-    # Index relative to the data_blob returned by parse_json_data
-    # Confirmed via debug_inner_data.json: data_blob = actual_data[6], name = data_blob[11]
     return safe_get(data, 11)
 
 
-def get_place_id(data):
+def get_place_id(data: list) -> str | None:
     """Extracts the Google Place ID (canonical ChIJ... or hex ID)."""
     return safe_get(data, 78) or safe_get(data, 10)
 
 
-def get_latitude(data):
+def get_latitude(data: list) -> float | None:
+    """Extracts latitude coordinate."""
     lat = safe_get(data, 9, 2)
     if lat is not None:
         return lat
     return safe_get(data, 208, 0, 2)
 
 
-def get_longitude(data):
+def get_longitude(data: list) -> float | None:
+    """Extracts longitude coordinate."""
     lon = safe_get(data, 9, 3)
     if lon is not None:
         return lon
     return safe_get(data, 208, 0, 3)
 
 
-def get_complete_address(data):
+def get_complete_address(data: list) -> str | None:
     """Extracts structured address components and joins them."""
     full_address = safe_get(data, 39)
     if isinstance(full_address, str) and full_address.strip():
@@ -179,7 +175,7 @@ def strip_accents(s: str) -> str:
     )
 
 
-def get_address_components(data) -> dict:
+def get_address_components(data: list) -> dict[str, str | None]:
     """
     Extracts individual address components:
       - street: House number and street/route name
@@ -188,7 +184,7 @@ def get_address_components(data) -> dict:
       - city: City or province
       - postal_code: Postal/ZIP code
     """
-    res = {
+    res: dict[str, str | None] = {
         "street": None,
         "sublocality": None,
         "district": None,
@@ -250,7 +246,7 @@ def get_address_components(data) -> dict:
             res["sublocality"] = sub_raw
 
     # 6. Enhance with accented local names from data[2] or data[183][0][0][1] if available
-    candidates = []
+    candidates: list[str] = []
     addr_parts = safe_get(data, 2)
     if isinstance(addr_parts, list):
         candidates.extend([str(x).strip() for x in addr_parts if x])
@@ -274,11 +270,11 @@ def get_address_components(data) -> dict:
     return res
 
 
-def parse_address_string_fallback(address_str: str) -> dict:
+def parse_address_string_fallback(address_str: str) -> dict[str, str | None]:
     """
     Heuristic fallback to extract address components from formatted address string.
     """
-    res = {
+    res: dict[str, str | None] = {
         "street": None,
         "sublocality": None,
         "district": None,
@@ -323,7 +319,7 @@ def parse_address_string_fallback(address_str: str) -> dict:
     return res
 
 
-def get_rating(data):
+def get_rating(data: list) -> float | None:
     """Extracts the average star rating."""
     val = safe_get(data, 4, 7)
     if val is not None:
@@ -334,7 +330,7 @@ def get_rating(data):
     return None
 
 
-def get_reviews_count(data):
+def get_reviews_count(data: list) -> int | None:
     """Extracts the total number of reviews."""
     val = safe_get(data, 4, 8)
     if val is not None:
@@ -350,13 +346,12 @@ def get_reviews_count(data):
     return None
 
 
-def get_website(data):
+def get_website(data: list) -> str | None:
     """Extracts the primary website link."""
-    # Index based on debug_inner_data.json structure relative to data_blob (actual_data[6])
     return safe_get(data, 7, 0)
 
 
-def get_plus_code(data):
+def get_plus_code(data: list) -> str | None:
     """Extracts the Google Plus Code / compound code."""
     pc = safe_get(data, 183, 2, 2, 0)
     if isinstance(pc, str) and pc.strip():
@@ -364,7 +359,7 @@ def get_plus_code(data):
     return None
 
 
-def get_price_level(data):
+def get_price_level(data: list) -> str | None:
     """Extracts the price tier/level."""
     lvl = safe_get(data, 4, 2)
     if isinstance(lvl, int) and lvl > 0:
@@ -374,7 +369,7 @@ def get_price_level(data):
     return None
 
 
-def get_open_status(data):
+def get_open_status(data: list) -> str | None:
     """Extracts real-time open/closed status string."""
     status = safe_get(data, 203, 1, 4, 0) or safe_get(data, 203, 1, 8, 0)
     if isinstance(status, str) and status.strip():
@@ -382,11 +377,11 @@ def get_open_status(data):
     return None
 
 
-def get_opening_hours(data):
+def get_opening_hours(data: list) -> dict[str, str] | None:
     """Extracts opening hours schedule dict."""
     hours_raw = safe_get(data, 203, 0)
     if hours_raw and isinstance(hours_raw, list):
-        res = {}
+        res: dict[str, str] = {}
         for entry in hours_raw:
             if isinstance(entry, list) and len(entry) > 0:
                 day = entry[0]
@@ -398,15 +393,15 @@ def get_opening_hours(data):
     return None
 
 
-def get_timezone(data):
+def get_timezone(data: list) -> str | None:
     """Extracts local timezone."""
     tz = safe_get(data, 30)
     return tz if isinstance(tz, str) else None
 
 
-def get_amenities(data):
+def get_amenities(data: list) -> list[str] | None:
     """Extracts business amenities, service options and accessibility features."""
-    amenities = []
+    amenities: list[str] = []
     groups = safe_get(data, 100, 1) or []
     if isinstance(groups, list):
         for group in groups:
@@ -419,7 +414,7 @@ def get_amenities(data):
     return amenities if amenities else None
 
 
-def get_photos_count(data):
+def get_photos_count(data: list) -> int | None:
     """Extracts total photo count."""
     count = safe_get(data, 146, 0)
     if isinstance(count, int):
@@ -427,9 +422,9 @@ def get_photos_count(data):
     return None
 
 
-def get_photos(data):
+def get_photos(data: list) -> list[str] | None:
     """Extracts list of prominent photo URLs."""
-    photos = []
+    photos: list[str] = []
     candidates = (safe_get(data, 72, 0) or []) + (safe_get(data, 51, 0) or [])
     for p in candidates:
         url = safe_get(p, 6, 0)
@@ -438,12 +433,12 @@ def get_photos(data):
     return photos if photos else None
 
 
-def get_is_claimed(data):
+def get_is_claimed(data: list) -> bool:
     """Checks whether the business is claimed by its owner."""
     return safe_get(data, 57, 1) is not None or safe_get(data, 57, 2) is not None
 
 
-def get_country_code(data):
+def get_country_code(data: list) -> str | None:
     """Extracts country code (e.g., VN)."""
     cc = safe_get(data, 243)
     if isinstance(cc, str) and cc.strip():
@@ -454,44 +449,38 @@ def get_country_code(data):
     return None
 
 
-def _find_phone_recursively(data_structure):
+def _find_phone_recursively(data_structure: Any) -> str | None:
     """
     Recursively searches a nested list/dict structure for a list containing
     the phone icon URL followed by the phone number string.
     """
     if isinstance(data_structure, list):
-        # Check if this list matches the pattern [icon_url, phone_string, ...]
         if (
             len(data_structure) >= 2
             and isinstance(data_structure[0], str)
             and "call_googblue" in data_structure[0]
             and isinstance(data_structure[1], str)
         ):
-            # Found the pattern, assume data_structure[1] is the phone number
             phone_number_str = data_structure[1]
             standardized_number = re.sub(r"\D", "", phone_number_str)
             if standardized_number:
-                # logger.debug(f"Debug: Found phone via recursive search: {standardized_number}")
                 return standardized_number
 
-        # If not the target list, recurse into list elements
         for item in data_structure:
             found_phone = _find_phone_recursively(item)
             if found_phone:
                 return found_phone
 
     elif isinstance(data_structure, dict):
-        # Recurse into dictionary values
-        for key, value in data_structure.items():
+        for value in data_structure.values():
             found_phone = _find_phone_recursively(value)
             if found_phone:
                 return found_phone
 
-    # Base case: not a list/dict or pattern not found in this branch
     return None
 
 
-def get_phone_number(data_blob):
+def get_phone_number(data_blob: list) -> str | None:
     """
     Extracts and standardizes the primary phone number by checking direct index
     or recursively searching data_blob.
@@ -502,7 +491,7 @@ def get_phone_number(data_blob):
     return _find_phone_recursively(data_blob)
 
 
-def get_categories(data):
+def get_categories(data: list) -> list[str] | None:
     """Extracts the list of categories/types."""
     cats = safe_get(data, 13)
     if isinstance(cats, list):
@@ -512,21 +501,25 @@ def get_categories(data):
     return None
 
 
-def parse_rating_reviews_from_html(html_content: str):
+def parse_rating_reviews_from_html(
+    html_content: str,
+) -> tuple[float | None, int | None]:
     """
     Fallback parsing for rating and review count directly from HTML attributes.
     """
     rating = None
     reviews = None
 
-    m_rating = re.search(r'aria-label="([0-9\\.]+) stars', html_content)
+    m_rating = re.search(r'aria-label="([0-9.]+)\s*stars', html_content, re.IGNORECASE)
     if m_rating:
         try:
             rating = float(m_rating.group(1))
         except (TypeError, ValueError):
             rating = None
 
-    m_reviews = re.search(r'aria-label="([0-9,]+) reviews', html_content)
+    m_reviews = re.search(
+        r'aria-label="([0-9,]+)\s*reviews', html_content, re.IGNORECASE
+    )
     if m_reviews:
         try:
             reviews = int(m_reviews.group(1).replace(",", ""))
@@ -536,7 +529,7 @@ def parse_rating_reviews_from_html(html_content: str):
     return rating, reviews
 
 
-def get_thumbnail(data):
+def get_thumbnail(data: list) -> str | None:
     """Extracts the main thumbnail image URL."""
     return (
         safe_get(data, 72, 0, 0, 6, 0)
@@ -546,24 +539,18 @@ def get_thumbnail(data):
     )
 
 
-def parse_dom_from_html(html_content: str) -> dict:
+def parse_dom_from_html(html_content: str) -> dict[str, Any]:
     """
     Extracts place attributes from rendered DOM HTML using BeautifulSoup.
     Pure function without any side effects.
     """
     if not html_content or not isinstance(html_content, str):
         return {}
-    try:
-        from bs4 import BeautifulSoup
 
-        soup = BeautifulSoup(html_content, "html.parser")
-    except Exception as e:
-        logger.debug(f"BeautifulSoup parsing failed: {e}")
-        return {}
+    soup = BeautifulSoup(html_content, "html.parser")
+    dom_data: dict[str, Any] = {}
 
-    dom_data = {}
-
-    def _attr(element, attribute: str) -> str:
+    def _attr(element: Any, attribute: str) -> str:
         val = element.get(attribute, "")
         if isinstance(val, list):
             return " ".join(val)
@@ -624,7 +611,7 @@ def parse_dom_from_html(html_content: str) -> dict:
         ).strip()
 
     # Opening hours table
-    hours = {}
+    hours: dict[str, str] = {}
     valid_days = [
         "monday",
         "tuesday",
@@ -650,13 +637,11 @@ def parse_dom_from_html(html_content: str) -> dict:
     if hours:
         dom_data["opening_hours"] = hours
 
-    # Rating & Reviews
+    # Rating & Reviews from DOM elements
     stars_el = soup.select_one("[aria-label*='stars']")
     if stars_el:
         stars_label = _attr(stars_el, "aria-label")
-        m = re.search(
-            r"([0-9.]+)\s*stars", stars_label, re.IGNORECASE
-        )
+        m = re.search(r"([0-9.]+)\s*stars", stars_label, re.IGNORECASE)
         if m:
             try:
                 dom_data["rating"] = float(m.group(1))
@@ -666,14 +651,20 @@ def parse_dom_from_html(html_content: str) -> dict:
     rev_el = soup.select_one("[aria-label*='reviews']")
     if rev_el:
         rev_label = _attr(rev_el, "aria-label")
-        m = re.search(
-            r"([0-9,]+)\s*reviews", rev_label, re.IGNORECASE
-        )
+        m = re.search(r"([0-9,]+)\s*reviews", rev_label, re.IGNORECASE)
         if m:
             try:
                 dom_data["reviews_count"] = int(m.group(1).replace(",", ""))
             except ValueError:
                 pass
+
+    # Fallback to regex if still missing
+    if "rating" not in dom_data or "reviews_count" not in dom_data:
+        r, rc = parse_rating_reviews_from_html(html_content)
+        if r is not None and "rating" not in dom_data:
+            dom_data["rating"] = r
+        if rc is not None and "reviews_count" not in dom_data:
+            dom_data["reviews_count"] = rc
 
     # Categories
     cat_el = soup.select_one("button[jsaction*='category']")
@@ -683,13 +674,73 @@ def parse_dom_from_html(html_content: str) -> dict:
     return dom_data
 
 
+def _extract_from_blob(
+    data_blob: list, wanted: set[str] | None = None
+) -> dict[str, Any]:
+    """
+    Consolidated extractor for Google Maps place data array (used for both
+    rich preview XHR payloads and APP_INITIALIZATION_STATE blobs).
+    """
+
+    def is_wanted(field_name: str) -> bool:
+        return wanted is None or field_name in wanted
+
+    addr_comps: dict[str, str | None] = {}
+    if wanted is None or not wanted.isdisjoint(
+        {"street", "sublocality", "district", "city", "postal_code"}
+    ):
+        addr_comps = get_address_components(data_blob)
+
+    candidate_data: dict[str, Any] = {
+        "name": get_main_name(data_blob) if is_wanted("name") else None,
+        "place_id": get_place_id(data_blob) if is_wanted("place_id") else None,
+        "latitude": get_latitude(data_blob) if is_wanted("latitude") else None,
+        "longitude": get_longitude(data_blob) if is_wanted("longitude") else None,
+        "plus_code": get_plus_code(data_blob) if is_wanted("plus_code") else None,
+        "address": get_complete_address(data_blob) if is_wanted("address") else None,
+        "street": addr_comps.get("street") if is_wanted("street") else None,
+        "sublocality": addr_comps.get("sublocality")
+        if is_wanted("sublocality")
+        else None,
+        "district": addr_comps.get("district") if is_wanted("district") else None,
+        "city": addr_comps.get("city") if is_wanted("city") else None,
+        "postal_code": addr_comps.get("postal_code")
+        if is_wanted("postal_code")
+        else None,
+        "rating": get_rating(data_blob) if is_wanted("rating") else None,
+        "reviews_count": get_reviews_count(data_blob)
+        if is_wanted("reviews_count")
+        else None,
+        "price_level": get_price_level(data_blob) if is_wanted("price_level") else None,
+        "categories": get_categories(data_blob) if is_wanted("categories") else None,
+        "phone": get_phone_number(data_blob) if is_wanted("phone") else None,
+        "website": get_website(data_blob) if is_wanted("website") else None,
+        "open_status": get_open_status(data_blob) if is_wanted("open_status") else None,
+        "opening_hours": get_opening_hours(data_blob)
+        if is_wanted("opening_hours")
+        else None,
+        "timezone": get_timezone(data_blob) if is_wanted("timezone") else None,
+        "amenities": get_amenities(data_blob) if is_wanted("amenities") else None,
+        "photos_count": get_photos_count(data_blob)
+        if is_wanted("photos_count")
+        else None,
+        "photos": get_photos(data_blob) if is_wanted("photos") else None,
+        "thumbnail": get_thumbnail(data_blob) if is_wanted("thumbnail") else None,
+        "is_claimed": get_is_claimed(data_blob) if is_wanted("is_claimed") else None,
+        "country_code": get_country_code(data_blob)
+        if is_wanted("country_code")
+        else None,
+    }
+    return {k: v for k, v in candidate_data.items() if v is not None and is_wanted(k)}
+
+
 def extract_place_data(
     html_content: str | None = None,
     preview_blob: list | None = None,
     preview_json: str | None = None,
-    dom_data: dict | None = None,
-    fields: list[str] | set[str] | tuple[str] | None = None,
-) -> dict | None:
+    dom_data: dict[str, Any] | None = None,
+    fields: Sequence[str] | set[str] | None = None,
+) -> dict[str, Any] | None:
     """
     High-level function to orchestrate pure extraction from HTML content,
     rich preview response blob/JSON, and/or DOM extracted data.
@@ -700,17 +751,17 @@ def extract_place_data(
         preview_blob: Pre-parsed Google Maps preview list structure.
         preview_json: Raw string of /maps/preview/place response.
         dom_data: Optional pre-extracted DOM dictionary.
-        fields: Optional list/set of field names to extract. If None, extracts all available fields.
+        fields: Optional sequence/set of field names to extract. If None, extracts all available fields.
     """
-    # Parse preview JSON if provided as string
+    # 1. Parse preview JSON if provided as string
     if preview_blob is None and preview_json:
         preview_blob = parse_preview_json(preview_json)
 
-    # Automatically parse rendered DOM from HTML if dom_data was not explicitly supplied
+    # 2. Automatically parse rendered DOM from HTML if dom_data was not explicitly supplied
     if dom_data is None and html_content:
         dom_data = parse_dom_from_html(html_content)
 
-    place_details: dict = {}
+    place_details: dict[str, Any] = {}
     wanted = set(fields) if fields is not None else None
 
     def is_wanted(f: str) -> bool:
@@ -718,69 +769,7 @@ def extract_place_data(
 
     # 1. First priority: rich preview blob from /maps/preview/place
     if preview_blob and isinstance(preview_blob, list):
-        addr_comps = {}
-        if wanted is None or not wanted.isdisjoint(
-            {"street", "sublocality", "district", "city", "postal_code"}
-        ):
-            addr_comps = get_address_components(preview_blob)
-
-        candidate_data = {
-            "name": get_main_name(preview_blob) if is_wanted("name") else None,
-            "place_id": get_place_id(preview_blob) if is_wanted("place_id") else None,
-            "latitude": get_latitude(preview_blob) if is_wanted("latitude") else None,
-            "longitude": get_longitude(preview_blob)
-            if is_wanted("longitude")
-            else None,
-            "plus_code": get_plus_code(preview_blob)
-            if is_wanted("plus_code")
-            else None,
-            "address": get_complete_address(preview_blob)
-            if is_wanted("address")
-            else None,
-            "street": addr_comps.get("street"),
-            "sublocality": addr_comps.get("sublocality"),
-            "district": addr_comps.get("district"),
-            "city": addr_comps.get("city"),
-            "postal_code": addr_comps.get("postal_code"),
-            "rating": get_rating(preview_blob) if is_wanted("rating") else None,
-            "reviews_count": get_reviews_count(preview_blob)
-            if is_wanted("reviews_count")
-            else None,
-            "price_level": get_price_level(preview_blob)
-            if is_wanted("price_level")
-            else None,
-            "categories": get_categories(preview_blob)
-            if is_wanted("categories")
-            else None,
-            "phone": get_phone_number(preview_blob) if is_wanted("phone") else None,
-            "website": get_website(preview_blob) if is_wanted("website") else None,
-            "open_status": get_open_status(preview_blob)
-            if is_wanted("open_status")
-            else None,
-            "opening_hours": get_opening_hours(preview_blob)
-            if is_wanted("opening_hours")
-            else None,
-            "timezone": get_timezone(preview_blob) if is_wanted("timezone") else None,
-            "amenities": get_amenities(preview_blob)
-            if is_wanted("amenities")
-            else None,
-            "photos_count": get_photos_count(preview_blob)
-            if is_wanted("photos_count")
-            else None,
-            "photos": get_photos(preview_blob) if is_wanted("photos") else None,
-            "thumbnail": get_thumbnail(preview_blob)
-            if is_wanted("thumbnail")
-            else None,
-            "is_claimed": get_is_claimed(preview_blob)
-            if is_wanted("is_claimed")
-            else None,
-            "country_code": get_country_code(preview_blob)
-            if is_wanted("country_code")
-            else None,
-        }
-        place_details = {
-            k: v for k, v in candidate_data.items() if v is not None and is_wanted(k)
-        }
+        place_details = _extract_from_blob(preview_blob, wanted)
 
     # 2. Second priority: extract from HTML (APP_INITIALIZATION_STATE) if fields are missing
     if html_content and (not place_details or len(place_details) < 4):
@@ -788,76 +777,9 @@ def extract_place_data(
         if json_str:
             data_blob = parse_json_data(json_str)
             if data_blob:
-                addr_comps = {}
-                if wanted is None or not wanted.isdisjoint(
-                    {"street", "sublocality", "district", "city", "postal_code"}
-                ):
-                    addr_comps = get_address_components(data_blob)
-
-                html_details = {
-                    "name": get_main_name(data_blob) if is_wanted("name") else None,
-                    "place_id": get_place_id(data_blob)
-                    if is_wanted("place_id")
-                    else None,
-                    "latitude": get_latitude(data_blob)
-                    if is_wanted("latitude")
-                    else None,
-                    "longitude": get_longitude(data_blob)
-                    if is_wanted("longitude")
-                    else None,
-                    "plus_code": get_plus_code(data_blob)
-                    if is_wanted("plus_code")
-                    else None,
-                    "address": get_complete_address(data_blob)
-                    if is_wanted("address")
-                    else None,
-                    "street": addr_comps.get("street"),
-                    "sublocality": addr_comps.get("sublocality"),
-                    "district": addr_comps.get("district"),
-                    "city": addr_comps.get("city"),
-                    "postal_code": addr_comps.get("postal_code"),
-                    "rating": get_rating(data_blob) if is_wanted("rating") else None,
-                    "reviews_count": get_reviews_count(data_blob)
-                    if is_wanted("reviews_count")
-                    else None,
-                    "price_level": get_price_level(data_blob)
-                    if is_wanted("price_level")
-                    else None,
-                    "categories": get_categories(data_blob)
-                    if is_wanted("categories")
-                    else None,
-                    "phone": get_phone_number(data_blob)
-                    if is_wanted("phone")
-                    else None,
-                    "website": get_website(data_blob) if is_wanted("website") else None,
-                    "open_status": get_open_status(data_blob)
-                    if is_wanted("open_status")
-                    else None,
-                    "opening_hours": get_opening_hours(data_blob)
-                    if is_wanted("opening_hours")
-                    else None,
-                    "timezone": get_timezone(data_blob)
-                    if is_wanted("timezone")
-                    else None,
-                    "amenities": get_amenities(data_blob)
-                    if is_wanted("amenities")
-                    else None,
-                    "photos_count": get_photos_count(data_blob)
-                    if is_wanted("photos_count")
-                    else None,
-                    "photos": get_photos(data_blob) if is_wanted("photos") else None,
-                    "thumbnail": get_thumbnail(data_blob)
-                    if is_wanted("thumbnail")
-                    else None,
-                    "is_claimed": get_is_claimed(data_blob)
-                    if is_wanted("is_claimed")
-                    else None,
-                    "country_code": get_country_code(data_blob)
-                    if is_wanted("country_code")
-                    else None,
-                }
+                html_details = _extract_from_blob(data_blob, wanted)
                 for k, v in html_details.items():
-                    if v is not None and k not in place_details and is_wanted(k):
+                    if v is not None and k not in place_details:
                         place_details[k] = v
 
     # 3. Third priority: DOM data fallback for missing fields
@@ -870,20 +792,7 @@ def extract_place_data(
             ):
                 place_details[k] = v
 
-    # 4. Fallback HTML regex for rating & reviews if still missing
-    if html_content:
-        need_rating = is_wanted("rating") and "rating" not in place_details
-        need_reviews = (
-            is_wanted("reviews_count") and "reviews_count" not in place_details
-        )
-        if need_rating or need_reviews:
-            r, rc = parse_rating_reviews_from_html(html_content)
-            if r is not None and need_rating:
-                place_details["rating"] = r
-            if rc is not None and need_reviews:
-                place_details["reviews_count"] = rc
-
-    # 5. Fallback heuristic for address components if full address is available but components are missing
+    # 4. Fallback heuristic for address components if full address is available but components are missing
     address_comp_keys = ["street", "sublocality", "district", "city", "postal_code"]
     if "address" in place_details and any(
         is_wanted(k) and k not in place_details for k in address_comp_keys
@@ -898,6 +807,6 @@ def extract_place_data(
 
     # If specific fields are requested, return dict preserving the requested order
     if fields is not None:
-        return {f: place_details.get(f, None) for f in fields if f != "link"}
+        return {f: place_details.get(f) for f in fields if f != "link"}
 
     return place_details

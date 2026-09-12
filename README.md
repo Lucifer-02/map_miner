@@ -16,6 +16,7 @@ import asyncio
 from geopy.point import Point
 from map_miner import scrape_google_maps
 
+
 async def main():
     df = await scrape_google_maps(
         queries={"cafe"},
@@ -27,6 +28,7 @@ async def main():
     )
     print(df)
     df.write_excel("places.xlsx")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

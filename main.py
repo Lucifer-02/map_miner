@@ -14,18 +14,18 @@ logging.basicConfig(
 def main():
     pois = asyncio.run(
         scrape_google_maps(
-            queries={"cafe", "atm", "hospital", "school"},
-            max_places=120,
+            queries={"cafe", "atm", "hospital"},
+            max_places=20,
             lang="en",
-            headless=True,
-            geo_coordinates=Point(20.985322, 105.781289),
+            headless=False,
+            geo_coordinates=Point(21.018785, 105.830415),
             zoom=18,
             fields=None,
-            # proxy={
-            #     "server": "http://gate.decodo.com:10000",
-            #     "username": "spp86iv7zu",
-            #     "password": "6yoqpXiuaF5bT_83sV",
-            # },
+            proxy={
+                "server": "http://gate.decodo.com:10000",
+                "username": "spp86iv7zu",
+                "password": "6yoqpXiuaF5bT_83sV",
+            },
             n_semaphore=12,
         )
     )

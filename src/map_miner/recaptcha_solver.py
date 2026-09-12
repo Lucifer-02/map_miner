@@ -1,30 +1,55 @@
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import os
 import random
 import re
+import tempfile
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
-from pydub import AudioSegment
 import speech_recognition as sr
+from playwright.async_api import Error as PlaywrightError
+from pydub import AudioSegment
 
-logger = logging.getLogger("root.recaptcha_solver")
+logger = logging.getLogger(__name__)
+
+
+def _write_bytes_sync(path: str, data: bytes) -> None:
+    """Helper to write binary data to disk in a separate thread."""
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def _write_text_sync(path: str, text: str) -> None:
+    """Helper to write text data to disk in a separate thread."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 
 class RecaptchaSolver:
-    def __init__(self, page, debug_dir: str = "debug/captchas"):
+    """
+    Automated solver for Google reCAPTCHA v2 (checkbox and audio challenge)
+    using Playwright, pydub, and Google Speech Recognition.
+    """
+
+    def __init__(
+        self,
+        page: Any,
+        debug_dir: str = "debug/captchas",
+        debug: bool = False,
+    ) -> None:
         self.page = page
         self.debug_dir = debug_dir
+        self.debug = debug
         self.current_diag_dir: str | None = None
         self.metadata: dict[str, Any] = {}
 
     def _get_diag_dir(self) -> str:
         if not self.current_diag_dir:
-            now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            now_str = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
             rand_suffix = random.randint(1000, 9999)
             self.current_diag_dir = os.path.join(
                 self.debug_dir, f"captcha_{now_str}_{rand_suffix}"
@@ -32,42 +57,41 @@ class RecaptchaSolver:
             os.makedirs(self.current_diag_dir, exist_ok=True)
         return self.current_diag_dir
 
-    def _save_metadata_file(self):
+    async def _save_metadata_file(self) -> None:
         if not self.current_diag_dir:
             return
         meta_path = os.path.join(self.current_diag_dir, "meta.json")
         try:
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(self.metadata, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.debug(f"Error writing meta.json: {e}")
+            content = json.dumps(self.metadata, indent=2, ensure_ascii=False)
+            await asyncio.to_thread(_write_text_sync, meta_path, content)
+        except OSError as e:
+            logger.debug("Error writing meta.json: %s", e)
 
     async def save_captcha_diagnostics(self, reason: str = "detected") -> str:
         """
-        Saves all necessary diagnostic information when a CAPTCHA or Sorry page is encountered:
+        Saves diagnostic information when a CAPTCHA is encountered:
         - Full page screenshot (screenshot.png)
         - Raw HTML source (page.html)
         - Metadata JSON (meta.json) containing sitekey, data-s, cookies, user-agent, form fields, IP, timestamp.
         """
         diag_dir = self._get_diag_dir()
-        logger.info(f"💾 Saving CAPTCHA diagnostic data into: {diag_dir}")
+        logger.info("💾 Saving CAPTCHA diagnostic data into: %s", diag_dir)
 
         # 1. Capture full-page screenshot
         screenshot_path = os.path.join(diag_dir, "screenshot.png")
         try:
             await self.page.screenshot(path=screenshot_path, full_page=True)
-        except Exception as e:
-            logger.debug(f"Failed to capture screenshot: {e}")
+        except (PlaywrightError, OSError) as e:
+            logger.debug("Failed to capture screenshot: %s", e)
 
         # 2. Capture complete HTML source
         html_content = ""
         html_path = os.path.join(diag_dir, "page.html")
         try:
             html_content = await self.page.content()
-            with open(html_path, "w", encoding="utf-8") as f:
-                f.write(html_content)
-        except Exception as e:
-            logger.debug(f"Failed to capture HTML content: {e}")
+            await asyncio.to_thread(_write_text_sync, html_path, html_content)
+        except (PlaywrightError, OSError) as e:
+            logger.debug("Failed to capture HTML content: %s", e)
 
         # 3. Extract sitekey, data-s, and other security parameters
         sitekey = None
@@ -82,7 +106,9 @@ class RecaptchaSolver:
                     data_s = m_s.group(1)
 
             if not sitekey:
-                m_k = re.search(r'data-sitekey=["\']([a-zA-Z0-9_-]+)["\']', html_content)
+                m_k = re.search(
+                    r'data-sitekey=["\']([a-zA-Z0-9_-]+)["\']', html_content
+                )
                 if m_k:
                     sitekey = m_k.group(1)
 
@@ -90,8 +116,8 @@ class RecaptchaSolver:
                 m_s = re.search(r'data-s=["\']([a-zA-Z0-9_-]+)["\']', html_content)
                 if m_s:
                     data_s = m_s.group(1)
-        except Exception:
-            pass
+        except (PlaywrightError, re.error) as e:
+            logger.debug("Error extracting sitekey/data-s: %s", e)
 
         # 4. Extract IP address & block time if shown on sorry page
         ip_match = re.search(r"IP address:\s*([a-fA-F0-9:.]+)", html_content)
@@ -116,25 +142,25 @@ class RecaptchaSolver:
                     inputs: inputs
                 };
             }""")
-        except Exception:
-            pass
+        except PlaywrightError as e:
+            logger.debug("Error extracting form inputs: %s", e)
 
         # 6. Extract cookies, User-Agent & viewport
         cookies = []
         try:
             cookies = await self.page.context.cookies()
-        except Exception:
-            pass
+        except PlaywrightError as e:
+            logger.debug("Error retrieving cookies: %s", e)
 
         user_agent = ""
         try:
             user_agent = await self.page.evaluate("() => navigator.userAgent")
-        except Exception:
-            pass
+        except PlaywrightError as e:
+            logger.debug("Error retrieving userAgent: %s", e)
 
         # 7. Build metadata dictionary
         self.metadata = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "epoch": int(time.time()),
             "url": self.page.url,
             "title": await self.page.title() if not self.page.is_closed() else "",
@@ -160,28 +186,31 @@ class RecaptchaSolver:
             },
         }
 
-        self._save_metadata_file()
+        await self._save_metadata_file()
         logger.info(
-            f"✅ Saved CAPTCHA diagnostic info: sitekey={sitekey}, data_s={'yes' if data_s else 'no'}, ip={ip_address}"
+            "✅ Saved CAPTCHA diagnostic info: sitekey=%s, data_s=%s, ip=%s",
+            sitekey,
+            "yes" if data_s else "no",
+            ip_address,
         )
         return diag_dir
 
-    async def download_audio(self, url, path):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                with open(path, "wb") as f:
-                    f.write(await response.read())
-        logger.debug("Downloaded audio asynchronously.")
+    async def download_audio(self, url: str, path: str) -> None:
+        """Downloads audio file asynchronously from URL to local file path."""
+        async with aiohttp.ClientSession() as session, session.get(url) as response:
+            content = await response.read()
+            await asyncio.to_thread(_write_bytes_sync, path, content)
+        logger.debug("Downloaded audio file to: %s", path)
 
-    async def solveCaptcha(self) -> bool:
+    async def solve_captcha(self) -> bool:
         """
-        Attempts to solve Google reCAPTCHA v2 (checkbox or audio challenge),
-        automatically capturing all diagnostic data.
+        Attempts to solve Google reCAPTCHA v2 (checkbox or audio challenge).
         """
-        if not self.current_diag_dir:
+        if self.debug and not self.current_diag_dir:
             await self.save_captcha_diagnostics(reason="solve_captcha_triggered")
 
-        self.metadata["solution"]["attempted"] = True
+        if self.metadata:
+            self.metadata.setdefault("solution", {})["attempted"] = True
 
         try:
             # Wait for the CAPTCHA iframe to be available
@@ -194,46 +223,63 @@ class RecaptchaSolver:
                 await asyncio.sleep(1.0)
 
             # Check if the CAPTCHA is solved directly by checkbox
-            if await self.isSolved():
+            if await self.is_solved():
                 logger.info("🎉 CAPTCHA solved by checkbox click.")
-                self.metadata["solution"]["solved"] = True
-                self.metadata["solution"]["method"] = "checkbox"
-                self._save_metadata_file()
+                if self.metadata:
+                    self.metadata["solution"]["solved"] = True
+                    self.metadata["solution"]["method"] = "checkbox"
+                    await self._save_metadata_file()
                 return True
 
             # If not solved, attempt audio CAPTCHA solving
-            solved = await self.solveAudioCaptcha()
-            return solved
+            return await self.solve_audio_captcha()
 
         except Exception as e:
-            logger.error(f"An error occurred while solving CAPTCHA: {e}")
-            self.metadata["solution"]["solved"] = False
-            self.metadata["solution"]["error"] = str(e)
-            self._save_metadata_file()
+            logger.error("An error occurred while solving CAPTCHA: %s", e)
+            if self.metadata:
+                self.metadata["solution"]["solved"] = False
+                self.metadata["solution"]["error"] = str(e)
+                await self._save_metadata_file()
             raise
 
-    async def solveAudioCaptcha(self) -> bool:
-        diag_dir = self._get_diag_dir()
+    async def solve_audio_captcha(self) -> bool:
+        """Solves reCAPTCHA v2 audio challenge using speech recognition."""
+        if self.debug:
+            work_dir = self._get_diag_dir()
+            return await self._process_audio_challenge(work_dir)
+
+        # In standard mode, use a temporary directory cleaned up automatically
+        with tempfile.TemporaryDirectory(prefix="captcha_audio_") as tmp_dir:
+            return await self._process_audio_challenge(tmp_dir)
+
+    async def _process_audio_challenge(self, target_dir: str) -> bool:
+        """Internal worker to process the audio challenge inside target_dir."""
         try:
             # Switch to the audio CAPTCHA iframe
             challenge_frame = self.page.frame_locator(
                 'iframe[title*="recaptcha challenge expires in two minutes"]'
             )
 
-            # Take screenshot of challenge frame if visible
-            try:
-                challenge_el = self.page.locator(
-                    'iframe[title*="recaptcha challenge expires in two minutes"]'
-                )
-                if await challenge_el.count() > 0 and await challenge_el.first.is_visible():
-                    await challenge_el.first.screenshot(
-                        path=os.path.join(diag_dir, "challenge.png")
+            # Screenshot challenge frame if in debug mode
+            if self.debug:
+                try:
+                    challenge_el = self.page.locator(
+                        'iframe[title*="recaptcha challenge expires in two minutes"]'
                     )
-                    self.metadata["files"]["challenge"] = "challenge.png"
-            except Exception:
-                pass
+                    if (
+                        await challenge_el.count() > 0
+                        and await challenge_el.first.is_visible()
+                    ):
+                        chal_path = os.path.join(target_dir, "challenge.png")
+                        await challenge_el.first.screenshot(path=chal_path)
+                        if self.metadata:
+                            self.metadata.setdefault("files", {})["challenge"] = (
+                                "challenge.png"
+                            )
+                except (PlaywrightError, OSError) as e:
+                    logger.debug("Failed to screenshot challenge iframe: %s", e)
 
-            # Click on the audio button
+            # Click on the audio challenge button
             await challenge_frame.locator("#recaptcha-audio-button").click()
             await asyncio.sleep(1.0)
 
@@ -241,31 +287,46 @@ class RecaptchaSolver:
             audio_source = await challenge_frame.locator("#audio-source").get_attribute(
                 "src"
             )
-            logger.info(f"Audio challenge source URL: {audio_source}")
+            logger.info("Audio challenge source URL: %s", audio_source)
 
-            path_to_mp3 = os.path.join(diag_dir, "audio.mp3")
-            path_to_wav = os.path.join(diag_dir, "audio.wav")
+            path_to_mp3 = os.path.join(target_dir, "audio.mp3")
+            path_to_wav = os.path.join(target_dir, "audio.wav")
 
             if audio_source:
-                self.metadata["audio"]["source_url"] = audio_source
-                await self.download_audio(audio_source, path_to_mp3)
-                self.metadata["audio"]["mp3"] = "audio.mp3"
-                self.metadata["files"]["audio_mp3"] = "audio.mp3"
+                if self.metadata:
+                    self.metadata.setdefault("audio", {})["source_url"] = audio_source
 
-                # Convert mp3 to wav
-                sound = AudioSegment.from_mp3(path_to_mp3)
-                sound.export(path_to_wav, format="wav")
-                self.metadata["audio"]["wav"] = "audio.wav"
-                self.metadata["files"]["audio_wav"] = "audio.wav"
+                await self.download_audio(audio_source, path_to_mp3)
+
+                if self.metadata:
+                    self.metadata["audio"]["mp3"] = "audio.mp3"
+                    self.metadata.setdefault("files", {})["audio_mp3"] = "audio.mp3"
+
+                # Convert mp3 to wav off the event loop
+                def _convert():
+                    sound = AudioSegment.from_mp3(path_to_mp3)
+                    sound.export(path_to_wav, format="wav")
+
+                await asyncio.to_thread(_convert)
+
+                if self.metadata:
+                    self.metadata["audio"]["wav"] = "audio.wav"
+                    self.metadata.setdefault("files", {})["audio_wav"] = "audio.wav"
                 logger.debug("Converted MP3 to WAV.")
 
-                # Recognize the audio
+                # Recognize the audio off the event loop
                 recognizer: Any = sr.Recognizer()
-                with sr.AudioFile(path_to_wav) as source:
-                    audio = recognizer.record(source)
-                captcha_text = recognizer.recognize_google(audio).lower()
-                logger.info(f"Recognized CAPTCHA text: {captcha_text}")
-                self.metadata["audio"]["recognized_text"] = captcha_text
+
+                def _transcribe():
+                    with sr.AudioFile(path_to_wav) as source:
+                        audio = recognizer.record(source)
+                    return recognizer.recognize_google(audio).lower()
+
+                captcha_text = await asyncio.to_thread(_transcribe)
+                logger.info("Recognized CAPTCHA text: %s", captcha_text)
+
+                if self.metadata:
+                    self.metadata["audio"]["recognized_text"] = captcha_text
 
                 # Enter the CAPTCHA text
                 await challenge_frame.locator("#audio-response").fill(captcha_text)
@@ -276,32 +337,35 @@ class RecaptchaSolver:
                 await asyncio.sleep(1.0)
 
             # Verify CAPTCHA is solved
-            if await self.isSolved():
+            if await self.is_solved():
                 logger.info("🎉 Audio CAPTCHA solved successfully.")
-                self.metadata["solution"]["solved"] = True
-                self.metadata["solution"]["method"] = "audio"
-                self._save_metadata_file()
+                if self.metadata:
+                    self.metadata["solution"]["solved"] = True
+                    self.metadata["solution"]["method"] = "audio"
+                    await self._save_metadata_file()
                 return True
-            else:
-                logger.warning("❌ Failed to solve audio CAPTCHA.")
+
+            logger.warning("❌ Failed to solve audio CAPTCHA.")
+            if self.metadata:
                 self.metadata["solution"]["solved"] = False
                 self.metadata["solution"]["method"] = "audio"
                 self.metadata["solution"]["error"] = (
                     "Verification failed after audio submit"
                 )
-                self._save_metadata_file()
-                raise RuntimeError("Failed to solve CAPTCHA")
+                await self._save_metadata_file()
+            raise RuntimeError("Failed to solve CAPTCHA")
 
         except Exception as e:
-            logger.error(f"An error occurred while solving audio CAPTCHA: {e}")
-            self.metadata["solution"]["solved"] = False
-            self.metadata["solution"]["error"] = str(e)
-            self._save_metadata_file()
+            logger.error("An error occurred while solving audio CAPTCHA: %s", e)
+            if self.metadata:
+                self.metadata["solution"]["solved"] = False
+                self.metadata["solution"]["error"] = str(e)
+                await self._save_metadata_file()
             raise
 
-    async def isSolved(self) -> bool:
+    async def is_solved(self) -> bool:
+        """Checks if the reCAPTCHA checkbox is marked as checked."""
         try:
-            # Access the reCAPTCHA iframe
             recaptcha_frame = self.page.frame_locator('iframe[title*="reCAPTCHA"]')
             checkbox = recaptcha_frame.locator("#recaptcha-anchor")
             if await checkbox.count() == 0:
@@ -313,6 +377,11 @@ class RecaptchaSolver:
             return aria_checked == "true" or "recaptcha-checkbox-checked" in (
                 checkbox_class or ""
             )
-        except Exception as e:
-            logger.debug(f"Error checking if CAPTCHA is solved: {e}")
+        except PlaywrightError as e:
+            logger.debug("Error checking if CAPTCHA is solved: %s", e)
             return False
+
+    # Backward compatibility aliases
+    solveCaptcha = solve_captcha
+    solveAudioCaptcha = solve_audio_captcha
+    isSolved = is_solved

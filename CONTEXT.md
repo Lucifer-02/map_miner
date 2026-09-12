@@ -243,7 +243,13 @@ uv run main.py
 6. **[ĐÃ HOÀN TẤT] Tự động thu thập dữ liệu chẩn đoán CAPTCHA (Automatic CAPTCHA Diagnostic Capture)**:
    - **Tích hợp `save_captcha_diagnostics`**: Khi phát hiện CAPTCHA (URL `sorry/index` hoặc cảnh báo traffic bất thường), hệ thống tự động khởi tạo một thư mục riêng biệt tại `debug/captchas/captcha_{timestamp}_{id}/`.
    - **Trích xuất thông số kỹ thuật phục vụ giải CAPTCHA**: Tự động bóc tách `sitekey` (tham số `k=`), token bảo mật `data-s` (tham số `s=`), form inputs (`continue`, `q`), cookies phiên duyệt, User-Agent, địa chỉ IP bị chặn vào tệp `meta.json`.
-   - **Lưu trữ toàn diện artifacts**: Tự động chụp ảnh toàn màn hình (`screenshot.png`), lưu toàn bộ mã nguồn HTML (`page.html`), chụp riêng khung thử thách (`challenge.png`), và lưu file âm thanh gốc (`audio.mp3`, `audio.wav`) cùng văn bản nhận diện để phục vụ việc huấn luyện hoặc tích hợp dịch vụ giải CAPTCHA bên ngoài (2Captcha, CapSolver, Whisper).
+7. **[ĐÃ HOÀN TẤT] Bộ Kiểm Thử Tự Động Dựa Trên Dữ Liệu Web Thực Tế (Real Web Data Unit Tests)**:
+   - **Đóng gói Test Fixtures thực tế**: Lưu trữ snapshot dữ liệu thực từ Google Maps tại `tests/fixtures/real_preview.txt` (payload XHR `/maps/preview/place`) và `tests/fixtures/real_place.html` (`APP_INITIALIZATION_STATE` cùng cấu trúc DOM hoàn chỉnh).
+   - **Kiểm thử Schema & Kiểu dữ liệu theo Mục 4**: Xác thực toàn bộ 27+ thuộc tính dữ liệu (`name`, `place_id`, `latitude`, `longitude`, `plus_code`, `address`, `street`, `sublocality`, `district`, `city`, `postal_code`, `country_code`, `rating`, `reviews_count`, `price_level`, `categories`, `phone`, `website`, `open_status`, `opening_hours`, `timezone`, `amenities`, `photos_count`, `photos`, `thumbnail`, `is_claimed`).
+   - **Kiểm thử Khôi phục Dấu Tiếng Việt**: Đảm bảo các trường địa chỉ chi tiết (`street`, `sublocality`, `district`, `city`) giữ nguyên và phục hồi chính xác dấu tiếng Việt.
+   - **Kiểm thử Lọc Trường Tùy Biến (`fields`)**: Xác thực khả năng trích xuất đúng tập thuộc tính được chỉ định và giữ nguyên thứ tự mong muốn.
+   - **Kiểm thử Helpers & Solver**: Kiểm thử URL builder, regex vượt consent đa ngôn ngữ, selector feed, và các alias của `RecaptchaSolver`.
+   - **Chạy hoàn toàn Offline & Tốc độ cao**: 19 unit tests chạy độc lập không cần mạng trong ~0.4s, vượt qua 100% `ruff check` (0 lỗi) và `ruff format`.
 
 ### Kế hoạch phát triển tính năng (Feature Roadmap):
 
