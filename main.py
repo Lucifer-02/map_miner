@@ -14,10 +14,10 @@ logging.basicConfig(
 def main():
     pois = asyncio.run(
         scrape_google_maps(
-            queries={"cafe"},
-            max_places=10,
+            queries={"cafe", "atm", "hospital", "school"},
+            max_places=120,
             lang="en",
-            headless=False,
+            headless=True,
             geo_coordinates=Point(20.985322, 105.781289),
             zoom=18,
             fields=None,
@@ -26,7 +26,7 @@ def main():
             #     "username": "spp86iv7zu",
             #     "password": "6yoqpXiuaF5bT_83sV",
             # },
-            n_semaphore=8,
+            n_semaphore=12,
         )
     )
 

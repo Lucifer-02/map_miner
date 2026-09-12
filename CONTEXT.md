@@ -240,6 +240,10 @@ uv run main.py
    - **Giảm 85% – 90% số lượng HTTP requests**: Mỗi địa điểm chỉ kích hoạt đúng 1 request XHR tới `/maps/preview/place`, triệt tiêu 15–20 requests tải script JS/HTML thừa thãi.
    - **Tăng tốc độ thu thập**: Giảm thời gian bóc tách mỗi địa điểm xuống chỉ còn ~0.3s – 0.5s.
    - **Tương thích ngược**: Bổ sung cờ `use_spa: bool = True` vào `scrape_google_maps` (mặc định kích hoạt SPA, vẫn giữ chế độ cào đa trang truyền thống làm phương án dự phòng).
+6. **[ĐÃ HOÀN TẤT] Tự động thu thập dữ liệu chẩn đoán CAPTCHA (Automatic CAPTCHA Diagnostic Capture)**:
+   - **Tích hợp `save_captcha_diagnostics`**: Khi phát hiện CAPTCHA (URL `sorry/index` hoặc cảnh báo traffic bất thường), hệ thống tự động khởi tạo một thư mục riêng biệt tại `debug/captchas/captcha_{timestamp}_{id}/`.
+   - **Trích xuất thông số kỹ thuật phục vụ giải CAPTCHA**: Tự động bóc tách `sitekey` (tham số `k=`), token bảo mật `data-s` (tham số `s=`), form inputs (`continue`, `q`), cookies phiên duyệt, User-Agent, địa chỉ IP bị chặn vào tệp `meta.json`.
+   - **Lưu trữ toàn diện artifacts**: Tự động chụp ảnh toàn màn hình (`screenshot.png`), lưu toàn bộ mã nguồn HTML (`page.html`), chụp riêng khung thử thách (`challenge.png`), và lưu file âm thanh gốc (`audio.mp3`, `audio.wav`) cùng văn bản nhận diện để phục vụ việc huấn luyện hoặc tích hợp dịch vụ giải CAPTCHA bên ngoài (2Captcha, CapSolver, Whisper).
 
 ### Kế hoạch phát triển tính năng (Feature Roadmap):
 

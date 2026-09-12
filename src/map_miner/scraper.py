@@ -55,7 +55,8 @@ LAUNCH_ARGS = [
 ]
 
 # Resource types to abort across all pages (Search and Detail)
-BLOCKED_RESOURCE_TYPES = {"image", "media", "font", "stylesheet"}
+# Note: 'stylesheet' is preserved so Google Maps can compute layout and infinite scroll correctly
+BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
 
 # URL substrings to abort (Map vector/satellite tiles, tracking, telemetry, photo CDN)
 BLOCKED_URL_PATTERNS = [
@@ -204,11 +205,10 @@ async def get_place_urls(
             > 0
         ):
             logger.warning("🚨 CAPTCHA detected on search page!")
-            os.makedirs("debug", exist_ok=True)
-            await search_page.screenshot(
-                path=f"debug/captcha_search_{int(time.time())}.png"
-            )
             recaptcha_solver = RecaptchaSolver(search_page)
+            await recaptcha_solver.save_captcha_diagnostics(
+                reason="get_place_urls_captcha"
+            )
             await recaptcha_solver.solveCaptcha()
 
         # Check if single result redirect happened
@@ -242,17 +242,23 @@ async def get_place_urls(
             logger.error("Could not find results feed selector on search page.")
             return place_links
 
+        feed_locator = search_page.locator(active_feed_selector)
         last_height = await search_page.evaluate(
             f"document.querySelector('{active_feed_selector}').scrollHeight"
         )
         scroll_attempts_no_new = 0
 
         while True:
-            # Scroll feed down
+            # Scroll feed down using mouse wheel and container scroll
+            try:
+                await feed_locator.hover()
+                await search_page.mouse.wheel(0, 5000)
+            except Exception:
+                pass
             await search_page.evaluate(
-                f"document.querySelector('{active_feed_selector}').scrollTop = document.querySelector('{active_feed_selector}').scrollHeight"
+                f"const el = document.querySelector('{active_feed_selector}'); if (el) el.scrollTop = el.scrollHeight;"
             )
-            await asyncio.sleep(random.uniform(0.7, 1.3))
+            await asyncio.sleep(random.uniform(1.0, 1.6))
 
             # Extract place links from feed
             current_links_list = await search_page.locator(
@@ -280,12 +286,13 @@ async def get_place_urls(
             ]
             is_at_end = False
             for marker in end_markers:
-                if await search_page.locator(marker).count() > 0:
+                loc = search_page.locator(marker)
+                if await loc.count() > 0 and await loc.first.is_visible():
                     is_at_end = True
                     break
 
-            if is_at_end:
-                logger.debug("Reached end of results list marker.")
+            if is_at_end and not new_links:
+                logger.debug("Reached end of results list marker and no new links.")
                 break
 
             if new_height == last_height and not new_links:
@@ -360,12 +367,11 @@ async def scrape_query_spa(
             ).count()
             > 0
         ):
-            logger.warning("🚨 CAPTCHA detected on search page!")
-            os.makedirs("debug", exist_ok=True)
-            await search_page.screenshot(
-                path=f"debug/captcha_search_{int(time.time())}.png"
-            )
+            logger.warning("🚨 CAPTCHA detected on search page (SPA)!")
             recaptcha_solver = RecaptchaSolver(search_page)
+            await recaptcha_solver.save_captcha_diagnostics(
+                reason="search_page_spa_captcha"
+            )
             await recaptcha_solver.solveCaptcha()
 
         # Check if single result redirect happened
@@ -488,10 +494,16 @@ async def scrape_query_spa(
                 break
 
             # Scroll feed down to load more items
+            feed_locator = search_page.locator(active_feed_selector)
+            try:
+                await feed_locator.hover()
+                await search_page.mouse.wheel(0, 5000)
+            except Exception:
+                pass
             await search_page.evaluate(
-                f"document.querySelector('{active_feed_selector}').scrollTop = document.querySelector('{active_feed_selector}').scrollHeight"
+                f"const el = document.querySelector('{active_feed_selector}'); if (el) el.scrollTop = el.scrollHeight;"
             )
-            await asyncio.sleep(random.uniform(0.8, 1.4))
+            await asyncio.sleep(random.uniform(1.0, 1.6))
 
             # Check for end of list markers (multi-lingual)
             end_markers = [
@@ -501,19 +513,31 @@ async def scrape_query_spa(
             ]
             is_at_end = False
             for marker in end_markers:
-                if await search_page.locator(marker).count() > 0:
+                loc = search_page.locator(marker)
+                if await loc.count() > 0 and await loc.first.is_visible():
                     is_at_end = True
                     break
 
-            if is_at_end:
-                logger.debug("Reached end of results list marker in SPA feed.")
+            remaining_links = await search_page.locator(
+                f'{active_feed_selector} a[href*="/maps/place/"]'
+            ).evaluate_all("els => els.map(a => a.href.split('?')[0])")
+            has_unprocessed = any(l not in processed_links for l in remaining_links)
+
+            if is_at_end and not has_unprocessed and not found_new_in_batch:
+                logger.debug(
+                    "Reached end of results list marker in SPA feed and all items processed."
+                )
                 break
 
             new_height = await search_page.evaluate(
                 f"document.querySelector('{active_feed_selector}').scrollHeight"
             )
 
-            if new_height == last_height and not found_new_in_batch:
+            if (
+                new_height == last_height
+                and not found_new_in_batch
+                and not has_unprocessed
+            ):
                 scroll_attempts_no_new += 1
                 await asyncio.sleep(1.5)
                 if scroll_attempts_no_new >= MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS:
@@ -644,8 +668,10 @@ async def process_link(
                 current_url = page.url
                 if "sorry/index" in current_url:
                     logger.warning("  🚨 CAPTCHA detected (URL)!")
-                    os.makedirs("debug", exist_ok=True)
-                    await page.screenshot(path=f"debug/captcha_{int(start_time)}.png")
+                    solver = RecaptchaSolver(page)
+                    await solver.save_captcha_diagnostics(
+                        reason="process_link_sorry_url"
+                    )
                     if attempt < max_retries:
                         await asyncio.sleep(random.uniform(1.0, 2.0))
                         continue
@@ -655,9 +681,9 @@ async def process_link(
                     body_text = await page.inner_text("body", timeout=1500)
                     if "Our systems have detected unusual traffic" in body_text:
                         logger.warning("  🚨 CAPTCHA detected (Text check)!")
-                        os.makedirs("debug", exist_ok=True)
-                        await page.screenshot(
-                            path=f"debug/captcha_{int(start_time)}.png"
+                        solver = RecaptchaSolver(page)
+                        await solver.save_captcha_diagnostics(
+                            reason="process_link_unusual_traffic_text"
                         )
                         if attempt < max_retries:
                             await asyncio.sleep(random.uniform(1.0, 2.0))
