@@ -8,10 +8,11 @@ from .scraper import (
     DEFAULT_PROXY_BYPASS,
     ProxyRotator,
     create_browser_context,
+    extract_coordinates_from_url,
     scrape_google_maps,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "DEFAULT_PROXY_BYPASS",
@@ -19,6 +20,7 @@ __all__ = [
     "RecaptchaSolver",
     "__version__",
     "create_browser_context",
+    "extract_coordinates_from_url",
     "extract_place_data",
     "scrape_google_maps",
 ]

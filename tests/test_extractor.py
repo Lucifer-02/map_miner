@@ -31,7 +31,7 @@ def test_parse_address_string_fallback():
     assert res["street"] == "123 Tran Phu"
     assert res["sublocality"] == "Van Quan"
     assert res["district"] == "Ha Dong"
-    assert "Ha Noi" in res["city"]
+    assert res["city"] is not None and "Ha Noi" in res["city"]
     assert res["postal_code"] == "100000"
 
 

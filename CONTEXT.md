@@ -126,6 +126,7 @@ Tệp [`main.py`](file:///data/IMPORTANT/map_miner/main.py) đóng vai trò làm
   - `headless: bool = False`: Chế độ chạy trình duyệt ẩn (`True`) hoặc hiện cửa sổ trực quan (`False`).
   - `fields: Sequence[str] | set[str] | None = None`: Danh sách các trường dữ liệu tùy biến cần lấy. Nếu là `None`, bóc tách toàn bộ 27+ trường dữ liệu chuẩn.
   - `use_spa: bool = True`: Bật chế độ SPA Navigation tốc độ cao (mặc định: `True`).
+  - `range_limit: float | None = None`: Giới hạn bán kính địa lý tối đa (tính theo mét) tính từ `geo_coordinates`. Kích hoạt cơ chế Early Drop và Early Exit khi các địa điểm nằm ngoài bán kính này (mặc định: `None`).
 - **Xử lý đầu ra**:
   - Nhận về đối tượng `polars.DataFrame`.
   - Hỗ trợ xuất dữ liệu trực tiếp sang Excel (`pois.write_excel("out.xlsx")`), Parquet hoặc CSV.
@@ -178,6 +179,14 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
 - Toàn bộ các đối tượng trang `search_page` và detail `page` được bọc chặt chẽ trong khối `try ... finally: if page and not page.is_closed(): await page.close()`, triệt tiêu hoàn toàn nguy cơ rò rỉ tab trình duyệt hoặc cạn kiệt RAM.
 - Ẩn dấu vết tự động hóa bằng cách xóa thuộc tính `navigator.webdriver` qua `context.add_init_script`, giả lập viewport ngẫu nhiên và cờ `--disable-blink-features=AutomationControlled`.
 - Chuyển đổi dữ liệu sang Polars bằng `pl.from_dicts(results, infer_schema_length=None)` quét toàn bộ tập dữ liệu, ngăn chặn lỗi schema inference khi các hàng đầu tiên chứa giá trị null ở các cột phức tạp (`opening_hours`, `photos`).
+
+#### 6. Cơ Chế Early Drop & Early Exit Theo Bán Kính (`range_limit`):
+- Khi chỉ định `range_limit` (mét):
+  - Hàm [`extract_coordinates_from_url`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) bóc tách tọa độ `(lat, lon)` trực tiếp từ URL của thẻ địa điểm trên feed (hỗ trợ format protobuf `!3d<lat>...!4d<lon>` và viewport `@<lat>,<lon>`).
+  - Khoảng cách địa lý tính bằng `geopy.distance.geodesic((center_lat, center_lon), (lat, lon)).meters`.
+  - **Early Drop**: Bỏ qua không click thẻ địa điểm và không đợi preview XHR nếu khoảng cách > `range_limit`, đánh dấu `processed_links.add(canonical_link)` để tránh quét lại, tiết kiệm tối đa thời gian và tài nguyên duyệt.
+  - **Early Exit**: Do Google Maps trả kết quả sắp xếp từ gần ra xa, khi số lượng địa điểm liên tiếp vượt quá bán kính đạt ngưỡng `MAX_CONSECUTIVE_OUT_OF_RANGE = 3`, hệ thống ghi nhận log info và tự động ngắt cuộn feed (`break`), kết thúc thu thập ngay lập tức khi khu vực tìm kiếm đã cạn kết quả hợp lệ.
+  - Áp dụng đồng bộ trên cả **SPA Navigation mode** (`scrape_query_spa`) và **Fallback mode** (`get_place_urls`).
 
 ---
 
@@ -323,10 +332,10 @@ make run
 
 ### 5.4. Bộ Kiểm Thử Tự Động Toàn Diện (Unit Tests)
 
-Dự án sở hữu bộ kiểm thử tự động gồm **41 unit tests độc lập** chạy hoàn toàn offline không phụ thuộc mạng bên ngoài, thực thi nhanh chóng (~0.4s – 0.6s) và đạt tỷ lệ pass **100%**, tuân thủ 0 lỗi linter từ Ruff:
+Dự án sở hữu bộ kiểm thử tự động gồm **47 unit tests độc lập** chạy hoàn toàn offline không phụ thuộc mạng bên ngoài, thực thi nhanh chóng (~0.4s – 0.6s) và đạt tỷ lệ pass **100%**, tuân thủ 0 lỗi linter từ Ruff:
 
 ```bash
-# Chạy toàn bộ 41 unit tests
+# Chạy toàn bộ 47 unit tests
 uv run pytest
 
 # Kiểm tra cú pháp và định dạng mã nguồn chuẩn PEP 8
@@ -334,7 +343,7 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-#### Phân bổ 41 Unit Tests trong Codebase:
+#### Phân bổ 47 Unit Tests trong Codebase:
 1. **[`tests/test_extractor.py`](file:///data/IMPORTANT/map_miner/tests/test_extractor.py) (8 tests)**:
    - `test_safe_get`: Kiểm thử truy cập an toàn trên cấu trúc lồng nhau sâu.
    - `test_strip_accents`: Kiểm thử loại bỏ dấu tiếng Việt chuẩn Unicode NFD.
@@ -355,7 +364,7 @@ uv run ruff format .
 3. **[`tests/test_recaptcha.py`](file:///data/IMPORTANT/map_miner/tests/test_recaptcha.py) (2 tests)**:
    - `test_recaptcha_solver_init`: Kiểm thử khởi tạo đối tượng solver và trạng thái debug.
    - `test_recaptcha_solver_aliases`: Kiểm thử các bí danh tương thích ngược (`solveCaptcha`, `solveAudioCaptcha`, `isSolved`).
-4. **[`tests/test_scraper.py`](file:///data/IMPORTANT/map_miner/tests/test_scraper.py) (25 tests)**:
+4. **[`tests/test_scraper.py`](file:///data/IMPORTANT/map_miner/tests/test_scraper.py) (31 tests)**:
    - `test_make_place_url`: Kiểm thử xây dựng URL tìm kiếm Google Maps định dạng tọa độ & ngôn ngữ.
    - `test_consent_regex`: Kiểm thử nhận diện nút consent trên 6+ ngôn ngữ khác nhau.
    - `test_blocked_resources_and_urls`: Kiểm thử danh mục tài nguyên bị chặn (images, fonts, tiles, analytics).
@@ -381,6 +390,12 @@ uv run ruff format .
    - `test_scrape_google_maps_without_cache_dir`: Kiểm thử không gán cờ disk cache khi `cache_dir=None`.
    - `test_scrape_google_maps_default_cache_dir`: Kiểm thử gán cache mặc định `DEFAULT_CACHE_DIR` (`.cache/chromium_cache`) và kích hoạt cờ disk cache.
    - `test_blocked_url_patterns_includes_telemetry`: Kiểm thử các mẫu URL lọc telemetry và photometa mới (`client_204`, `cspreport`, `/maps/photometa`).
+   - `test_extract_coordinates_from_url`: Kiểm thử trích xuất tọa độ từ Google Maps URL (định dạng protobuf `!3d!4d`, viewport `@lat,lon`, URL-encoded, và xử lý an toàn input rác/lỗi).
+   - `test_spa_early_drop`: Kiểm thử cơ chế Early Drop trong SPA mode loại bỏ thẻ địa điểm ngoài bán kính trước khi click và không gọi XHR preview.
+   - `test_spa_early_exit`: Kiểm thử cơ chế Early Exit trong SPA mode dừng cuộn feed ngay khi số địa điểm liên tiếp ngoài bán kính đạt `MAX_CONSECUTIVE_OUT_OF_RANGE = 3`.
+   - `test_get_place_urls_early_drop_and_early_exit`: Kiểm thử Early Drop và Early Exit trong chế độ Multi-page Fallback `get_place_urls`.
+   - `test_scrape_google_maps_range_limit_default_none_backward_compatible`: Kiểm thử tương thích ngược 100% khi không truyền `range_limit` (mặc định `None`).
+   - `test_scrape_google_maps_forwards_range_limit`: Kiểm thử chuyển tiếp chính xác tham số `range_limit` sang cả SPA và Fallback modes.
 
 ---
 
@@ -425,6 +440,13 @@ uv run ruff format .
     - Tích hợp bypass vào cấu hình proxy mẫu trong `main.py`.
     - Tiết kiệm lưu lượng và chi phí proxy dân cư, đồng thời tăng tốc độ tải trang do các static assets được tải trực tiếp từ CDN Google với độ trễ tối thiểu.
     - Bổ sung 2 unit tests chuyên biệt (`test_proxy_rotator_with_bypass`, `test_create_browser_context_with_proxy_bypass`), nâng tổng số unit tests lên 41 tests, đạt 100% pass.
+12. **[ĐÃ HOÀN TẤT] Tính Năng Early Drop & Early Exit Theo Bán Kính (`range_limit`)**:
+    - Bổ sung tham số `range_limit: float | None = None` (tính theo mét) vào `scrape_google_maps`, `scrape_query_spa`, và `get_place_urls`.
+    - Triển khai tiện ích `extract_coordinates_from_url` nhận diện tọa độ địa lý WGS84 từ các mẫu URL Google Maps phổ biến (`!3d...4d` và `@...`).
+    - Tính khoảng cách địa lý chính xác bằng `geopy.distance.geodesic((center_lat, center_lon), (lat, lon)).meters`.
+    - **Early Drop**: Tự động loại bỏ và đánh dấu `processed_links` các địa điểm nằm ngoài bán kính trước khi click hoặc chờ XHR preview, loại bỏ hoàn toàn request thừa.
+    - **Early Exit**: Tận dụng cơ chế trả kết quả từ gần ra xa của Google Maps để tự động ngắt cuộn feed khi số địa điểm liên tiếp ngoài bán kính đạt ngưỡng `MAX_CONSECUTIVE_OUT_OF_RANGE = 3`.
+    - Bổ sung 6 unit tests chuyên biệt, nâng tổng số tests lên **47 unit tests**, đạt tỷ lệ pass **100%** và 0 lỗi Ruff linter.
 
 ---
 

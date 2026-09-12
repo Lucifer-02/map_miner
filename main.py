@@ -3,7 +3,7 @@ import logging
 
 from geopy.point import Point
 
-from map_miner import DEFAULT_PROXY_BYPASS, scrape_google_maps
+from map_miner import scrape_google_maps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,12 +30,12 @@ def main():
             geo_coordinates=Point(21.018785, 105.830415),
             zoom=18,
             fields=None,
-            proxy={
-                "server": "http://gate.decodo.com:10000",
-                "username": "spp86iv7zu",
-                "password": "6yoqpXiuaF5bT_83sV",
-                "bypass": DEFAULT_PROXY_BYPASS,
-            },
+            # proxy={
+            #     "server": "http://gate.decodo.com:10000",
+            #     "username": "spp86iv7zu",
+            #     "password": "6yoqpXiuaF5bT_83sV",
+            #     "bypass": DEFAULT_PROXY_BYPASS,
+            # },
             n_semaphore=12,
         )
     )

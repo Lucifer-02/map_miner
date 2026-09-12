@@ -6,10 +6,11 @@ import re
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote_plus, unquote
 
 import polars as pl
+from geopy.distance import geodesic
 from geopy.point import Point
 from playwright.async_api import (
     Browser,
@@ -35,6 +36,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
 MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
     5  # Allow enough attempts for slow network / lazy load
+)
+MAX_CONSECUTIVE_OUT_OF_RANGE = (
+    3  # Threshold for early exit when places exceed range_limit
 )
 DEFAULT_CACHE_DIR = Path(".cache") / "chromium_cache"
 DEFAULT_DISK_CACHE_SIZE = 1073741824  # 1 GB
@@ -140,7 +144,7 @@ def _normalize_proxy(proxy: Any) -> ProxySettings | None:
         norm["server"] = str(norm["server"]).strip()
         if "bypass" in norm and norm["bypass"] is not None:
             norm["bypass"] = str(norm["bypass"]).strip()
-        return norm  # type: ignore[return-value]
+        return cast(ProxySettings, norm)
     if isinstance(proxy, str) and proxy.strip():
         return {"server": proxy.strip()}
     return None
@@ -154,7 +158,12 @@ class ProxyRotator:
     def __init__(
         self,
         proxy: (
-            ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None
+            ProxySettings
+            | dict[str, Any]
+            | Sequence[ProxySettings | dict[str, Any] | Any]
+            | str
+            | Sequence[str]
+            | None
         ) = None,
     ) -> None:
         self._proxies: list[ProxySettings] = []
@@ -193,7 +202,14 @@ async def create_browser_context(
     browser: Browser,
     geo_coordinates: Point | None = None,
     lang: str = "en",
-    proxy: ProxySettings | None = None,
+    proxy: (
+        ProxySettings
+        | dict[str, Any]
+        | Sequence[ProxySettings | dict[str, Any] | Any]
+        | str
+        | Sequence[str]
+        | None
+    ) = None,
 ) -> BrowserContext:
     """
     Creates and configures an isolated BrowserContext with proxy settings,
@@ -417,6 +433,50 @@ def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
     return True
 
 
+def extract_coordinates_from_url(url: str) -> tuple[float, float] | None:
+    """
+    Extracts geographic coordinates (latitude, longitude) from a Google Maps URL.
+
+    Matches formats:
+    1. Feed / detail link protobuf format: '!3d<lat>...!4d<lon>'
+    2. Viewport coordinate format: '@<lat>,<lon>'
+
+    Args:
+        url (str): The Google Maps URL string.
+
+    Returns:
+        tuple[float, float] | None: (latitude, longitude) tuple or None if not found/invalid.
+    """
+    if not url or not isinstance(url, str):
+        return None
+
+    decoded_url = unquote(url)
+
+    # 1. Primary feed / place protobuf format: !3d<lat>...!4d<lon>
+    match = re.search(r"!3d(-?\d+(?:\.\d+)?).*?!4d(-?\d+(?:\.\d+)?)", decoded_url)
+    if match:
+        try:
+            lat = float(match.group(1))
+            lon = float(match.group(2))
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                return lat, lon
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Fallback viewport format: @<lat>,<lon>
+    match = re.search(r"@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)", decoded_url)
+    if match:
+        try:
+            lat = float(match.group(1))
+            lon = float(match.group(2))
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                return lat, lon
+        except (ValueError, TypeError):
+            pass
+
+    return None
+
+
 async def get_place_urls(
     context: BrowserContext,
     max_places: int,
@@ -424,10 +484,26 @@ async def get_place_urls(
     geo_coordinates: Point,
     zoom: float,
     lang: str = "en",
+    range_limit: float | None = None,
 ) -> set[str]:
     """
     Navigates the search feed and scrolls to collect place links.
     Used in multi-page fallback mode.
+    Supports early drop and early exit when places exceed range_limit.
+
+    Args:
+        context (BrowserContext): Isolated browser context.
+        max_places (int): Maximum number of place links to collect.
+        query (str): Search query string.
+        geo_coordinates (Point): Center coordinates for search.
+        zoom (float): Map zoom level.
+        lang (str, optional): Language code. Defaults to "en".
+        range_limit (float | None, optional): Maximum radius distance in meters
+            from geo_coordinates. Places beyond this limit are dropped, and scrolling stops
+            when consecutive places exceed this limit. Defaults to None.
+
+    Returns:
+        set[str]: Collected place URLs.
     """
     search_page = await context.new_page()
     if not search_page:
@@ -454,12 +530,42 @@ async def get_place_urls(
         # Check if single result redirect happened
         if "/maps/place/" in search_page.url:
             logger.debug("Detected single place redirect.")
+            if range_limit is not None:
+                coords = extract_coordinates_from_url(search_page.url)
+                if coords is not None:
+                    dist = geodesic(
+                        (geo_coordinates.latitude, geo_coordinates.longitude),
+                        coords,
+                    ).meters
+                    if dist > range_limit:
+                        logger.info(
+                            "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                            search_page.url,
+                            dist,
+                            range_limit,
+                        )
+                        return place_links
             place_links.add(search_page.url)
             return place_links
 
         active_feed_selector = await find_feed_selector(search_page)
         if not active_feed_selector:
             if "/maps/place/" in search_page.url:
+                if range_limit is not None:
+                    coords = extract_coordinates_from_url(search_page.url)
+                    if coords is not None:
+                        dist = geodesic(
+                            (geo_coordinates.latitude, geo_coordinates.longitude),
+                            coords,
+                        ).meters
+                        if dist > range_limit:
+                            logger.info(
+                                "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                                search_page.url,
+                                dist,
+                                range_limit,
+                            )
+                            return place_links
                 place_links.add(search_page.url)
                 return place_links
             logger.error("Could not find results feed selector on search page.")
@@ -470,6 +576,9 @@ async def get_place_urls(
             active_feed_selector,
         )
         scroll_attempts_no_new = 0
+        processed_links: set[str] = set()
+        consecutive_out_of_range = 0
+        early_exit = False
 
         while True:
             await scroll_feed(search_page, active_feed_selector)
@@ -477,15 +586,60 @@ async def get_place_urls(
             current_links_list = await search_page.locator(
                 f'{active_feed_selector} a[href*="/maps/place/"]'
             ).evaluate_all("elements => elements.map(a => a.href)")
-            current_links = set(current_links_list)
-            new_links = current_links - place_links
-            place_links.update(current_links)
-            logger.debug("Found %d unique place links so far...", len(place_links))
+
+            new_links_count = 0
+
+            for link in current_links_list:
+                if not link:
+                    continue
+
+                canonical_link = link.split("?")[0]
+                if canonical_link in processed_links:
+                    continue
+
+                if range_limit is not None:
+                    coords = extract_coordinates_from_url(link)
+                    if coords is not None:
+                        dist = geodesic(
+                            (geo_coordinates.latitude, geo_coordinates.longitude),
+                            coords,
+                        ).meters
+                        if dist > range_limit:
+                            processed_links.add(canonical_link)
+                            consecutive_out_of_range += 1
+                            logger.info(
+                                "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                                canonical_link,
+                                dist,
+                                range_limit,
+                            )
+                            if consecutive_out_of_range >= MAX_CONSECUTIVE_OUT_OF_RANGE:
+                                logger.info(
+                                    "Early exit triggered: %d consecutive places exceeded range limit (%.1fm). Stopping feed scroll.",
+                                    consecutive_out_of_range,
+                                    range_limit,
+                                )
+                                early_exit = True
+                                break
+                            continue
+                        consecutive_out_of_range = 0
+
+                processed_links.add(canonical_link)
+                place_links.add(link)
+                new_links_count += 1
+
+                if max_places is not None and len(place_links) >= max_places:
+                    logger.debug("Reached max_places limit (%d).", max_places)
+                    place_links = set(itertools.islice(place_links, max_places))
+                    break
+
+            if early_exit:
+                break
 
             if max_places is not None and len(place_links) >= max_places:
-                logger.debug("Reached max_places limit (%d).", max_places)
-                place_links = set(itertools.islice(place_links, max_places))
                 break
+
+            logger.debug("Found %d unique place links so far...", len(place_links))
 
             new_height = await search_page.evaluate(
                 "(sel) => document.querySelector(sel)?.scrollHeight || 0",
@@ -493,11 +647,11 @@ async def get_place_urls(
             )
 
             is_at_end = await is_feed_at_end(search_page)
-            if is_at_end and not new_links:
+            if is_at_end and new_links_count == 0:
                 logger.debug("Reached end of results list marker and no new links.")
                 break
 
-            if new_height == last_height and not new_links:
+            if new_height == last_height and new_links_count == 0:
                 scroll_attempts_no_new += 1
                 logger.debug(
                     "Scroll height unchanged (%d/%d).",
@@ -531,6 +685,7 @@ async def scrape_query_spa(
     max_places: int = 120,
     lang: str = "en",
     fields: Sequence[str] | set[str] | None = None,
+    range_limit: float | None = None,
 ) -> list[dict[str, Any]]:
     """
     Scrapes Google Maps places using client-side SPA navigation:
@@ -538,6 +693,22 @@ async def scrape_query_spa(
     - Clicks each place card in the feed client-side without full page reloads.
     - Intercepts /maps/preview/place XHR payloads (~90% request savings).
     - Dynamically scrolls the feed as items are consumed.
+    - Supports early drop and early exit when places exceed range_limit.
+
+    Args:
+        context (BrowserContext): Isolated browser context.
+        query (str): Search query string.
+        geo_coordinates (Point): Center coordinates for search.
+        zoom (float): Map zoom level.
+        max_places (int, optional): Maximum places to collect. Defaults to 120.
+        lang (str, optional): Language code. Defaults to "en".
+        fields (Sequence[str] | set[str] | None, optional): Selected fields. Defaults to None.
+        range_limit (float | None, optional): Maximum radius distance in meters
+            from geo_coordinates. Places beyond this limit are dropped, and scrolling stops
+            when consecutive places exceed this limit. Defaults to None.
+
+    Returns:
+        list[dict[str, Any]]: List of place dictionaries.
     """
     search_page = await context.new_page()
     if not search_page:
@@ -565,6 +736,21 @@ async def scrape_query_spa(
         # Check if single result redirect happened
         if "/maps/place/" in search_page.url:
             logger.debug("Detected single place redirect.")
+            if range_limit is not None:
+                coords = extract_coordinates_from_url(search_page.url)
+                if coords is not None:
+                    dist = geodesic(
+                        (geo_coordinates.latitude, geo_coordinates.longitude),
+                        coords,
+                    ).meters
+                    if dist > range_limit:
+                        logger.info(
+                            "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                            search_page.url,
+                            dist,
+                            range_limit,
+                        )
+                        return results
             html_content = await search_page.content()
             place_data = extract_place_data(html_content=html_content, fields=fields)
             if place_data:
@@ -583,6 +769,8 @@ async def scrape_query_spa(
             "(sel) => document.querySelector(sel)?.scrollHeight || 0",
             active_feed_selector,
         )
+        consecutive_out_of_range = 0
+        early_exit = False
 
         while max_places is None or len(results) < max_places:
             link_elements = await search_page.locator(
@@ -602,6 +790,33 @@ async def scrape_query_spa(
                 canonical_link = link.split("?")[0]
                 if canonical_link in processed_links:
                     continue
+
+                if range_limit is not None:
+                    coords = extract_coordinates_from_url(link)
+                    if coords is not None:
+                        dist = geodesic(
+                            (geo_coordinates.latitude, geo_coordinates.longitude),
+                            coords,
+                        ).meters
+                        if dist > range_limit:
+                            processed_links.add(canonical_link)
+                            consecutive_out_of_range += 1
+                            logger.info(
+                                "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                                canonical_link,
+                                dist,
+                                range_limit,
+                            )
+                            if consecutive_out_of_range >= MAX_CONSECUTIVE_OUT_OF_RANGE:
+                                logger.info(
+                                    "Early exit triggered: %d consecutive places exceeded range limit (%.1fm). Stopping feed scroll.",
+                                    consecutive_out_of_range,
+                                    range_limit,
+                                )
+                                early_exit = True
+                                break
+                            continue
+                        consecutive_out_of_range = 0
 
                 def is_matching_preview(
                     resp: Any, target: str = canonical_link
@@ -670,6 +885,9 @@ async def scrape_query_spa(
                     )
 
                 await asyncio.sleep(random.uniform(0.15, 0.35))
+
+            if early_exit:
+                break
 
             if max_places is not None and len(results) >= max_places:
                 break
@@ -863,7 +1081,14 @@ async def scrape_google_maps(
     queries: set[str],
     geo_coordinates: Point,
     zoom: float,
-    proxy: ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None = None,
+    proxy: (
+        ProxySettings
+        | dict[str, Any]
+        | Sequence[ProxySettings | dict[str, Any] | Any]
+        | str
+        | Sequence[str]
+        | None
+    ) = None,
     max_places: int = 120,
     lang: str = "en",
     headless: bool = False,
@@ -871,6 +1096,7 @@ async def scrape_google_maps(
     fields: Sequence[str] | set[str] | None = None,
     use_spa: bool = True,
     cache_dir: str | Path | None = DEFAULT_CACHE_DIR,
+    range_limit: float | None = 50000,
 ) -> pl.DataFrame:
     """
     Scrapes Google Maps for places based on queries.
@@ -890,6 +1116,9 @@ async def scrape_google_maps(
         cache_dir (str | Path | None, optional): Directory to store persistent Chromium disk cache.
             Defaults to DEFAULT_CACHE_DIR (".cache/chromium_cache"). If None, disk caching
             flags will not be passed.
+        range_limit (float | None, optional): Maximum radius distance in meters from
+            geo_coordinates. Places beyond this limit are dropped, and scrolling stops
+            when consecutive places exceed this limit. Defaults to None.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.
@@ -943,6 +1172,7 @@ async def scrape_google_maps(
                                 max_places=max_places,
                                 lang=lang,
                                 fields=fields,
+                                range_limit=range_limit,
                             )
                         finally:
                             if context:
@@ -977,6 +1207,7 @@ async def scrape_google_maps(
                                 geo_coordinates=geo_coordinates,
                                 zoom=zoom,
                                 lang=lang,
+                                range_limit=range_limit,
                             )
                         finally:
                             if context:

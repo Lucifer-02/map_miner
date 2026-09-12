@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import polars as pl
@@ -14,12 +15,16 @@ from map_miner.scraper import (
     DEFAULT_DISK_CACHE_SIZE,
     DEFAULT_PROXY_BYPASS,
     FEED_FALLBACK_SELECTORS,
+    MAX_CONSECUTIVE_OUT_OF_RANGE,
     PreviewInterceptor,
     ProxyRotator,
     create_browser_context,
+    extract_coordinates_from_url,
+    get_place_urls,
     is_preview_response_for_link,
     make_place_url,
     scrape_google_maps,
+    scrape_query_spa,
 )
 
 
@@ -477,8 +482,10 @@ def test_proxy_rotator_with_bypass():
     rotator_multi = ProxyRotator(proxies)
     assert rotator_multi.total == 2
     first = rotator_multi.get()
+    assert first is not None
     assert first["bypass"] == DEFAULT_PROXY_BYPASS
     second = rotator_multi.get()
+    assert second is not None
     assert second["bypass"] == "custom.domain.com"
 
 
@@ -928,3 +935,404 @@ def test_blocked_url_patterns_includes_telemetry():
     assert "client_204" in BLOCKED_URL_PATTERNS
     assert "cspreport" in BLOCKED_URL_PATTERNS
     assert "/maps/photometa" in BLOCKED_URL_PATTERNS
+
+
+def test_extract_coordinates_from_url():
+    """Verifies parsing coordinates from various Google Maps URL patterns and invalid inputs."""
+    # 1. Feed / detail link protobuf format (!3d<lat>...!4d<lon>)
+    url_feed = "https://www.google.com/maps/place/Cafe+A/data=!4m7!3m6!1s0x3135ac:0x123!8m2!3d21.028511!4d105.854222!16s%2Fg%2F11"
+    assert extract_coordinates_from_url(url_feed) == (21.028511, 105.854222)
+
+    url_negative = (
+        "https://www.google.com/maps/place/Sydney/data=!3d-33.8688197!4d151.2092955"
+    )
+    assert extract_coordinates_from_url(url_negative) == (-33.8688197, 151.2092955)
+
+    url_both_negative = (
+        "https://www.google.com/maps/place/Lima/data=!3d-12.0464!4d-77.0428"
+    )
+    assert extract_coordinates_from_url(url_both_negative) == (-12.0464, -77.0428)
+
+    url_integer = "https://www.google.com/maps/place/Zero/data=!3d0!4d0"
+    assert extract_coordinates_from_url(url_integer) == (0.0, 0.0)
+
+    # 2. Viewport format (@<lat>,<lon>)
+    url_viewport = (
+        "https://www.google.com/maps/place/Cafe+B/@20.985322,105.781289,17z/data=..."
+    )
+    assert extract_coordinates_from_url(url_viewport) == (20.985322, 105.781289)
+
+    url_viewport_neg = (
+        "https://www.google.com/maps/place/Melbourne/@-37.8136,144.9631,14z"
+    )
+    assert extract_coordinates_from_url(url_viewport_neg) == (-37.8136, 144.9631)
+
+    # 3. Preference: !3d!4d takes precedence over @ viewport center
+    url_combo = "https://www.google.com/maps/place/Cafe/@20.000,100.000,15z/data=!3d21.028511!4d105.854222"
+    assert extract_coordinates_from_url(url_combo) == (21.028511, 105.854222)
+
+    # 4. URL-encoded format
+    url_encoded = (
+        "https://www.google.com/maps/place/Cafe/data=%213d21.028511%214d105.854222"
+    )
+    assert extract_coordinates_from_url(url_encoded) == (21.028511, 105.854222)
+
+    # 5. Invalid / missing inputs
+    assert (
+        extract_coordinates_from_url("https://www.google.com/maps/search/cafe") is None
+    )
+    assert (
+        extract_coordinates_from_url("https://www.google.com/maps/place/Cafe") is None
+    )
+    assert extract_coordinates_from_url("") is None
+    assert extract_coordinates_from_url(cast(str, None)) is None
+    assert extract_coordinates_from_url(cast(str, 12345)) is None
+    assert (
+        extract_coordinates_from_url(
+            "https://www.google.com/maps/place/data=!3d95.0!4d200.0"
+        )
+        is None
+    )
+
+
+def test_spa_early_drop():
+    """
+    Verifies that places exceeding range_limit are early-dropped before clicking
+    and before waiting for XHR preview.
+    """
+
+    async def _run():
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.close = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        mock_page.url = "https://www.google.com/maps/search/cafe"
+        mock_page.content.return_value = "<html></html>"
+        mock_page.wait_for_selector.return_value = None
+
+        valid_blob = [None] * 20
+        valid_blob[11] = "Near Cafe"
+        valid_outer = [None, [], None, None, None, None, valid_blob]
+        valid_preview = ")]}'\n" + json.dumps(valid_outer)
+
+        mock_resp = AsyncMock()
+        mock_resp.url = (
+            "https://www.google.com/maps/preview/place/Near+Cafe/data=!1s0x1:0x1"
+        )
+        mock_resp.status = 200
+        mock_resp.ok = True
+        mock_resp.text.return_value = valid_preview
+
+        class MockExpectResponse:
+            def __init__(self, resp):
+                self.value = asyncio.Future()
+                self.value.set_result(resp)
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        mock_page.expect_response = MagicMock(
+            side_effect=lambda pred, timeout: MockExpectResponse(mock_resp)
+        )
+
+        # Place 1: in range (~150m from (21.0, 105.8))
+        el_near = AsyncMock()
+        el_near.get_attribute.return_value = "https://www.google.com/maps/place/Near+Cafe/data=!1s0x1:0x1!8m2!3d21.0010!4d105.8010"
+        el_near.evaluate.return_value = None
+
+        # Place 2: out of range (~7.5km from (21.0, 105.8))
+        el_far = AsyncMock()
+        el_far.get_attribute.return_value = "https://www.google.com/maps/place/Far+Cafe/data=!1s0x2:0x2!8m2!3d21.0500!4d105.8500"
+        el_far.evaluate.return_value = None
+
+        def mock_feed_locator(selector):
+            loc = AsyncMock()
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            if 'a[href*="/maps/place/"]' in selector:
+                loc.all.return_value = [el_near, el_far]
+                loc.evaluate_all.return_value = [
+                    "https://www.google.com/maps/place/Near+Cafe/data=!1s0x1:0x1!8m2!3d21.0010!4d105.8010",
+                    "https://www.google.com/maps/place/Far+Cafe/data=!1s0x2:0x2!8m2!3d21.0500!4d105.8500",
+                ]
+            return loc
+
+        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
+
+        from unittest.mock import patch
+
+        with patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=True)):
+            results = await scrape_query_spa(
+                context=mock_context,
+                query="cafe",
+                geo_coordinates=Point(21.0000, 105.8000),
+                zoom=16,
+                max_places=10,
+                range_limit=500.0,
+            )
+
+        assert len(results) == 1
+        assert results[0]["name"] == "Near Cafe"
+
+        # Place 1 was clicked
+        el_near.evaluate.assert_awaited_once()
+
+        # Place 2 was dropped: evaluate (click) was NOT called
+        el_far.evaluate.assert_not_awaited()
+        el_far.click.assert_not_awaited()
+
+    asyncio.run(_run())
+
+
+def test_spa_early_exit():
+    """
+    Verifies that when consecutive out-of-range places reach MAX_CONSECUTIVE_OUT_OF_RANGE,
+    early exit triggers and feed scrolling halts.
+    """
+
+    async def _run():
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.close = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        mock_page.url = "https://www.google.com/maps/search/cafe"
+        mock_page.content.return_value = "<html></html>"
+        mock_page.wait_for_selector.return_value = None
+
+        # 4 consecutive places all far out of range (> 500m)
+        far_elements = []
+        far_urls = []
+        for i in range(4):
+            el = AsyncMock()
+            url = f"https://www.google.com/maps/place/Far{i}/data=!1s0x{i}:0x{i}!8m2!3d21.05{i}0!4d105.85{i}0"
+            el.get_attribute.return_value = url
+            el.evaluate.return_value = None
+            far_elements.append(el)
+            far_urls.append(url)
+
+        def mock_feed_locator(selector):
+            loc = AsyncMock()
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            if 'a[href*="/maps/place/"]' in selector:
+                loc.all.return_value = far_elements
+                loc.evaluate_all.return_value = far_urls
+            return loc
+
+        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
+
+        from unittest.mock import patch
+
+        mock_scroll = AsyncMock()
+        with patch("map_miner.scraper.scroll_feed", mock_scroll):
+            results = await scrape_query_spa(
+                context=mock_context,
+                query="cafe",
+                geo_coordinates=Point(21.0000, 105.8000),
+                zoom=16,
+                max_places=10,
+                range_limit=500.0,
+            )
+
+        assert len(results) == 0
+        # No element was clicked
+        for el in far_elements:
+            el.evaluate.assert_not_awaited()
+            el.click.assert_not_awaited()
+
+        # Feed scroll was not continued after early exit triggered
+        assert mock_scroll.call_count == 0
+        assert MAX_CONSECUTIVE_OUT_OF_RANGE == 3
+
+    asyncio.run(_run())
+
+
+def test_get_place_urls_early_drop_and_early_exit():
+    """
+    Verifies that get_place_urls drops out-of-range links and exits early
+    when consecutive out-of-range links reach MAX_CONSECUTIVE_OUT_OF_RANGE.
+    """
+
+    async def _run():
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.close = AsyncMock()
+        mock_context.new_page.return_value = mock_page
+
+        mock_page.url = "https://www.google.com/maps/search/cafe"
+        mock_page.wait_for_selector.return_value = None
+
+        links = [
+            "https://www.google.com/maps/place/Near/data=!1s0x1:0x1!8m2!3d21.0010!4d105.8010",
+            "https://www.google.com/maps/place/Far1/data=!1s0x2:0x2!8m2!3d21.0500!4d105.8500",
+            "https://www.google.com/maps/place/Far2/data=!1s0x3:0x3!8m2!3d21.0510!4d105.8510",
+            "https://www.google.com/maps/place/Far3/data=!1s0x4:0x4!8m2!3d21.0520!4d105.8520",
+        ]
+
+        def mock_feed_locator(selector):
+            loc = AsyncMock()
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            if 'a[href*="/maps/place/"]' in selector:
+                loc.evaluate_all.return_value = links
+            return loc
+
+        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
+
+        from unittest.mock import patch
+
+        mock_scroll = AsyncMock()
+        with patch("map_miner.scraper.scroll_feed", mock_scroll):
+            place_links = await get_place_urls(
+                context=mock_context,
+                max_places=10,
+                query="cafe",
+                geo_coordinates=Point(21.0000, 105.8000),
+                zoom=16,
+                range_limit=500.0,
+            )
+
+        assert len(place_links) == 1
+        assert (
+            "https://www.google.com/maps/place/Near/data=!1s0x1:0x1!8m2!3d21.0010!4d105.8010"
+            in place_links
+        )
+        # Far links were dropped and triggered early exit on the 3rd consecutive out-of-range
+        assert not any("Far" in l for l in place_links)
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_range_limit_default_none_backward_compatible():
+    """Verifies that range_limit defaults to None and is passed through transparently."""
+
+    async def _run():
+        from unittest.mock import patch
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx.close = AsyncMock()
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        mock_spa = AsyncMock(return_value=[{"name": "Standard Cafe"}])
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.scrape_query_spa", mock_spa),
+        ):
+            df = await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+            )
+
+        assert len(df) == 1
+        assert df["name"][0] == "Standard Cafe"
+        mock_spa.assert_awaited_once()
+        assert mock_spa.call_args.kwargs.get("range_limit") is None
+
+    asyncio.run(_run())
+
+
+def test_scrape_google_maps_forwards_range_limit():
+    """Verifies that scrape_google_maps correctly forwards range_limit in both SPA and fallback modes."""
+
+    async def _run():
+        from unittest.mock import patch
+
+        class FakeBrowser:
+            def __init__(self):
+                self.is_connected = MagicMock(return_value=True)
+                self.close = AsyncMock()
+
+            async def new_context(self, **kwargs):
+                ctx = AsyncMock()
+                ctx.close = AsyncMock()
+                return ctx
+
+        fake_browser = FakeBrowser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        class MockPlaywrightContext:
+            async def __aenter__(self):
+                return mock_playwright
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                return None
+
+        mock_spa = AsyncMock(return_value=[{"name": "SPA Cafe"}])
+        mock_urls = AsyncMock(
+            return_value={"https://www.google.com/maps/place/Fallback+Cafe"}
+        )
+        mock_process = AsyncMock(return_value={"name": "Fallback Cafe"})
+
+        # 1. SPA mode with range_limit
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.scrape_query_spa", mock_spa),
+        ):
+            df_spa = await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                use_spa=True,
+                range_limit=1500.0,
+            )
+
+        assert len(df_spa) == 1
+        mock_spa.assert_awaited_once()
+        assert mock_spa.call_args.kwargs.get("range_limit") == 1500.0
+
+        # 2. Fallback mode with range_limit
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(),
+            ),
+            patch("map_miner.scraper.get_place_urls", mock_urls),
+            patch("map_miner.scraper.process_link", mock_process),
+        ):
+            df_fallback = await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                use_spa=False,
+                range_limit=2500.0,
+            )
+
+        assert len(df_fallback) == 1
+        mock_urls.assert_awaited_once()
+        assert mock_urls.call_args.kwargs.get("range_limit") == 2500.0
+
+    asyncio.run(_run())
