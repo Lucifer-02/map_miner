@@ -180,12 +180,12 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
 - Ẩn dấu vết tự động hóa bằng cách xóa thuộc tính `navigator.webdriver` qua `context.add_init_script`, giả lập viewport ngẫu nhiên và cờ `--disable-blink-features=AutomationControlled`.
 - Chuyển đổi dữ liệu sang Polars bằng `pl.from_dicts(results, infer_schema_length=None)` quét toàn bộ tập dữ liệu, ngăn chặn lỗi schema inference khi các hàng đầu tiên chứa giá trị null ở các cột phức tạp (`opening_hours`, `photos`).
 
-#### 6. Cơ Chế Early Drop & Early Exit Theo Bán Kính (`range_limit`):
+#### 6. Cơ Chế Early Drop Theo Bán Kính (`range_limit`):
 - Khi chỉ định `range_limit` (mét):
   - Hàm [`extract_coordinates_from_url`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) bóc tách tọa độ `(lat, lon)` trực tiếp từ URL của thẻ địa điểm trên feed (hỗ trợ format protobuf `!3d<lat>...!4d<lon>` và viewport `@<lat>,<lon>`).
   - Khoảng cách địa lý tính bằng `geopy.distance.geodesic((center_lat, center_lon), (lat, lon)).meters`.
   - **Early Drop**: Bỏ qua không click thẻ địa điểm và không đợi preview XHR nếu khoảng cách > `range_limit`, đánh dấu `processed_links.add(canonical_link)` để tránh quét lại, tiết kiệm tối đa thời gian và tài nguyên duyệt.
-  - **Early Exit**: Do Google Maps trả kết quả sắp xếp từ gần ra xa, khi số lượng địa điểm liên tiếp vượt quá bán kính đạt ngưỡng `MAX_CONSECUTIVE_OUT_OF_RANGE = 3`, hệ thống ghi nhận log info và tự động ngắt cuộn feed (`break`), kết thúc thu thập ngay lập tức khi khu vực tìm kiếm đã cạn kết quả hợp lệ.
+  - **Loại Bỏ Early Exit**: Loại bỏ logic dừng sớm khi gặp các kết quả ngoài bán kính liên tiếp nhằm tránh việc dừng cuộn feed sớm khi Google Maps trả về các kết quả ngoài bán kính xen kẽ (chẳng hạn như địa điểm tài trợ/quảng cáo hoặc gợi ý liên quan), đảm bảo thu thập đầy đủ tất cả các địa điểm hợp lệ trong bán kính cho đến khi cuộn hết danh sách kết quả (`end-of-list`).
   - Áp dụng đồng bộ trên cả **SPA Navigation mode** (`scrape_query_spa`) và **Fallback mode** (`get_place_urls`).
 
 ---
@@ -392,8 +392,8 @@ uv run ruff format .
    - `test_blocked_url_patterns_includes_telemetry`: Kiểm thử các mẫu URL lọc telemetry và photometa mới (`client_204`, `cspreport`, `/maps/photometa`).
    - `test_extract_coordinates_from_url`: Kiểm thử trích xuất tọa độ từ Google Maps URL (định dạng protobuf `!3d!4d`, viewport `@lat,lon`, URL-encoded, và xử lý an toàn input rác/lỗi).
    - `test_spa_early_drop`: Kiểm thử cơ chế Early Drop trong SPA mode loại bỏ thẻ địa điểm ngoài bán kính trước khi click và không gọi XHR preview.
-   - `test_spa_early_exit`: Kiểm thử cơ chế Early Exit trong SPA mode dừng cuộn feed ngay khi số địa điểm liên tiếp ngoài bán kính đạt `MAX_CONSECUTIVE_OUT_OF_RANGE = 3`.
-   - `test_get_place_urls_early_drop_and_early_exit`: Kiểm thử Early Drop và Early Exit trong chế độ Multi-page Fallback `get_place_urls`.
+   - `test_spa_no_early_exit_on_consecutive_out_of_range`: Kiểm thử SPA mode không ngắt sớm khi gặp chuỗi địa điểm ngoài bán kính liên tiếp, thực hiện Early Drop không click thẻ và tiếp tục cuộn feed.
+   - `test_get_place_urls_early_drop`: Kiểm thử chế độ Multi-page Fallback `get_place_urls` thực hiện Early Drop các link ngoài bán kính và tiếp tục cuộn feed mà không dừng do ngưỡng liên tiếp.
    - `test_scrape_google_maps_range_limit_default_none_backward_compatible`: Kiểm thử tương thích ngược 100% khi không truyền `range_limit` (mặc định `None`).
    - `test_scrape_google_maps_forwards_range_limit`: Kiểm thử chuyển tiếp chính xác tham số `range_limit` sang cả SPA và Fallback modes.
 
@@ -440,13 +440,13 @@ uv run ruff format .
     - Tích hợp bypass vào cấu hình proxy mẫu trong `main.py`.
     - Tiết kiệm lưu lượng và chi phí proxy dân cư, đồng thời tăng tốc độ tải trang do các static assets được tải trực tiếp từ CDN Google với độ trễ tối thiểu.
     - Bổ sung 2 unit tests chuyên biệt (`test_proxy_rotator_with_bypass`, `test_create_browser_context_with_proxy_bypass`), nâng tổng số unit tests lên 41 tests, đạt 100% pass.
-12. **[ĐÃ HOÀN TẤT] Tính Năng Early Drop & Early Exit Theo Bán Kính (`range_limit`)**:
+12. **[ĐÃ HOÀN TẤT] Tính Năng Early Drop Theo Bán Kính (`range_limit`) & Loại Bỏ Early Exit**:
     - Bổ sung tham số `range_limit: float | None = None` (tính theo mét) vào `scrape_google_maps`, `scrape_query_spa`, và `get_place_urls`.
     - Triển khai tiện ích `extract_coordinates_from_url` nhận diện tọa độ địa lý WGS84 từ các mẫu URL Google Maps phổ biến (`!3d...4d` và `@...`).
     - Tính khoảng cách địa lý chính xác bằng `geopy.distance.geodesic((center_lat, center_lon), (lat, lon)).meters`.
     - **Early Drop**: Tự động loại bỏ và đánh dấu `processed_links` các địa điểm nằm ngoài bán kính trước khi click hoặc chờ XHR preview, loại bỏ hoàn toàn request thừa.
-    - **Early Exit**: Tận dụng cơ chế trả kết quả từ gần ra xa của Google Maps để tự động ngắt cuộn feed khi số địa điểm liên tiếp ngoài bán kính đạt ngưỡng `MAX_CONSECUTIVE_OUT_OF_RANGE = 3`.
-    - Bổ sung 6 unit tests chuyên biệt, nâng tổng số tests lên **47 unit tests**, đạt tỷ lệ pass **100%** và 0 lỗi Ruff linter.
+    - **Loại Bỏ Early Exit**: Xóa bỏ hoàn toàn hằng số `MAX_CONSECUTIVE_OUT_OF_RANGE` và logic ngắt cuộn feed sớm theo chuỗi kết quả vượt bán kính, tránh tình trạng bỏ sót địa điểm hợp lệ do Google Maps xen kẽ kết quả tài trợ/được đề xuất ngoài phạm vi.
+    - Duy trì 6 unit tests chuyên biệt cho `range_limit` (bao gồm backward compatibility, early drop và không ngắt sớm), tổng số **47 unit tests**, đạt tỷ lệ pass **100%** và 0 lỗi Ruff linter.
 
 ---
 

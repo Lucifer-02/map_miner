@@ -37,9 +37,6 @@ DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
 MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
     5  # Allow enough attempts for slow network / lazy load
 )
-MAX_CONSECUTIVE_OUT_OF_RANGE = (
-    3  # Threshold for early exit when places exceed range_limit
-)
 DEFAULT_CACHE_DIR = Path(".cache") / "chromium_cache"
 DEFAULT_DISK_CACHE_SIZE = 1073741824  # 1 GB
 DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com"
@@ -484,7 +481,7 @@ async def get_place_urls(
     geo_coordinates: Point,
     zoom: float,
     lang: str = "en",
-    range_limit: float | None = None,
+    range_limit: float | None = 10000,
 ) -> set[str]:
     """
     Navigates the search feed and scrolls to collect place links.
@@ -499,8 +496,7 @@ async def get_place_urls(
         zoom (float): Map zoom level.
         lang (str, optional): Language code. Defaults to "en".
         range_limit (float | None, optional): Maximum radius distance in meters
-            from geo_coordinates. Places beyond this limit are dropped, and scrolling stops
-            when consecutive places exceed this limit. Defaults to None.
+            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to 10000m.
 
     Returns:
         set[str]: Collected place URLs.
@@ -577,8 +573,6 @@ async def get_place_urls(
         )
         scroll_attempts_no_new = 0
         processed_links: set[str] = set()
-        consecutive_out_of_range = 0
-        early_exit = False
 
         while True:
             await scroll_feed(search_page, active_feed_selector)
@@ -606,23 +600,13 @@ async def get_place_urls(
                         ).meters
                         if dist > range_limit:
                             processed_links.add(canonical_link)
-                            consecutive_out_of_range += 1
                             logger.info(
                                 "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                                 canonical_link,
                                 dist,
                                 range_limit,
                             )
-                            if consecutive_out_of_range >= MAX_CONSECUTIVE_OUT_OF_RANGE:
-                                logger.info(
-                                    "Early exit triggered: %d consecutive places exceeded range limit (%.1fm). Stopping feed scroll.",
-                                    consecutive_out_of_range,
-                                    range_limit,
-                                )
-                                early_exit = True
-                                break
                             continue
-                        consecutive_out_of_range = 0
 
                 processed_links.add(canonical_link)
                 place_links.add(link)
@@ -632,9 +616,6 @@ async def get_place_urls(
                     logger.debug("Reached max_places limit (%d).", max_places)
                     place_links = set(itertools.islice(place_links, max_places))
                     break
-
-            if early_exit:
-                break
 
             if max_places is not None and len(place_links) >= max_places:
                 break
@@ -693,7 +674,7 @@ async def scrape_query_spa(
     - Clicks each place card in the feed client-side without full page reloads.
     - Intercepts /maps/preview/place XHR payloads (~90% request savings).
     - Dynamically scrolls the feed as items are consumed.
-    - Supports early drop and early exit when places exceed range_limit.
+    - Supports early drop when places exceed range_limit.
 
     Args:
         context (BrowserContext): Isolated browser context.
@@ -704,8 +685,7 @@ async def scrape_query_spa(
         lang (str, optional): Language code. Defaults to "en".
         fields (Sequence[str] | set[str] | None, optional): Selected fields. Defaults to None.
         range_limit (float | None, optional): Maximum radius distance in meters
-            from geo_coordinates. Places beyond this limit are dropped, and scrolling stops
-            when consecutive places exceed this limit. Defaults to None.
+            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to None.
 
     Returns:
         list[dict[str, Any]]: List of place dictionaries.
@@ -769,8 +749,6 @@ async def scrape_query_spa(
             "(sel) => document.querySelector(sel)?.scrollHeight || 0",
             active_feed_selector,
         )
-        consecutive_out_of_range = 0
-        early_exit = False
 
         while max_places is None or len(results) < max_places:
             link_elements = await search_page.locator(
@@ -800,23 +778,13 @@ async def scrape_query_spa(
                         ).meters
                         if dist > range_limit:
                             processed_links.add(canonical_link)
-                            consecutive_out_of_range += 1
                             logger.info(
                                 "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                                 canonical_link,
                                 dist,
                                 range_limit,
                             )
-                            if consecutive_out_of_range >= MAX_CONSECUTIVE_OUT_OF_RANGE:
-                                logger.info(
-                                    "Early exit triggered: %d consecutive places exceeded range limit (%.1fm). Stopping feed scroll.",
-                                    consecutive_out_of_range,
-                                    range_limit,
-                                )
-                                early_exit = True
-                                break
                             continue
-                        consecutive_out_of_range = 0
 
                 def is_matching_preview(
                     resp: Any, target: str = canonical_link
@@ -885,9 +853,6 @@ async def scrape_query_spa(
                     )
 
                 await asyncio.sleep(random.uniform(0.15, 0.35))
-
-            if early_exit:
-                break
 
             if max_places is not None and len(results) >= max_places:
                 break
@@ -1096,7 +1061,7 @@ async def scrape_google_maps(
     fields: Sequence[str] | set[str] | None = None,
     use_spa: bool = True,
     cache_dir: str | Path | None = DEFAULT_CACHE_DIR,
-    range_limit: float | None = 50000,
+    range_limit: float | None = None,
 ) -> pl.DataFrame:
     """
     Scrapes Google Maps for places based on queries.
@@ -1117,8 +1082,7 @@ async def scrape_google_maps(
             Defaults to DEFAULT_CACHE_DIR (".cache/chromium_cache"). If None, disk caching
             flags will not be passed.
         range_limit (float | None, optional): Maximum radius distance in meters from
-            geo_coordinates. Places beyond this limit are dropped, and scrolling stops
-            when consecutive places exceed this limit. Defaults to None.
+            geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to None.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.

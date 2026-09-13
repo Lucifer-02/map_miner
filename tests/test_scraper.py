@@ -15,7 +15,6 @@ from map_miner.scraper import (
     DEFAULT_DISK_CACHE_SIZE,
     DEFAULT_PROXY_BYPASS,
     FEED_FALLBACK_SELECTORS,
-    MAX_CONSECUTIVE_OUT_OF_RANGE,
     PreviewInterceptor,
     ProxyRotator,
     create_browser_context,
@@ -1089,10 +1088,10 @@ def test_spa_early_drop():
     asyncio.run(_run())
 
 
-def test_spa_early_exit():
+def test_spa_no_early_exit_on_consecutive_out_of_range():
     """
-    Verifies that when consecutive out-of-range places reach MAX_CONSECUTIVE_OUT_OF_RANGE,
-    early exit triggers and feed scrolling halts.
+    Verifies that when consecutive out-of-range places appear in SPA feed,
+    they are early-dropped without prematurely halting feed scrolling.
     """
 
     async def _run():
@@ -1131,7 +1130,10 @@ def test_spa_early_exit():
         from unittest.mock import patch
 
         mock_scroll = AsyncMock()
-        with patch("map_miner.scraper.scroll_feed", mock_scroll):
+        with (
+            patch("map_miner.scraper.scroll_feed", mock_scroll),
+            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=True)),
+        ):
             results = await scrape_query_spa(
                 context=mock_context,
                 query="cafe",
@@ -1142,22 +1144,21 @@ def test_spa_early_exit():
             )
 
         assert len(results) == 0
-        # No element was clicked
+        # No element was clicked (all 4 were early dropped)
         for el in far_elements:
             el.evaluate.assert_not_awaited()
             el.click.assert_not_awaited()
 
-        # Feed scroll was not continued after early exit triggered
-        assert mock_scroll.call_count == 0
-        assert MAX_CONSECUTIVE_OUT_OF_RANGE == 3
+        # Feed scroll was called because early exit is disabled (does not halt on consecutive out-of-range)
+        assert mock_scroll.call_count >= 1
 
     asyncio.run(_run())
 
 
-def test_get_place_urls_early_drop_and_early_exit():
+def test_get_place_urls_early_drop():
     """
-    Verifies that get_place_urls drops out-of-range links and exits early
-    when consecutive out-of-range links reach MAX_CONSECUTIVE_OUT_OF_RANGE.
+    Verifies that get_place_urls drops out-of-range links without halting early
+    on consecutive out-of-range items, continuing to scroll until feed end.
     """
 
     async def _run():
@@ -1190,7 +1191,10 @@ def test_get_place_urls_early_drop_and_early_exit():
         from unittest.mock import patch
 
         mock_scroll = AsyncMock()
-        with patch("map_miner.scraper.scroll_feed", mock_scroll):
+        with (
+            patch("map_miner.scraper.scroll_feed", mock_scroll),
+            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=True)),
+        ):
             place_links = await get_place_urls(
                 context=mock_context,
                 max_places=10,
@@ -1205,8 +1209,9 @@ def test_get_place_urls_early_drop_and_early_exit():
             "https://www.google.com/maps/place/Near/data=!1s0x1:0x1!8m2!3d21.0010!4d105.8010"
             in place_links
         )
-        # Far links were dropped and triggered early exit on the 3rd consecutive out-of-range
+        # Far links were dropped and feed continued scrolling without halting on 3 consecutive out-of-range links
         assert not any("Far" in l for l in place_links)
+        assert mock_scroll.call_count == 2
 
     asyncio.run(_run())
 
