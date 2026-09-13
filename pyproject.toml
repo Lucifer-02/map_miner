@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "map-miner"
-version = "0.2.2"
+dynamic = ["version"]
 description = "High-performance asynchronous Google Maps scraper using Playwright"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -31,5 +31,9 @@ dev = [
     "notebook>=7.4.7",
 ]
 
+[tool.hatch.version]
+path = "src/map_miner/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/map_miner"]
+

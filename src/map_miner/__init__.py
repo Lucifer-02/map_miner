@@ -12,7 +12,7 @@ from .scraper import (
     scrape_google_maps,
 )
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 __all__ = [
     "DEFAULT_PROXY_BYPASS",

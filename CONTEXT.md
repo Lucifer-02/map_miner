@@ -2,7 +2,7 @@
 
 ## 1. Tổng Quan Dự Án (Project Overview)
 
-**`map_miner`** (phiên bản `0.1.1`) là thư viện Python và công cụ cào dữ liệu (web scraper) bất đồng bộ hiệu năng cao dành riêng cho Google Maps. Dự án được thiết kế để thu thập thông tin địa điểm (Points of Interest - POIs) chi tiết theo từ khóa và tọa độ địa lý chỉ định (vĩ độ, kinh độ, mức zoom), sau đó chuẩn hóa và xuất dữ liệu thành [Polars](https://pola.rs/) DataFrame (`pl.DataFrame`).
+**`map_miner`** (phiên bản `0.2.3`) là thư viện Python và công cụ cào dữ liệu (web scraper) bất đồng bộ hiệu năng cao dành riêng cho Google Maps. Dự án được thiết kế để thu thập thông tin địa điểm (Points of Interest - POIs) chi tiết theo từ khóa và tọa độ địa lý chỉ định (vĩ độ, kinh độ, mức zoom), sau đó chuẩn hóa và xuất dữ liệu thành [Polars](https://pola.rs/) DataFrame (`pl.DataFrame`).
 
 ### Mục tiêu thiết kế chính:
 
@@ -90,11 +90,11 @@ Cấu trúc mã nguồn chuẩn của dự án được tổ chức theo tiêu c
 
 ```
 map_miner/
-├── pyproject.toml                     # Cấu hình dự án & đóng gói phiên bản 0.1.1
+├── pyproject.toml                     # Cấu hình dự án & Dynamic Versioning (Hatchling)
 ├── main.py                            # Entrypoint khởi chạy ví dụ
 ├── src/
 │   └── map_miner/
-│       ├── __init__.py                # Package exports (__version__ = "0.1.1")
+│       ├── __init__.py                # Package exports & __version__ = "0.2.3" (Single Source of Truth)
 │       ├── scraper.py                 # Điều phối mạng, Playwright I/O & SPA navigation
 │       ├── extractor.py               # Engine trích xuất dữ liệu thuần túy (pure functions)
 │       └── recaptcha_solver.py        # Giải reCAPTCHA v2 & lưu trữ chẩn đoán
@@ -105,7 +105,8 @@ map_miner/
 │   ├── test_extractor.py              # Kiểm thử bộ bóc tách, DOM fallback, địa chỉ
 │   ├── test_real_web_extraction.py    # Kiểm thử schema 27+ trường và dấu tiếng Việt
 │   ├── test_recaptcha.py              # Kiểm thử solver initialization & aliases
-│   └── test_scraper.py                # Kiểm thử route blocking, hex matching, SPA error recovery
+│   ├── test_scraper.py                # Kiểm thử route blocking, hex matching, SPA error recovery
+│   └── test_version.py                # Kiểm thử Dynamic Versioning, __version__ & metadata
 └── note.md                            # Hướng dẫn cấu hình proxy xoay IP qua Tor
 ```
 
@@ -305,7 +306,7 @@ sudo apt update && sudo apt install -y ffmpeg
 
 ### 5.2. Cài Đặt Package & Browser
 
-Dự án đã được chuẩn hóa thành Python package phiên bản `0.1.1` (khai báo trong [`pyproject.toml`](file:///data/IMPORTANT/map_miner/pyproject.toml)):
+Dự án đã được chuẩn hóa thành Python package phiên bản `0.2.3` với cơ chế Dynamic Versioning đọc từ `src/map_miner/__init__.py` qua Hatchling (khai báo trong [`pyproject.toml`](file:///data/IMPORTANT/map_miner/pyproject.toml)):
 
 ```bash
 # Cách 1: Cài đặt trực tiếp qua uv cho môi trường phát triển
@@ -332,10 +333,10 @@ make run
 
 ### 5.4. Bộ Kiểm Thử Tự Động Toàn Diện (Unit Tests)
 
-Dự án sở hữu bộ kiểm thử tự động gồm **47 unit tests độc lập** chạy hoàn toàn offline không phụ thuộc mạng bên ngoài, thực thi nhanh chóng (~0.4s – 0.6s) và đạt tỷ lệ pass **100%**, tuân thủ 0 lỗi linter từ Ruff:
+Dự án sở hữu bộ kiểm thử tự động gồm **50 unit tests độc lập** chạy hoàn toàn offline không phụ thuộc mạng bên ngoài, thực thi nhanh chóng (~0.4s – 0.6s) và đạt tỷ lệ pass **100%**, tuân thủ 0 lỗi linter từ Ruff:
 
 ```bash
-# Chạy toàn bộ 47 unit tests
+# Chạy toàn bộ 50 unit tests
 uv run pytest
 
 # Kiểm tra cú pháp và định dạng mã nguồn chuẩn PEP 8
@@ -343,7 +344,7 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-#### Phân bổ 47 Unit Tests trong Codebase:
+#### Phân bổ 50 Unit Tests trong Codebase:
 1. **[`tests/test_extractor.py`](file:///data/IMPORTANT/map_miner/tests/test_extractor.py) (8 tests)**:
    - `test_safe_get`: Kiểm thử truy cập an toàn trên cấu trúc lồng nhau sâu.
    - `test_strip_accents`: Kiểm thử loại bỏ dấu tiếng Việt chuẩn Unicode NFD.
@@ -396,6 +397,10 @@ uv run ruff format .
    - `test_get_place_urls_early_drop`: Kiểm thử chế độ Multi-page Fallback `get_place_urls` thực hiện Early Drop các link ngoài bán kính và tiếp tục cuộn feed mà không dừng do ngưỡng liên tiếp.
    - `test_scrape_google_maps_range_limit_default_none_backward_compatible`: Kiểm thử tương thích ngược 100% khi không truyền `range_limit` (mặc định `None`).
    - `test_scrape_google_maps_forwards_range_limit`: Kiểm thử chuyển tiếp chính xác tham số `range_limit` sang cả SPA và Fallback modes.
+5. **[`tests/test_version.py`](file:///data/IMPORTANT/map_miner/tests/test_version.py) (3 tests)**:
+   - `test_version_constant`: Kiểm thử hằng số `__version__` tồn tại, là kiểu chuỗi, khớp định dạng regex semver `^\\d+\\.\\d+\\.\\d+`, có giá trị `"0.2.3"` và nằm trong `__all__`.
+   - `test_pyproject_dynamic_versioning`: Kiểm thử tệp `pyproject.toml` cấu hình dynamic versioning qua Hatchling trỏ trực tiếp đến `src/map_miner/__init__.py` và không chứa trường tĩnh `version`.
+   - `test_package_metadata_version`: Kiểm thử đối soát metadata package `importlib.metadata.version("map-miner")` khớp chính xác với `map_miner.__version__`.
 
 ---
 
@@ -403,9 +408,9 @@ uv run ruff format .
 
 ### Các hạng mục kỹ thuật cốt lõi đã hoàn tất (Completed Milestones):
 
-1. **[ĐÃ HOÀN TẤT] Đóng gói thư viện chuẩn Python Package (`0.1.1`)**:
+1. **[ĐÃ HOÀN TẤT] Đóng gói thư viện chuẩn Python Package (`0.2.3`) & Dynamic Versioning**:
    - Tái cấu trúc mã nguồn vào thư mục chuẩn `src/map_miner/` với [`pyproject.toml`](file:///data/IMPORTANT/map_miner/pyproject.toml) xây dựng bằng `hatchling`.
-   - Đồng bộ exports sạch tại [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) (`__version__ = "0.1.1"`, `scrape_google_maps`, `extract_place_data`, `RecaptchaSolver`, `ProxyRotator`, `create_browser_context`, `DEFAULT_PROXY_BYPASS`).
+   - Đồng bộ exports sạch tại [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) (`__version__ = "0.2.3"`, `scrape_google_maps`, `extract_place_data`, `RecaptchaSolver`, `ProxyRotator`, `create_browser_context`, `DEFAULT_PROXY_BYPASS`).
    - Đổi tên tệp chuẩn hóa `recaptcha_solver.py` (chứa class [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388)).
 2. **[ĐÃ HOÀN TẤT] Kiến trúc SPA Navigation Mode mặc định (`use_spa=True`)**:
    - Triển khai [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L411-L605) duyệt và click trực tiếp trên feed, giảm **85% – 90%** số lượng HTTP requests thừa và tăng tốc thu thập dữ liệu lên ~0.3s – 0.5s/địa điểm.
@@ -447,6 +452,11 @@ uv run ruff format .
     - **Early Drop**: Tự động loại bỏ và đánh dấu `processed_links` các địa điểm nằm ngoài bán kính trước khi click hoặc chờ XHR preview, loại bỏ hoàn toàn request thừa.
     - **Loại Bỏ Early Exit**: Xóa bỏ hoàn toàn hằng số `MAX_CONSECUTIVE_OUT_OF_RANGE` và logic ngắt cuộn feed sớm theo chuỗi kết quả vượt bán kính, tránh tình trạng bỏ sót địa điểm hợp lệ do Google Maps xen kẽ kết quả tài trợ/được đề xuất ngoài phạm vi.
     - Duy trì 6 unit tests chuyên biệt cho `range_limit` (bao gồm backward compatibility, early drop và không ngắt sớm), tổng số **47 unit tests**, đạt tỷ lệ pass **100%** và 0 lỗi Ruff linter.
+13. **[ĐÃ HOÀN TẤT] Dynamic Versioning Với Hatchling (Single Source of Truth)**:
+    - Chuyển đổi cấu hình version trong [`pyproject.toml`](file:///data/IMPORTANT/map_miner/pyproject.toml) sang `dynamic = ["version"]` kết hợp `[tool.hatch.version] path = "src/map_miner/__init__.py"`.
+    - Định vị [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) (`__version__ = "0.2.3"`) làm Single Source of Truth duy nhất cho toàn bộ package và build distribution.
+    - Bổ sung [`tests/test_version.py`](file:///data/IMPORTANT/map_miner/tests/test_version.py) với 3 unit tests độc lập xác thực định dạng hằng số, tính toàn vẹn của cấu hình Hatchling trong `pyproject.toml`, và metadata package.
+    - Nâng tổng số unit test tự động lên **50 unit tests**, đạt tỷ lệ pass **100%** và 0 cảnh báo linter Ruff.
 
 ---
 
