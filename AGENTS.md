@@ -13,7 +13,7 @@ flowchart TD
     A["Yêu Cầu / Nhiệm Vụ (Task)"] --> B["reviewer: Phân tích & Lên Kế Hoạch Hành Động (Action Plan)"]
     B --> C["reviewer: Giao việc cho worker (invoke_subagent / send_message)"]
     C --> D["worker: Trực tiếp chỉnh sửa mã nguồn & viết test"]
-    D --> E["worker: Tự kiểm chứng (uv run ruff check & uv run pytest)"]
+    D --> E["worker: Tự kiểm chứng (ruff check, ty check & pytest)"]
     E --> F["worker: Báo cáo kết quả hoàn thành lại cho reviewer"]
     F --> G["reviewer: Thẩm định mã nguồn & đối soát kế hoạch"]
     G --> H{"Kết quả đánh giá"}
@@ -46,7 +46,7 @@ flowchart TD
        2. **Tuân thủ Kiến trúc ([CONTEXT.md](file:///data/IMPORTANT/map_miner/CONTEXT.md))**: Phân tách rõ ràng giữa I/O (`scraper.py`) và pure functions (`extractor.py`).
        3. **Tối ưu Băng thông & Hiệu năng**: Không sinh request thừa, không làm nghẽn event loop.
        4. **An toàn Bot & Ẩn danh (Anti-Bot & Stealth)**: Không tạo dấu hiệu bất thường cho Google Maps.
-       5. **Độ tin cậy Kiểm thử (Testability)**: 100% tests phải pass, có unit test bao phủ các ca biên.
+       5. **Độ tin cậy Kiểm thử & Chuẩn Kiểu (Testability & Type Safety)**: 100% tests phải pass (`uv run pytest`), 0 lỗi linter/format (`uv run ruff check .` & `uv run ruff format .`), và 0 lỗi type (`ty check` / `uv run ty check`), kèm unit test bao phủ các ca biên.
      - Đưa ra kết luận: `ACCEPT` hoặc `REQUEST_CHANGES`.
 
 ---
@@ -60,11 +60,12 @@ flowchart TD
 - **Quy tắc làm việc**:
   1. **Thực thi dứt điểm theo kế hoạch**: Bám sát Action Plan từ `reviewer`, không sửa đổi lan man sang các module không liên quan.
   2. **Tự động hóa kiểm thử**: Sau khi triển khai mã, luôn bổ sung unit test tương ứng trong thư mục `tests/`.
-  3. **Không để lại nợ kỹ thuật (Zero Lint / Test Errors)**:
+  3. **Không để lại nợ kỹ thuật (Zero Lint / Type / Test Errors)**:
      - Luôn chạy: `uv run ruff check .` (phải đạt 0 lỗi).
-     - Luôn chạy: `uv run ruff format .` (đảm bảo chuẩn formatting).
+     - Luôn chạy: `uv run ruff format .` (đảm bảo chuẩn formatting PEP 8).
+     - Luôn chạy: `ty check` (hoặc `uv run ty check`, đảm bảo 0 lỗi type annotations).
      - Luôn chạy: `uv run pytest` (100% tests phải pass).
-  4. **Báo cáo tường minh**: Tóm tắt ngắn gọn các file đã thay đổi, lý do kỹ thuật và kết quả kiểm thử, sau đó thông báo cho `reviewer` thẩm định.
+  4. **Báo cáo tường minh**: Tóm tắt ngắn gọn các file đã thay đổi, lý do kỹ thuật và kết quả kiểm thử (ruff, ty, pytest), sau đó thông báo cho `reviewer` thẩm định.
 
 ---
 

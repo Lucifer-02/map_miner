@@ -95,16 +95,18 @@ map_miner/
 ├── src/
 │   └── map_miner/
 │       ├── __init__.py                # Package exports & __version__ = "0.2.3" (Single Source of Truth)
+│       ├── proxy.py                   # Quản lý proxy, ProxyRotator, Tor renewal & Stream Isolation
 │       ├── scraper.py                 # Điều phối mạng, Playwright I/O & SPA navigation
 │       ├── extractor.py               # Engine trích xuất dữ liệu thuần túy (pure functions)
-│       └── recaptcha_solver.py        # Giải reCAPTCHA v2 & lưu trữ chẩn đoán
+│       └── recaptcha_solver.py        # Giải reCAPTCHA v2 (Whisper / Google STT / Vosk)
 ├── tests/
 │   ├── fixtures/
 │   │   ├── real_place.html            # Snapshot DOM & APP_INITIALIZATION_STATE thực tế
 │   │   └── real_preview.txt           # Snapshot XHR preview/place thực tế
 │   ├── test_extractor.py              # Kiểm thử bộ bóc tách, DOM fallback, địa chỉ
+│   ├── test_proxy.py                  # Kiểm thử ProxyRotator, bypass, Tor renewal & stream isolation
 │   ├── test_real_web_extraction.py    # Kiểm thử schema 27+ trường và dấu tiếng Việt
-│   ├── test_recaptcha.py              # Kiểm thử solver initialization & aliases
+│   ├── test_recaptcha.py              # Kiểm thử solver initialization, hard block & audio STT
 │   ├── test_scraper.py                # Kiểm thử route blocking, hex matching, SPA error recovery
 │   └── test_version.py                # Kiểm thử Dynamic Versioning, __version__ & metadata
 └── note.md                            # Hướng dẫn cấu hình proxy xoay IP qua Tor
@@ -143,7 +145,7 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
   - Khởi tạo **duy nhất 1 tab trình duyệt** cho mỗi truy vấn tìm kiếm.
   - Sau khi trang feed hiển thị, duyệt qua các phần tử thẻ địa điểm (`a[href*="/maps/place/"]`).
   - Kích hoạt sự kiện click client-side: `await el.evaluate("e => e.click()")` (hoặc fallback `el.click(force=True)` nếu bị che khuất).
-  - Lắng nghe response XHR tương ứng bằng `search_page.expect_response(is_matching_preview, timeout=5000)`.
+  - Lắng nghe response XHR tương ứng bằng `search_page.expect_response(is_matching_preview, timeout=preview_timeout_ms)` (cấu hình qua tham số `preview_timeout`, mặc định `DEFAULT_SPA_PREVIEW_TIMEOUT = 15000` ms).
   - Triệt tiêu 85-90% lượng request mạng thừa do không cần mở tab mới và không phải tải lại mã nguồn ứng dụng web nặng nề của Google Maps.
   - Cơ chế tự phục hồi: Thẻ địa điểm chỉ được đánh dấu là `processed_links` sau khi click thành công, đảm bảo các phần tử chưa click được sẽ được thử lại trong các lượt cuộn kế tiếp.
 - **Chế độ Multi-page Fallback ([`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L305-L409) -> [`process_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L608-L745) - Khi `use_spa=False`)**:
@@ -342,6 +344,7 @@ uv run pytest
 # Kiểm tra cú pháp và định dạng mã nguồn chuẩn PEP 8
 uv run ruff check .
 uv run ruff format .
+uv run ty check .
 ```
 
 #### Phân bổ 50 Unit Tests trong Codebase:
@@ -362,10 +365,40 @@ uv run ruff format .
    - `test_real_data_fields_filtering`: Xác thực tính năng lọc trường và giữ đúng thứ tự khóa trên dữ liệu thực tế.
    - `test_real_address_components_direct`: Xác thực khôi phục dấu tiếng Việt chuẩn xác cho `street`, `sublocality`, `district`, `city`.
    - `test_output_schema_conformance`: Xác thực tính tuân thủ 100% schema Mục 4 về sự hiện diện và kiểu dữ liệu chuẩn (`str`, `float`, `int`, `list`, `dict`, `bool`).
-3. **[`tests/test_recaptcha.py`](file:///data/IMPORTANT/map_miner/tests/test_recaptcha.py) (2 tests)**:
+3. **[`tests/test_proxy.py`](file:///data/IMPORTANT/map_miner/tests/test_proxy.py) (13 tests)**:
+   - `test_normalize_proxy`: Kiểm thử chuẩn hóa cấu hình proxy (string, dict, bypass, auth credentials).
+   - `test_proxy_rotator_empty_and_invalid`: Kiểm thử khởi tạo `ProxyRotator` rỗng/không hợp lệ.
+   - `test_proxy_rotator_single`: Kiểm thử cấp phát proxy đơn lẻ.
+   - `test_proxy_rotator_round_robin`: Kiểm thử xoay vòng proxy round-robin.
+   - `test_proxy_rotator_with_bypass`: Kiểm thử bảo toàn `bypass` trong `ProxySettings`.
+   - `test_proxy_rotator_renew`: Kiểm thử hàm `renew` cho cả HTTP proxy pool và Tor SOCKS proxy.
+   - `test_renew_tor_circuit_control`: Kiểm thử gửi lệnh `SIGNAL NEWNYM` qua Tor ControlPort 9051 với timeout 2.0s và xác thực phản hồi 250 OK.
+   - `test_get_tor_rotating_proxy`: Kiểm thử sinh cấu hình proxy SOCKS5 Tor không chứa username/password gây lỗi Chromium.
+   - `test_normalize_proxy_socks_strips_credentials`: Kiểm thử loại bỏ credentials khỏi cấu hình SOCKS4/SOCKS5.
+   - `test_tor_renewal_cooldown`: Kiểm thử cơ chế Tor circuit renewal cooldown (bỏ qua kết nối socket khi gọi lại trong khoảng `DEFAULT_TOR_RENEW_COOLDOWN = 15.0s`).
+   - `test_proxy_rotator_renew_cooldown`: Kiểm thử `ProxyRotator.renew` tôn trọng tham số cooldown mặc định.
+   - `test_async_renew_tor_circuit_control`: Kiểm thử wrapper bất đồng bộ `async_renew_tor_circuit_control` chạy trên worker thread.
+   - `test_proxy_rotator_async_renew`: Kiểm thử `ProxyRotator.async_renew` cho ngữ cảnh bất đồng bộ.
+4. **[`tests/test_recaptcha.py`](file:///data/IMPORTANT/map_miner/tests/test_recaptcha.py) (18 tests)**:
    - `test_recaptcha_solver_init`: Kiểm thử khởi tạo đối tượng solver và trạng thái debug.
    - `test_recaptcha_solver_aliases`: Kiểm thử các bí danh tương thích ngược (`solveCaptcha`, `solveAudioCaptcha`, `isSolved`).
-4. **[`tests/test_scraper.py`](file:///data/IMPORTANT/map_miner/tests/test_scraper.py) (31 tests)**:
+   - `test_recaptcha_blocked_detection`: Kiểm thử nhận diện màn hình hard-block và thông báo `automated queries`.
+   - `test_preprocess_audio`: Kiểm thử tiền xử lý âm thanh 16kHz mono và bandpass filter.
+   - `test_transcribe_audio_fallback`: Kiểm thử chuyển đổi giọng nói qua multi-engine STT (Whisper, Google, Vosk).
+   - `test_sorry_page_submission`: Kiểm thử submit form và chờ chuyển hướng trên trang `sorry/index`.
+   - `test_multi_round_audio_captcha_solving`: Kiểm thử giải CAPTCHA âm thanh nhiều vòng liên tiếp.
+   - `test_multi_round_audio_captcha_reload_fallback`: Kiểm thử click reload khi âm thanh không cập nhật.
+   - `test_audio_source_missing_does_not_call_get_attribute`: Kiểm thử an toàn khi thiếu phần tử audio source.
+   - `test_is_hard_blocked_uses_timeout`: Kiểm thử an toàn timeout khi kiểm tra hard block.
+   - `test_is_solved_uses_timeout`: Kiểm thử an toàn timeout khi kiểm tra trạng thái solved.
+   - `test_download_audio_uses_timeout`: Kiểm thử timeout khi tải file MP3 âm thanh.
+   - `test_multi_round_audio_captcha_does_not_reload`: Kiểm thử không reload khi đang ở vòng câu đố tiếp theo.
+   - `test_normalize_audio_transcription`: Kiểm thử chuẩn hóa từ ngữ sang chữ số (hỗ trợ số từ, "oh" -> "0", loại bỏ dấu).
+   - `test_human_click_with_bounding_box`: Kiểm thử mô phỏng rê chuột và click tự nhiên theo bounding box.
+   - `test_human_click_fallback_without_bounding_box`: Kiểm thử fallback khi không lấy được bounding box.
+   - `test_save_captcha_diagnostics`: Kiểm thử lưu screenshot, HTML source và meta.json khi gặp CAPTCHA.
+   - `test_transcribe_audio_google_en_us`: Kiểm thử truyền tham số ngôn ngữ rõ ràng `language="en-US"` cho `recognize_google`.
+5. **[`tests/test_scraper.py`](file:///data/IMPORTANT/map_miner/tests/test_scraper.py) (41 tests)**:
    - `test_make_place_url`: Kiểm thử xây dựng URL tìm kiếm Google Maps định dạng tọa độ & ngôn ngữ.
    - `test_consent_regex`: Kiểm thử nhận diện nút consent trên 6+ ngôn ngữ khác nhau.
    - `test_blocked_resources_and_urls`: Kiểm thử danh mục tài nguyên bị chặn (images, fonts, tiles, analytics).
@@ -377,10 +410,6 @@ uv run ruff format .
    - `test_polars_schema_infer_length_none`: Kiểm thử ngăn ngừa lỗi schema Polars khi gặp cột chứa null ở 100 dòng đầu.
    - `test_spa_processed_links_only_on_successful_click`: Kiểm thử cơ chế chỉ đánh dấu đã xử lý khi click thẻ địa điểm thành công.
    - `test_spa_field_filtering_few_fields_without_name`: Kiểm thử không loại bỏ bản ghi khi người dùng chỉ yêu cầu một vài trường không có `name` (như `latitude`, `longitude`).
-   - `test_proxy_rotator_empty_and_none`: Kiểm thử khởi tạo `ProxyRotator` với cấu hình rỗng/None.
-   - `test_proxy_rotator_single_proxy`: Kiểm thử cấp phát proxy đơn lẻ (dict hoặc string URL gateway).
-   - `test_proxy_rotator_list_round_robin`: Kiểm thử xoay vòng proxy round-robin qua danh sách nhiều proxy.
-   - `test_proxy_rotator_with_bypass`: Kiểm thử khởi tạo và xoay vòng proxy có thuộc tính `bypass`, bảo toàn `DEFAULT_PROXY_BYPASS` và bypass tùy chỉnh.
    - `test_create_browser_context_with_proxy`: Kiểm thử khởi tạo `BrowserContext` cô lập với cấu hình proxy, geolocation, stealth script và route handler.
    - `test_create_browser_context_with_proxy_bypass`: Kiểm thử truyền chính xác thuộc tính `bypass` trong `ProxySettings` vào Playwright `browser.new_context`.
    - `test_create_browser_context_without_proxy`: Kiểm thử khởi tạo `BrowserContext` khi không cấu hình proxy.
@@ -397,7 +426,21 @@ uv run ruff format .
    - `test_get_place_urls_early_drop`: Kiểm thử chế độ Multi-page Fallback `get_place_urls` thực hiện Early Drop các link ngoài bán kính và tiếp tục cuộn feed mà không dừng do ngưỡng liên tiếp.
    - `test_scrape_google_maps_range_limit_default_none_backward_compatible`: Kiểm thử tương thích ngược 100% khi không truyền `range_limit` (mặc định `None`).
    - `test_scrape_google_maps_forwards_range_limit`: Kiểm thử chuyển tiếp chính xác tham số `range_limit` sang cả SPA và Fallback modes.
-5. **[`tests/test_version.py`](file:///data/IMPORTANT/map_miner/tests/test_version.py) (3 tests)**:
+   - `test_spa_retry_on_captcha_blocked`: Kiểm thử tự động xoay proxy và retry khi gặp CAPTCHA trong SPA mode.
+   - `test_handle_captcha_if_present_timeout`: Kiểm thử timeout an toàn của bộ xử lý CAPTCHA.
+   - `test_handle_captcha_if_present_success`: Kiểm thử phản hồi thành công khi solver giải xong CAPTCHA.
+   - `test_scrape_query_spa_timeout_returns_partial_results`: Kiểm thử ngắt timeout an toàn và thu nhận kết quả đã cào được.
+   - `test_get_place_urls_timeout_returns_partial_links`: Kiểm thử ngắt timeout an toàn khi thu thập danh sách URL.
+   - `test_consecutive_empty_scrolls_guard_spa`: Kiểm thử cơ chế bảo vệ chống loop vô tận khi feed trống liên tiếp trong SPA mode.
+   - `test_consecutive_empty_scrolls_guard_get_place_urls`: Kiểm thử cơ chế bảo vệ chống loop vô tận trong fallback mode.
+   - `test_scrape_google_maps_spa_fault_isolation`: Kiểm thử cô lập lỗi từng query độc lập trong SPA mode.
+   - `test_scrape_google_maps_fallback_place_timeout`: Kiểm thử watchdog timeout trên từng place URL trong fallback mode.
+   - `test_scrape_google_maps_watchdog_timeout_spa`: Kiểm thử hard watchdog timeout bảo vệ toàn bộ tiến trình SPA.
+   - `test_launch_args_webgl_and_stealth`: Kiểm thử `LAUNCH_ARGS` loại bỏ `--disable-gpu`, bổ sung `--enable-webgl` và giữ vững cờ chống automation.
+   - `test_create_browser_context_modern_stealth_and_client_hints`: Kiểm thử khởi tạo context với Chrome 131 UA, HTTP Client Hints (`sec-ch-ua`, `sec-ch-ua-mobile`, `sec-ch-ua-platform`, `Accept-Language`), và script giả lập WebGL NVIDIA/RTX 3060, plugins, hardwareConcurrency, deviceMemory.
+   - `test_handle_captcha_if_present_default_and_custom_timeout`: Kiểm thử `handle_captcha_if_present` sử dụng hằng số `DEFAULT_CAPTCHA_TIMEOUT = 85.0s` và hỗ trợ tùy biến timeout.
+   - `test_staggered_query_dispatch_spa`: Kiểm thử cơ chế Staggered Query Dispatch trong `scrape_google_maps` phân bổ khoảng nghỉ khởi chạy giữa các queries song song để triệt tiêu Concurrency Spike.
+6. **[`tests/test_version.py`](file:///data/IMPORTANT/map_miner/tests/test_version.py) (3 tests)**:
    - `test_version_constant`: Kiểm thử hằng số `__version__` tồn tại, là kiểu chuỗi, khớp định dạng regex semver `^\\d+\\.\\d+\\.\\d+`, có giá trị `"0.2.3"` và nằm trong `__all__`.
    - `test_pyproject_dynamic_versioning`: Kiểm thử tệp `pyproject.toml` cấu hình dynamic versioning qua Hatchling trỏ trực tiếp đến `src/map_miner/__init__.py` và không chứa trường tĩnh `version`.
    - `test_package_metadata_version`: Kiểm thử đối soát metadata package `importlib.metadata.version("map-miner")` khớp chính xác với `map_miner.__version__`.
@@ -447,7 +490,7 @@ uv run ruff format .
     - Bổ sung 2 unit tests chuyên biệt (`test_proxy_rotator_with_bypass`, `test_create_browser_context_with_proxy_bypass`), nâng tổng số unit tests lên 41 tests, đạt 100% pass.
 12. **[ĐÃ HOÀN TẤT] Tính Năng Early Drop Theo Bán Kính (`range_limit`) & Loại Bỏ Early Exit**:
     - Bổ sung tham số `range_limit: float | None = None` (tính theo mét) vào `scrape_google_maps`, `scrape_query_spa`, và `get_place_urls`.
-    - Triển khai tiện ích `extract_coordinates_from_url` nhận diện tọa độ địa lý WGS84 từ các mẫu URL Google Maps phổ biến (`!3d...4d` và `@...`).
+    - Triển khai tiện ích `extract_coordinates_from_url` nhận diện tọa độ địa lý WGS84 từ các mẫu URL Google Maps phổ biến (`!3d!4d` và `@...`).
     - Tính khoảng cách địa lý chính xác bằng `geopy.distance.geodesic((center_lat, center_lon), (lat, lon)).meters`.
     - **Early Drop**: Tự động loại bỏ và đánh dấu `processed_links` các địa điểm nằm ngoài bán kính trước khi click hoặc chờ XHR preview, loại bỏ hoàn toàn request thừa.
     - **Loại Bỏ Early Exit**: Xóa bỏ hoàn toàn hằng số `MAX_CONSECUTIVE_OUT_OF_RANGE` và logic ngắt cuộn feed sớm theo chuỗi kết quả vượt bán kính, tránh tình trạng bỏ sót địa điểm hợp lệ do Google Maps xen kẽ kết quả tài trợ/được đề xuất ngoài phạm vi.
@@ -457,6 +500,13 @@ uv run ruff format .
     - Định vị [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) (`__version__ = "0.2.3"`) làm Single Source of Truth duy nhất cho toàn bộ package và build distribution.
     - Bổ sung [`tests/test_version.py`](file:///data/IMPORTANT/map_miner/tests/test_version.py) với 3 unit tests độc lập xác thực định dạng hằng số, tính toàn vẹn của cấu hình Hatchling trong `pyproject.toml`, và metadata package.
     - Nâng tổng số unit test tự động lên **50 unit tests**, đạt tỷ lệ pass **100%** và 0 cảnh báo linter Ruff.
+14. **[ĐÃ HOÀN TẤT] Cải Thiện Khả Năng Bypass & Chủ Động Né CAPTCHA Toàn Diện (Anti-Bot Stealth, Tor Cooldown & Jitter)**:
+    - **Đồng bộ hóa Tor Renewal & Cooldown (`DEFAULT_TOR_RENEW_COOLDOWN = 15.0s`)**: Ngăn chặn Tor Renewal Storm khi nhiều tab cùng gặp lỗi hoặc sorry page. Quản lý trạng thái an toàn bằng `_last_tor_renew_time` và `_tor_renew_lock`, hỗ trợ cả sync và `async_renew_tor_circuit_control`.
+    - **Nâng cấp Stealth & Fingerprint Chân Thực**: Chuyển sang User-Agent Chrome 131 hiện đại; bổ sung HTTP Client Hints đầy đủ (`sec-ch-ua`, `sec-ch-ua-mobile`, `sec-ch-ua-platform`, `Accept-Language`); loại bỏ cờ `--disable-gpu` gây kích hoạt SwiftShader, bổ sung `--enable-webgl`; tích hợp WebGL spoofing (NVIDIA GeForce RTX 3060 D3D11) chặn rò rỉ `SwiftShader`/`llvmpipe`; mô phỏng chuẩn `navigator.plugins`, `hardwareConcurrency = 8`, `deviceMemory = 8`.
+    - **Giãn cách khởi chạy (Staggered Query Startup & Jitter)**: Bổ sung tham số `stagger_delay: tuple[float, float] | float | None = (1.5, 3.5)` trong `scrape_google_maps` phân bổ khởi chạy các queries cách nhau một khoảng nghỉ ngẫu nhiên, triệt tiêu Concurrency Spike trên cùng IP Tor Exit. Thêm delay ngẫu nhiên trước click thẻ (0.3s - 0.8s) và sau scroll feed (1.2s - 2.2s) trong `scrape_query_spa`.
+    - **Nâng Timeout CAPTCHA & Tối ưu Audio Solver**: Bổ sung `DEFAULT_CAPTCHA_TIMEOUT = 85.0s` hỗ trợ multi-round challenge ("Multiple correct solutions required"); chỉ định rõ `language="en-US"` cho `recognize_google`; mở rộng `WORD_TO_DIGIT` ánh xạ "oh" -> "0"; nâng `max_audio_attempts` mặc định lên 5.
+    - **Điều chỉnh Semaphore Phù hợp Tor**: Giảm `n_semaphore` trong `main.py` từ 12 xuống 4 nhằm tương thích băng thông Tor.
+    - Bổ sung 11 unit tests chuyên biệt, nâng tổng số lên **61 unit tests**, đạt tỷ lệ pass **100%** và 0 cảnh báo linter Ruff.
 
 ---
 

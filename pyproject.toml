@@ -21,6 +21,7 @@ dependencies = [
     "polars>=1.35.2",
     "pydub>=0.25.1",
     "speechrecognition>=3.14.3",
+    "vosk>=0.3.45",
     "xlsxwriter>=3.2.9",
 ]
 

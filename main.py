@@ -17,23 +17,31 @@ def main():
             queries={
                 "cafe",
                 "atm",
-                # "hospital",
-                # "gym",
-                # "store",
-                # "restaurant",
+                "hospital",
+                "gym",
+                "store",
+                "restaurant",
                 "bank",
-                # "gas",
+                "gas",
             },
-            max_places=2,
+            max_places=40,
             lang="en",
             headless=False,
             geo_coordinates=Point(21.018785, 105.830415),
             zoom=18,
             fields=None,
+            # Proxy configuration:
+            # - Residential proxy (Decodo): Best for avoiding CAPTCHAs
+            # - Direct (None): Fast and reliable with modern stealth fingerprints
+            # - Tor (socks5://127.0.0.1:9050): Keep n_semaphore low (2-3)
             proxy={
-                "server": "http://gate.decodo.com:10000",
-                "username": "spp86iv7zu",
-                "password": "6yoqpXiuaF5bT_83sV",
+                # decodo residential service (Recommended to evade CAPTCHAs)
+                # "server": "http://gate.decodo.com:10000",
+                # "username": "spp86iv7zu",
+                # "password": "6yoqpXiuaF5bT_83sV",
+                # "bypass": DEFAULT_PROXY_BYPASS,
+                # tor proxy alternative:
+                "server": "socks5://127.0.0.1:9050",
                 "bypass": DEFAULT_PROXY_BYPASS,
             },
             n_semaphore=12,
