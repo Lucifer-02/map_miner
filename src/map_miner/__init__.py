@@ -18,19 +18,24 @@ from .recaptcha_solver import (
 )
 from .scraper import (
     DEFAULT_CAPTCHA_TIMEOUT,
+    DEFAULT_FLATTEN_COLUMNS,
     DEFAULT_SPA_PREVIEW_TIMEOUT,
+    REQUIRED_COLUMNS,
     create_browser_context,
     extract_coordinates_from_url,
+    format_places_dataframe,
     scrape_google_maps,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "DEFAULT_CAPTCHA_TIMEOUT",
+    "DEFAULT_FLATTEN_COLUMNS",
     "DEFAULT_PROXY_BYPASS",
     "DEFAULT_SPA_PREVIEW_TIMEOUT",
     "DEFAULT_TOR_RENEW_COOLDOWN",
+    "REQUIRED_COLUMNS",
     "ProxyRotator",
     "RecaptchaBlockedError",
     "RecaptchaError",
@@ -40,6 +45,7 @@ __all__ = [
     "create_browser_context",
     "extract_coordinates_from_url",
     "extract_place_data",
+    "format_places_dataframe",
     "get_tor_rotating_proxy",
     "renew_tor_circuit_control",
     "scrape_google_maps",

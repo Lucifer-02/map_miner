@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Cơ chế Dual-stage audio fallback: lọc dải tần 300Hz-3400Hz và tự động fallback sang WAV mono 16kHz tiêu chuẩn.
 - **Tùy biến SPA Preview Timeout**:
   - Bổ sung tham số `preview_timeout` và hằng số [`DEFAULT_SPA_PREVIEW_TIMEOUT = 15000`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) (15 giây), loại bỏ hoàn toàn lỗi `Timeout 5000ms exceeded while waiting for event "response"` khi sử dụng proxy có độ trễ cao.
+- **Tối Ưu Chuẩn Hóa Dữ Liệu Đầu Ra (`flatten: bool = False`)**:
+  - Mặc định chuẩn hóa 11 cột phẳng phổ biến nhất (`name`, `place_id`, `latitude`, `longitude`, `address`, `link`, `categories`, `rating`, `reviews_count`, `plus_code`, `city`); toàn bộ các thuộc tính phụ và thông tin chi tiết được đóng gói gọn trong cột thứ 12 `details` dưới dạng chuỗi JSON UTF-8 (`ensure_ascii=False`), tương thích hoàn hảo khi xuất Excel/CSV/Parquet mà không bị xung đột schema struct.
+  - Bổ sung tham số `flatten: bool = False` vào [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) và hàm pure helper [`format_places_dataframe`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), cho phép truyền `flatten=True` để bung toàn bộ 28 cột phẳng nếu cần.
+  - Cung cấp hằng số `DEFAULT_FLATTEN_COLUMNS` và duy trì `REQUIRED_COLUMNS` làm bí danh tương thích ngược.
 
 ### Changed
 - **Nâng Timeout Giải CAPTCHA**: Tăng thời gian chờ giải câu đố reCAPTCHA từ 35.0s lên 85.0s (`DEFAULT_CAPTCHA_TIMEOUT = 85.0s`), đáp ứng tốt các thử thách âm thanh nhiều vòng (multi-round challenge).

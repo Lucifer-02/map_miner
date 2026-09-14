@@ -77,8 +77,12 @@ flowchart TD
 
     subgraph Output ["4. Chuẩn Hóa & Xuất Dữ Liệu"]
         Filter --> NormDict["Dict địa điểm hoàn chỉnh (gắn canonical link)"]
-        NormDict --> OutDF["polars.from_dicts(results, infer_schema_length=None)"]
-        OutDF --> Final["Polars DataFrame (pl.DataFrame)"]
+        NormDict --> FormatPlaces["format_places_dataframe(results, flatten, fields)"]
+        FormatPlaces --> ModeFlatten{"flatten=True?"}
+        ModeFlatten -- "False (Mặc định)" --> OutReq["6 Cột bắt buộc + Cột details (JSON String)"]
+        ModeFlatten -- "True" --> OutDF["polars.from_dicts(results, infer_schema_length=None)"]
+        OutReq --> Final["Polars DataFrame (pl.DataFrame)"]
+        OutDF --> Final
     end
 ```
 
@@ -128,6 +132,7 @@ Tệp [`main.py`](file:///data/IMPORTANT/map_miner/main.py) đóng vai trò làm
   - `lang: str = "en"`: Mã ngôn ngữ giao diện Google Maps (ví dụ: `"vi"`, `"en"`, `"fr"`).
   - `headless: bool = False`: Chế độ chạy trình duyệt ẩn (`True`) hoặc hiện cửa sổ trực quan (`False`).
   - `fields: Sequence[str] | set[str] | None = None`: Danh sách các trường dữ liệu tùy biến cần lấy. Nếu là `None`, bóc tách toàn bộ 27+ trường dữ liệu chuẩn.
+  - `flatten: bool = False`: Tùy chọn làm phẳng dữ liệu đầu ra. Mặc định `False`: chỉ giữ 6 cột phẳng bắt buộc (`name`, `place_id`, `latitude`, `longitude`, `address`, `link`) ở top-level, toàn bộ thông tin chi tiết còn lại được gom vào cột `details` dưới dạng JSON string. Nếu `True`: bung toàn bộ các trường phẳng độc lập.
   - `use_spa: bool = True`: Bật chế độ SPA Navigation tốc độ cao (mặc định: `True`).
   - `range_limit: float | None = None`: Giới hạn bán kính địa lý tối đa (tính theo mét) tính từ `geo_coordinates`. Kích hoạt cơ chế Early Drop và Early Exit khi các địa điểm nằm ngoài bán kính này (mặc định: `None`).
 - **Xử lý đầu ra**:
@@ -259,7 +264,34 @@ Tài liệu hướng dẫn thiết lập IP rotation tự động cho Tor proxy 
 
 ## 4. Bảng Quy Chuẩn Dữ Liệu Đầu Ra (Output Schema)
 
-Kết quả bóc tách cuối cùng được chuẩn hóa thành `polars.DataFrame` bao gồm 28 trường dữ liệu chi tiết:
+Kết quả cào dữ liệu được chuẩn hóa và trả về dưới dạng `polars.DataFrame` qua hàm [`format_places_dataframe`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), hỗ trợ 2 chế độ thông qua tham số `flatten: bool = False`:
+
+### 4.1. Chế Độ Mặc Định (`flatten=False` - Chuẩn Hóa 11 Cột Mặc Định & Cột `details` JSON)
+
+Ở chế độ mặc định, bảng dữ liệu giữ lại **11 cột phẳng phổ biến nhất** (`DEFAULT_FLATTEN_COLUMNS`) ở cấp cao nhất mà đại đa số các địa điểm trên Google Maps đều có, toàn bộ thông tin chi tiết và siêu dữ liệu biến đổi còn lại được gom gọn vào cột `details` dưới dạng JSON string (`json.dumps(..., ensure_ascii=False, default=str)`):
+
+| Cột (Column)    | Kiểu dữ liệu Polars | Bắt buộc/Phổ biến | Mô tả chi tiết                                                                                                                                                                          |
+| :-------------- | :------------------ | :---------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | `String`            | Có                | Tên chính thức của địa điểm / doanh nghiệp                                                                                                                                              |
+| `place_id`      | `String`            | Có                | Mã định danh duy nhất (Canonical Google Place ID `ChIJ...` hoặc Hex ID)                                                                                                                 |
+| `latitude`      | `Float64`           | Có                | Vĩ độ địa lý WGS84                                                                                                                                                                      |
+| `longitude`     | `Float64`           | Có                | Kinh độ địa lý WGS84                                                                                                                                                                    |
+| `address`       | `String`            | Có                | Địa chỉ đầy đủ hoàn chỉnh                                                                                                                                                               |
+| `link`          | `String`            | Có                | Đường dẫn URL trực tiếp tới địa điểm trên Google Maps                                                                                                                                   |
+| `categories`    | `List[String]`      | Có                | Danh sách danh mục, ngành nghề kinh doanh                                                                                                                                               |
+| `rating`        | `Float64`           | Có                | Điểm đánh giá sao trung bình (vd: `4.5`)                                                                                                                                                |
+| `reviews_count` | `Int64`             | Có                | Tổng số lượng bài đánh giá của người dùng (vd: `253`)                                                                                                                                   |
+| `plus_code`     | `String`            | Có                | Mã Plus Code toàn cầu (vd: `XQMM+PF Ha Dong, Ha Noi, Vietnam`)                                                                                          |
+| `city`          | `String`            | Có                | Tỉnh / Thành phố trực thuộc trung ương (đã khôi phục dấu tiếng Việt)                                                                                                                    |
+| `details`       | `String` (JSON)     | Có                | Chuỗi JSON UTF-8 gom các trường phụ (`phone`, `website`, `opening_hours`, `photos`, `amenities`, `open_status`, `price_level`,...). Tự động loại bỏ các trường `None`.               |
+
+- **Bảo toàn tiếng Việt**: Tùy chọn `ensure_ascii=False` đảm bảo ký tự tiếng Việt có dấu được lưu trữ tự nhiên trong JSON string, không bị escape thành `\u...`.
+- **Tối ưu dung lượng**: Các trường có giá trị `None` bị loại bỏ khỏi JSON payload, giúp tiết kiệm tối đa dung lượng lưu trữ và băng thông truyền tải.
+- **Trường hợp kết quả rỗng**: Trả về `pl.DataFrame` rỗng với schema chuẩn xác gồm 12 cột (`latitude`/`longitude`/`rating` kiểu `pl.Float64`, `reviews_count` kiểu `pl.Int64`, `categories` kiểu `pl.List(pl.String)`, các cột còn lại kiểu `pl.String`).
+
+### 4.2. Chế Độ Mở Rộng (`flatten=True` - Bung Phẳng Toàn Bộ 28 Trường Dữ Liệu)
+
+Khi thiết lập `flatten=True`, toàn bộ các trường dữ liệu được trải phẳng trực tiếp thành 28 cột độc lập tại top-level (không có cột `details`):
 
 | Cột (Column)    | Kiểu dữ liệu Polars | Mô tả chi tiết                                                              |
 | :-------------- | :------------------ | :-------------------------------------------------------------------------- |
@@ -291,6 +323,12 @@ Kết quả bóc tách cuối cùng được chuẩn hóa thành `polars.DataFra
 | `is_claimed`    | `Boolean`           | Doanh nghiệp đã được chủ sở hữu xác nhận quyền chính chủ                    |
 | `country_code`  | `String`            | Mã quốc gia chuẩn ISO (vd: `VN`, `US`)                                      |
 | `link`          | `String`            | Đường dẫn URL trực tiếp tới địa điểm trên Google Maps                       |
+
+### 4.3. Kết Hợp Linh Hoạt Với Bộ Lọc Trường (`fields`)
+
+Khi tham số `fields` được chỉ định:
+- Với `flatten=False`: Các trường nằm trong `REQUIRED_COLUMNS` giữ vị trí top-level, các trường còn lại được gom vào `details`. Nếu không có trường chi tiết nào được yêu cầu, cột `details` sẽ tự động bị loại bỏ; nếu chỉ yêu cầu các trường chi tiết, bảng sẽ chỉ gồm duy nhất cột `details`.
+- Với `flatten=True`: Các cột phẳng xuất hiện đúng theo danh sách `fields` đã chỉ định.
 
 ---
 
@@ -335,10 +373,10 @@ make run
 
 ### 5.4. Bộ Kiểm Thử Tự Động Toàn Diện (Unit Tests)
 
-Dự án sở hữu bộ kiểm thử tự động gồm **50 unit tests độc lập** chạy hoàn toàn offline không phụ thuộc mạng bên ngoài, thực thi nhanh chóng (~0.4s – 0.6s) và đạt tỷ lệ pass **100%**, tuân thủ 0 lỗi linter từ Ruff:
+Dự án sở hữu bộ kiểm thử tự động gồm **96 unit tests độc lập** chạy hoàn toàn offline không phụ thuộc mạng bên ngoài, thực thi nhanh chóng và đạt tỷ lệ pass **100%**, tuân thủ 0 lỗi linter từ Ruff và 0 lỗi type annotations từ `ty check`:
 
 ```bash
-# Chạy toàn bộ 50 unit tests
+# Chạy toàn bộ 97 unit tests
 uv run pytest
 
 # Kiểm tra cú pháp và định dạng mã nguồn chuẩn PEP 8
@@ -347,8 +385,19 @@ uv run ruff format .
 uv run ty check .
 ```
 
-#### Phân bổ 50 Unit Tests trong Codebase:
-1. **[`tests/test_extractor.py`](file:///data/IMPORTANT/map_miner/tests/test_extractor.py) (8 tests)**:
+#### Phân bổ 97 Unit Tests trong Codebase:
+1. **[`tests/test_flatten_output.py`](file:///data/IMPORTANT/map_miner/tests/test_flatten_output.py) (10 tests)**:
+   - `test_format_places_dataframe_default_flatten_false`: Kiểm thử mặc định `flatten=False` cho 11 cột phổ biến + `details` JSON, bảo toàn tiếng Việt và loại trừ trường `None`.
+   - `test_format_places_dataframe_flatten_true`: Kiểm thử `flatten=True` bung phẳng tất cả các trường độc lập, không có cột `details`.
+   - `test_format_places_dataframe_empty_flatten_false`: Kiểm thử kết quả rỗng trả về DataFrame rỗng có schema chuẩn 12 cột (`latitude`/`longitude`/`rating` kiểu `Float64`, `reviews_count` kiểu `Int64`, `categories` kiểu `List[String]`).
+   - `test_format_places_dataframe_empty_flatten_true`: Kiểm thử kết quả rỗng trả về DataFrame rỗng không có cột.
+   - `test_format_places_dataframe_with_mixed_fields`: Kiểm thử `fields` hỗn hợp kết hợp default columns và detail fields với `flatten=False`.
+   - `test_format_places_dataframe_with_only_required_fields`: Kiểm thử chỉ yêu cầu default columns với `flatten=False` (không sinh cột `details`).
+   - `test_format_places_dataframe_with_only_detail_fields`: Kiểm thử chỉ yêu cầu detail fields với `flatten=False` (chỉ có duy nhất cột `details`).
+   - `test_format_places_dataframe_with_fields_flatten_true`: Kiểm thử `fields` tùy biến kết hợp `flatten=True`.
+   - `test_scrape_google_maps_forwards_flatten_parameter`: Kiểm thử tích hợp mock chuyển tiếp tham số `flatten` trong `scrape_google_maps`.
+   - `test_required_columns_backward_compatibility`: Kiểm thử bí danh `REQUIRED_COLUMNS` bảo toàn giá trị giống `DEFAULT_FLATTEN_COLUMNS`.
+2. **[`tests/test_extractor.py`](file:///data/IMPORTANT/map_miner/tests/test_extractor.py) (8 tests)**:
    - `test_safe_get`: Kiểm thử truy cập an toàn trên cấu trúc lồng nhau sâu.
    - `test_strip_accents`: Kiểm thử loại bỏ dấu tiếng Việt chuẩn Unicode NFD.
    - `test_parse_address_string_fallback`: Kiểm thử bóc tách địa chỉ bằng heuristic regex.
@@ -507,6 +556,15 @@ uv run ty check .
     - **Nâng Timeout CAPTCHA & Tối ưu Audio Solver**: Bổ sung `DEFAULT_CAPTCHA_TIMEOUT = 85.0s` hỗ trợ multi-round challenge ("Multiple correct solutions required"); chỉ định rõ `language="en-US"` cho `recognize_google`; mở rộng `WORD_TO_DIGIT` ánh xạ "oh" -> "0"; nâng `max_audio_attempts` mặc định lên 5.
     - **Điều chỉnh Semaphore Phù hợp Tor**: Giảm `n_semaphore` trong `main.py` từ 12 xuống 4 nhằm tương thích băng thông Tor.
     - Bổ sung 11 unit tests chuyên biệt, nâng tổng số lên **61 unit tests**, đạt tỷ lệ pass **100%** và 0 cảnh báo linter Ruff.
+15. **[ĐÃ HOÀN TẤT] Tùy Chọn Gom Nhóm Chi Tiết Thành JSON String & Chuẩn Hóa 11 Cột Phẳng Mặc Định (`flatten: bool = False`)**:
+    - **Chuẩn hóa 11 Cột Phẳng Mặc Định (`DEFAULT_FLATTEN_COLUMNS`)**: Khai báo hằng số `DEFAULT_FLATTEN_COLUMNS: tuple[str, ...] = ("name", "place_id", "latitude", "longitude", "address", "link", "categories", "rating", "reviews_count", "plus_code", "city")`, duy trì bí danh tương thích ngược `REQUIRED_COLUMNS = DEFAULT_FLATTEN_COLUMNS`, export tại root package.
+    - **Hàm Tiện Ích `format_places_dataframe`**: Triển khai `format_places_dataframe(results, flatten=False, fields=None)` điều phối và định dạng DataFrame kết quả.
+    - **Tùy Chọn `flatten` Trong `scrape_google_maps`**: Bổ sung tham số `flatten: bool = False` vào `scrape_google_maps`.
+      - **Mặc định `flatten=False`**: Giữ đúng 11 cột phổ biến nhất ở top-level, gom toàn bộ các trường metadata phụ (`phone`, `website`, `opening_hours`, `photos`, `amenities`, `open_status`, `price_level`, `timezone`, `country_code`, `thumbnail`, `is_claimed`,...) vào cột `details` dưới dạng chuỗi JSON UTF-8 (`json.dumps(..., ensure_ascii=False, default=str)`), tự động loại trừ các trường có giá trị `None` để tối ưu dung lượng và bảo toàn tiếng Việt có dấu.
+      - **Chế độ `flatten=True`**: Bung toàn bộ 28 trường thành từng cột phẳng độc lập tại top-level, không tạo cột `details`.
+    - **Hỗ Trợ Linh Hoạt Khi Kết Hợp Bộ Lọc `fields`**: Tự động phân tách `top_cols` (thuộc `DEFAULT_FLATTEN_COLUMNS`) và `other_cols` (trường phụ) để định dạng DataFrame chính xác theo danh sách trường được yêu cầu, gán đúng kiểu dữ liệu (`pl.Float64`, `pl.Int64`, `pl.List(pl.String)`).
+    - **Xử Lý Schema An Toàn Cho Kết Quả Rỗng**: Đảm bảo DataFrame trả về khi không có kết quả luôn có schema chuẩn xác (12 cột với kiểu dữ liệu `Float64` cho `latitude`/`longitude`/`rating`, `Int64` cho `reviews_count`, `List(String)` cho `categories`, và `String` cho các cột còn lại khi `flatten=False`).
+    - **Bộ 10 Unit Tests Chuyên Biệt**: Bổ sung và cập nhật [`tests/test_flatten_output.py`](file:///data/IMPORTANT/map_miner/tests/test_flatten_output.py) bao phủ 100% các ca kiểm thử: mặc định `flatten=False` (11 cột + `details`), `flatten=True`, kết quả rỗng cho cả 2 chế độ, kết hợp `fields` hỗn hợp / chỉ có default columns / chỉ có detail fields, chuyển tiếp tham số `flatten` trong `scrape_google_maps`, và kiểm thử bí danh tương thích ngược `REQUIRED_COLUMNS`. Nâng tổng số test suite lên **97 tests**, đạt tỷ lệ pass **100%**, 0 lỗi Ruff linter, 0 lỗi type annotations từ `ty check`.
 
 ---
 

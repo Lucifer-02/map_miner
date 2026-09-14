@@ -1,5 +1,6 @@
 import asyncio
 import itertools
+import json
 import logging
 import random
 import re
@@ -44,15 +45,18 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_CAPTCHA_TIMEOUT",
+    "DEFAULT_FLATTEN_COLUMNS",
     "DEFAULT_PLACE_TIMEOUT",
     "DEFAULT_PROXY_BYPASS",
     "DEFAULT_QUERY_TIMEOUT",
     "DEFAULT_SPA_PREVIEW_TIMEOUT",
     "MAX_CONSECUTIVE_EMPTY_SCROLLS",
+    "REQUIRED_COLUMNS",
     "ProxyRotator",
     "create_browser_context",
     "extract_coordinates_from_url",
     "find_feed_selector",
+    "format_places_dataframe",
     "get_place_urls",
     "get_tor_rotating_proxy",
     "global_route_handler",
@@ -69,6 +73,22 @@ __all__ = [
 ]
 
 # --- Constants ---
+DEFAULT_FLATTEN_COLUMNS: tuple[str, ...] = (
+    "name",
+    "place_id",
+    "latitude",
+    "longitude",
+    "address",
+    "link",
+    "categories",
+    "rating",
+    "reviews_count",
+    "plus_code",
+    "city",
+)
+REQUIRED_COLUMNS: tuple[str, ...] = (
+    DEFAULT_FLATTEN_COLUMNS  # Backward compatibility alias
+)
 DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
 DEFAULT_QUERY_TIMEOUT = 300.0  # 5 minutes per query
 DEFAULT_PLACE_TIMEOUT = 45.0  # 45 seconds per detail place link
@@ -1259,6 +1279,116 @@ async def process_link(
         return None
 
 
+def _get_flatten_column_type(col: str) -> pl.DataType | type[pl.DataType]:
+    if col in ("latitude", "longitude", "rating"):
+        return pl.Float64
+    if col == "reviews_count":
+        return pl.Int64
+    if col == "categories":
+        return pl.List(pl.String)
+    return pl.String
+
+
+def format_places_dataframe(
+    results: list[dict[str, Any]],
+    flatten: bool = False,
+    fields: Sequence[str] | set[str] | None = None,
+) -> pl.DataFrame:
+    """Formats scraped places data into a Polars DataFrame.
+
+    When flatten=False (default), keeps 11 default top-level columns
+    ('name', 'place_id', 'latitude', 'longitude', 'address', 'link',
+    'categories', 'rating', 'reviews_count', 'plus_code', 'city')
+    and bundles all other metadata into a 'details' JSON string column.
+
+    When flatten=True, outputs all fields as flattened columns at top-level.
+
+    Args:
+        results (list[dict[str, Any]]): List of scraped place dictionaries.
+        flatten (bool, optional): Whether to flatten all fields into individual columns.
+            Defaults to False.
+        fields (Sequence[str] | set[str] | None, optional): Specific fields to include.
+            Defaults to None.
+
+    Returns:
+        pl.DataFrame: Formatted Polars DataFrame.
+    """
+    if flatten:
+        if not results:
+            if fields is not None:
+                schema = {f: pl.String for f in fields}
+                return pl.DataFrame(schema=schema)
+            return pl.DataFrame()
+        if fields is not None:
+            filtered_results = [
+                {k: item[k] for k in fields if k in item} for item in results
+            ]
+            return pl.from_dicts(filtered_results, infer_schema_length=None)
+        return pl.from_dicts(results, infer_schema_length=None)
+
+    if fields is None:
+        if not results:
+            schema: dict[str, Any] = {
+                c: _get_flatten_column_type(c) for c in DEFAULT_FLATTEN_COLUMNS
+            }
+            schema["details"] = pl.String
+            return pl.DataFrame(schema=schema)
+
+        formatted_rows: list[dict[str, Any]] = []
+        for item in results:
+            row: dict[str, Any] = {c: item.get(c) for c in DEFAULT_FLATTEN_COLUMNS}
+            details_dict = {
+                k: v
+                for k, v in item.items()
+                if k not in DEFAULT_FLATTEN_COLUMNS and v is not None
+            }
+            row["details"] = json.dumps(details_dict, ensure_ascii=False, default=str)
+            formatted_rows.append(row)
+        schema_overrides = {
+            "latitude": pl.Float64,
+            "longitude": pl.Float64,
+            "rating": pl.Float64,
+            "reviews_count": pl.Int64,
+            "categories": pl.List(pl.String),
+        }
+        return pl.from_dicts(
+            formatted_rows,
+            infer_schema_length=None,
+            schema_overrides=schema_overrides,
+        )
+
+    # fields is not None and flatten is False
+    top_cols = [f for f in fields if f in DEFAULT_FLATTEN_COLUMNS]
+    other_cols = [f for f in fields if f not in DEFAULT_FLATTEN_COLUMNS]
+    if not results:
+        schema_dict: dict[str, Any] = {c: _get_flatten_column_type(c) for c in top_cols}
+        if other_cols:
+            schema_dict["details"] = pl.String
+        return pl.DataFrame(schema=schema_dict)
+
+    formatted_rows = []
+    for item in results:
+        row = {c: item.get(c) for c in top_cols}
+        if other_cols:
+            details_dict = {
+                k: item[k] for k in other_cols if k in item and item[k] is not None
+            }
+            row["details"] = json.dumps(details_dict, ensure_ascii=False, default=str)
+        formatted_rows.append(row)
+
+    overrides: dict[str, Any] = {
+        c: _get_flatten_column_type(c)
+        for c in top_cols
+        if c in ("latitude", "longitude", "rating", "reviews_count", "categories")
+    }
+
+    return pl.from_dicts(
+        formatted_rows,
+        infer_schema_length=None,
+        schema_overrides=overrides or None,
+    )
+
+
 async def scrape_google_maps(
     queries: set[str],
     geo_coordinates: Point,
@@ -1276,6 +1406,7 @@ async def scrape_google_maps(
     headless: bool = False,
     n_semaphore: int = 8,
     fields: Sequence[str] | set[str] | None = None,
+    flatten: bool = False,
     use_spa: bool = True,
     cache_dir: str | Path | None = DEFAULT_CACHE_DIR,
     range_limit: float | None = None,
@@ -1297,6 +1428,9 @@ async def scrape_google_maps(
         headless (bool, optional): Whether to run headless browser. Defaults to False.
         n_semaphore (int, optional): Maximum concurrent browser tabs/queries. Defaults to 8.
         fields (Sequence[str] | set[str], optional): Selected fields to extract. Defaults to None (all fields).
+        flatten (bool, optional): Whether to flatten all fields into individual columns.
+            If False (default), bundles non-default fields into a 'details' JSON string column,
+            keeping 11 common columns at top-level. Defaults to False.
         use_spa (bool, optional): Whether to use high-speed SPA navigation. Defaults to True.
         cache_dir (str | Path | None, optional): Directory to store persistent Chromium disk cache.
             Defaults to DEFAULT_CACHE_DIR (".cache/chromium_cache"). If None, disk caching
@@ -1603,7 +1737,4 @@ async def scrape_google_maps(
                 except PlaywrightError:
                     pass
 
-    if not results:
-        return pl.DataFrame()
-
-    return pl.from_dicts(results, infer_schema_length=None)
+    return format_places_dataframe(results, flatten=flatten, fields=fields)
