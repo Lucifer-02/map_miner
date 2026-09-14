@@ -12,8 +12,14 @@ Tài liệu này định nghĩa vai trò, trách nhiệm, phạm vi công cụ v
 flowchart TD
     A["Yêu Cầu / Nhiệm Vụ (Task)"] --> B["reviewer: Phân tích & Lên Kế Hoạch Hành Động (Action Plan)"]
     B --> C["reviewer: Giao việc cho worker (invoke_subagent / send_message)"]
-    C --> D["worker: Trực tiếp chỉnh sửa mã nguồn & viết test"]
-    D --> E["worker: Tự kiểm chứng (ruff check, ty check & pytest)"]
+    C --> D["worker: Trực tiếp triển khai mã nguồn & viết unit test"]
+    
+    D --> CheckIssue{"Trong quá trình làm:\nGặp vấn đề bất ngờ?\n(Edge case / Mâu thuẫn kiến trúc / Bot block)"}
+    CheckIssue -- "Có (Phát sinh sự cố)" --> IssueReport["worker: Gửi Báo Cáo Sự Cố (Issue Report) kèm đề xuất"]
+    IssueReport --> RCA["reviewer: Phân tích nguyên nhân gốc rễ (RCA) & Điều chỉnh Action Plan"]
+    RCA --> C
+    
+    CheckIssue -- "Không (Thuận lợi)" --> E["worker: Tự kiểm chứng (ruff check, ty check & pytest)"]
     E --> F["worker: Báo cáo kết quả hoàn thành lại cho reviewer"]
     F --> G["reviewer: Thẩm định mã nguồn & đối soát kế hoạch"]
     G --> H{"Kết quả đánh giá"}
@@ -48,6 +54,9 @@ flowchart TD
        4. **An toàn Bot & Ẩn danh (Anti-Bot & Stealth)**: Không tạo dấu hiệu bất thường cho Google Maps.
        5. **Độ tin cậy Kiểm thử & Chuẩn Kiểu (Testability & Type Safety)**: 100% tests phải pass (`uv run pytest`), 0 lỗi linter/format (`uv run ruff check .` & `uv run ruff format .`), và 0 lỗi type (`ty check` / `uv run ty check`), kèm unit test bao phủ các ca biên.
      - Đưa ra kết luận: `ACCEPT` hoặc `REQUEST_CHANGES`.
+  4. **Tiếp nhận & Thẩm định Vấn đề Phát sinh (Issue Evaluation & Continuous Loop)**:
+     - Khi nhận được báo cáo sự cố hoặc vấn đề bất ngờ từ `worker`/runtime (xung đột kiểu dữ liệu, bot block, thay đổi DOM, ca biên mới):
+     - Chịu trách nhiệm phân tích nguyên nhân cốt lõi (Root Cause Analysis - RCA), đưa ra quyết định kiến trúc chuẩn xác, cập nhật Action Plan và tài liệu dự án ([CONTEXT.md](file:///data/IMPORTANT/map_miner/CONTEXT.md), [CHANGELOG.md](file:///data/IMPORTANT/map_miner/CHANGELOG.md)) để duy trì vòng lặp cải tiến liên tục.
 
 ---
 
@@ -66,10 +75,63 @@ flowchart TD
      - Luôn chạy: `ty check` (hoặc `uv run ty check`, đảm bảo 0 lỗi type annotations).
      - Luôn chạy: `uv run pytest` (100% tests phải pass).
   4. **Báo cáo tường minh**: Tóm tắt ngắn gọn các file đã thay đổi, lý do kỹ thuật và kết quả kiểm thử (ruff, ty, pytest), sau đó thông báo cho `reviewer` thẩm định.
+  5. **Chủ động báo cáo vấn đề phát sinh (Proactive Issue Escalation)**:
+     - Khi gặp tình huống ngoài kế hoạch (xung đột kiểu dữ liệu, edge cases mới, bot block mới, nguy cơ hồi quy):
+     - Worker tuyệt đối không tự ý đưa ra quyết định kiến trúc tùy tiện mà phải gửi ngay thông báo chi tiết (theo mẫu Issue Report) cho `reviewer` để được định hướng giải quyết.
 
 ---
 
-## 3. Cách Thức Khởi Chạy (Invocation Guide)
+## 3. Quy Chuẩn Vòng Lặp Phản Hồi Liên Tục (Continuous Feedback & Adaptation Loop)
+
+Để đảm bảo hệ thống vừa duy trì tính kỷ luật kiến trúc cao vừa thích ứng linh hoạt trước những thay đổi ngoại cảnh bất ngờ (Google Maps đổi cấu trúc DOM, bot detection siết chặt, các ca biên dữ liệu phức tạp), `reviewer` và `worker` tuân thủ quy trình vòng lặp phản hồi 4 bước chuẩn hóa:
+
+```mermaid
+flowchart LR
+    S1["1. Phát Hiện\n(Detection)"] --> S2["2. Báo Cáo & Đề Xuất\n(Escalation)"]
+    S2 --> S3["3. Thẩm Định & Điều Chỉnh\n(Plan Refinement)"]
+    S3 --> S4["4. Tái Thực Thi & Khép Vòng Lặp\n(Closure)"]
+    S4 -. "Nếu còn tồn tại vấn đề" .-> S1
+```
+
+### 3.1. Quy Trình 4 Bước Của Vòng Lặp
+
+1. **Bước 1: Phát Hiện (Detection)**:
+   - `worker` trong quá trình thực thi hoặc chạy test suite phát hiện lỗi không lường trước, hành vi bất thường của runtime, mâu thuẫn giữa kế hoạch và thực tế codebase, hoặc các trường hợp biên chưa được dự liệu.
+2. **Bước 2: Báo Cáo & Nêu Đề Xuất (Escalation with Options)**:
+   - `worker` tạm dừng nhánh thay đổi có rủi ro, cô lập hiện tượng và gửi `send_message` chứa **Báo Cáo Sự Cố (Issue Report)** chuẩn hóa về cho `reviewer`. Trong báo cáo phải nêu rõ các phương án giải quyết tiềm năng kèm ưu/nhược điểm kỹ thuật.
+3. **Bước 3: Thẩm Định & Điều Chỉnh Kế Hoạch (Evaluation & Plan Refinement)**:
+   - `reviewer` nghiên cứu hiện tượng, thực hiện Root Cause Analysis (RCA), thẩm định các đề xuất, đưa ra quyết định kiến trúc tối ưu nhất (bảo toàn nguyên tắc thiết kế và hiệu năng), sau đó cập nhật Action Plan điều chỉnh và gửi lại cho `worker`.
+4. **Bước 4: Tái Thực Thi & Khép Vòng Lặp (Re-execution & Closure)**:
+   - `worker` tiếp nhận Action Plan điều chỉnh, triển khai mã nguồn, bổ sung unit test kiểm chứng ca biên vừa phát sinh, xác nhận 0 technical debt và gửi báo cáo nghiệm thu hoàn tất vòng lặp.
+
+---
+
+### 3.2. Mẫu Chuẩn Báo Cáo Sự Cố Phát Sinh (Issue Report Template)
+
+Khi gửi báo cáo sự cố qua `send_message`, `worker` áp dụng mẫu cấu trúc markdown sau:
+
+```markdown
+### 🚨 [ISSUE REPORT] Tên Vấn Đề / Hiện Tượng
+
+- **Ngữ cảnh & Tác động (Context & Impact)**:
+  * Module/Hàm bị ảnh hưởng: `path/to/file.py::func_name`
+  * Hiện tượng xảy ra: Mô tả lỗi runtime, mismatch schema, hoặc bot block.
+  * Tác động: Gây fail test nào, hoặc ảnh hưởng đến luồng cào dữ liệu ra sao.
+
+- **Nguyên nhân cốt lõi sơ bộ (Preliminary Root Cause)**:
+  * Phân tích tại sao vấn đề xuất hiện (do cấu trúc HTML Google Maps thay đổi, timeout ngắn, kiểu dữ liệu union phức tạp, v.v.).
+
+- **Các phương án khả dĩ (Proposed Solutions)**:
+  * **Phương án A**: Mô tả giải pháp -> Ưu điểm / Nhược điểm.
+  * **Phương án B**: Mô tả giải pháp -> Ưu điểm / Nhược điểm.
+
+- **Quyết định cần từ Reviewer (Reviewer Decision Needed)**:
+  * Câu hỏi hoặc đề xuất phê duyệt phương án cụ thể để điều chỉnh Action Plan.
+```
+
+---
+
+## 4. Cách Thức Khởi Chạy (Invocation Guide)
 
 ### Khởi chạy `reviewer` để lập kế hoạch, giao việc cho `worker` và thẩm định:
 ```python

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,7 @@ from map_miner.scraper import (
     DEFAULT_CAPTCHA_TIMEOUT,
     DEFAULT_DISK_CACHE_SIZE,
     DEFAULT_PROXY_BYPASS,
+    DEFAULT_RANGE_LIMIT,
     FEED_FALLBACK_SELECTORS,
     LAUNCH_ARGS,
     MAX_CONSECUTIVE_EMPTY_SCROLLS,
@@ -24,6 +26,7 @@ from map_miner.scraper import (
     create_browser_context,
     extract_coordinates_from_url,
     get_place_urls,
+    global_route_handler,
     handle_captcha_if_present,
     is_preview_response_for_link,
     make_place_url,
@@ -41,6 +44,17 @@ def test_make_place_url():
     assert "cafe+h%C3%A0+%C4%91%C3%B4ng" in url
     assert "@20.985322,105.781289,18z" in url
     assert "hl=vi" in url
+
+
+def test_blocked_resources_and_urls():
+    assert "image" in BLOCKED_RESOURCE_TYPES
+    assert "media" in BLOCKED_RESOURCE_TYPES
+    assert "font" in BLOCKED_RESOURCE_TYPES
+    assert any("google-analytics" in p for p in BLOCKED_URL_PATTERNS)
+    assert any("/maps/vt" in p for p in BLOCKED_URL_PATTERNS)
+    assert any("feedback-pa.clients6.google.com" in p for p in BLOCKED_URL_PATTERNS)
+    assert any("ogads-pa.clients6.google.com" in p for p in BLOCKED_URL_PATTERNS)
+    assert any("/maps/preview/entity" in p for p in BLOCKED_URL_PATTERNS)
 
 
 def test_consent_regex():
@@ -64,14 +78,6 @@ def test_consent_regex():
     non_matches = ["Submit", "Search", "Next", "Close"]
     for text in non_matches:
         assert CONSENT_BUTTON_REGEX.search(text) is None
-
-
-def test_blocked_resources_and_urls():
-    assert "image" in BLOCKED_RESOURCE_TYPES
-    assert "media" in BLOCKED_RESOURCE_TYPES
-    assert "font" in BLOCKED_RESOURCE_TYPES
-    assert any("google-analytics" in p for p in BLOCKED_URL_PATTERNS)
-    assert any("/maps/vt" in p for p in BLOCKED_URL_PATTERNS)
 
 
 def test_feed_selectors():
@@ -462,8 +468,10 @@ def test_create_browser_context_with_proxy_bypass():
             "password": "pass",
             "bypass": DEFAULT_PROXY_BYPASS,
         }
+        point = Point(21.018785, 105.830415)
         context = await create_browser_context(
             browser=browser,
+            geo_coordinates=point,
             proxy=proxy_config,
         )
 
@@ -472,6 +480,13 @@ def test_create_browser_context_with_proxy_bypass():
         kwargs = browser.new_context.await_args.kwargs
         assert kwargs["proxy"] == proxy_config
         assert kwargs["proxy"]["bypass"] == DEFAULT_PROXY_BYPASS
+        assert "fonts.gstatic.com" in kwargs["proxy"]["bypass"]
+        assert "apis.google.com" in kwargs["proxy"]["bypass"]
+        assert "ssl.gstatic.com" in kwargs["proxy"]["bypass"]
+        assert kwargs["geolocation"] == {
+            "latitude": point.latitude,
+            "longitude": point.longitude,
+        }
 
     asyncio.run(_run())
 
@@ -482,9 +497,10 @@ def test_create_browser_context_without_proxy():
         mock_context = AsyncMock()
         browser.new_context.return_value = mock_context
 
+        point = Point(21.018785, 105.830415)
         context = await create_browser_context(
             browser=browser,
-            geo_coordinates=None,
+            geo_coordinates=point,
             lang="en",
             proxy=None,
         )
@@ -492,7 +508,10 @@ def test_create_browser_context_without_proxy():
         assert context == mock_context
         kwargs = browser.new_context.await_args.kwargs
         assert "proxy" not in kwargs
-        assert "geolocation" not in kwargs
+        assert kwargs["geolocation"] == {
+            "latitude": point.latitude,
+            "longitude": point.longitude,
+        }
         assert kwargs["locale"] == "en"
 
     asyncio.run(_run())
@@ -1143,8 +1162,8 @@ def test_get_place_urls_early_drop():
     asyncio.run(_run())
 
 
-def test_scrape_google_maps_range_limit_default_none_backward_compatible():
-    """Verifies that range_limit defaults to None and is passed through transparently."""
+def test_scrape_google_maps_range_limit_default_upper_bound():
+    """Verifies that range_limit defaults to DEFAULT_RANGE_LIMIT and is passed through transparently."""
 
     async def _run():
         from unittest.mock import patch
@@ -1188,7 +1207,7 @@ def test_scrape_google_maps_range_limit_default_none_backward_compatible():
         assert len(df) == 1
         assert df["name"][0] == "Standard Cafe"
         mock_spa.assert_awaited_once()
-        assert mock_spa.call_args.kwargs.get("range_limit") is None
+        assert mock_spa.call_args.kwargs.get("range_limit") == DEFAULT_RANGE_LIMIT
 
     asyncio.run(_run())
 
@@ -1874,7 +1893,10 @@ def test_create_browser_context_modern_stealth_and_client_hints():
         mock_context = AsyncMock()
         browser.new_context.return_value = mock_context
 
-        context = await create_browser_context(browser=browser, lang="vi")
+        point = Point(21.018785, 105.830415)
+        context = await create_browser_context(
+            browser=browser, geo_coordinates=point, lang="vi"
+        )
         assert context == mock_context
 
         kwargs = browser.new_context.await_args.kwargs
@@ -1945,7 +1967,7 @@ def test_staggered_query_dispatch_spa():
     async def _run():
         mock_playwright = AsyncMock()
         fake_browser = AsyncMock()
-        fake_browser.is_connected.return_value = True
+        fake_browser.is_connected = MagicMock(return_value=True)
         fake_browser.close = AsyncMock()
         mock_playwright.chromium.launch.return_value = fake_browser
 
@@ -2045,9 +2067,158 @@ def test_preview_timeout_forwarding_in_scrape_google_maps():
                 zoom=16,
                 use_spa=True,
                 preview_timeout=25000,
-                stagger_delay=None,
+                stagger_delay=0,
             )
 
         assert received_kwargs.get("preview_timeout") == 25000
+
+    asyncio.run(_run())
+
+
+def test_static_route_cache_hit(tmp_path):
+    async def _run():
+        cache_dir = tmp_path / "static_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        url = "https://www.google.com/maps/_/js/k=maps.m.en.js"
+        cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        cache_file = cache_dir / cache_key
+        cache_file.write_bytes(b"/* cached javascript code */")
+
+        route = AsyncMock()
+        route.request.url = url
+        route.request.method = "GET"
+        route.request.resource_type = "script"
+        route.fulfill = AsyncMock()
+        route.continue_ = AsyncMock()
+        route.abort = AsyncMock()
+
+        with patch("map_miner.scraper.DEFAULT_STATIC_CACHE_DIR", cache_dir):
+            await global_route_handler(route)
+
+        route.fulfill.assert_awaited_once()
+        assert route.fulfill.await_args is not None
+        kwargs = route.fulfill.await_args.kwargs
+        assert kwargs["status"] == 200
+        assert kwargs["body"] == b"/* cached javascript code */"
+        assert (
+            kwargs["headers"]["content-type"] == "application/javascript; charset=utf-8"
+        )
+        assert kwargs["headers"]["x-cache"] == "HIT-ROUTE-CACHE"
+        route.continue_.assert_not_called()
+        route.abort.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_static_route_cache_skips_preview_xhr(tmp_path):
+    async def _run():
+        cache_dir = tmp_path / "static_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        url = "https://www.google.com/maps/preview/place?authuser=0&hl=vi&gl=vn&pb=!1m18!1m12!1m3!1d1"
+        route = AsyncMock()
+        route.request.url = url
+        route.request.method = "GET"
+        route.request.resource_type = "xhr"
+        route.fulfill = AsyncMock()
+        route.continue_ = AsyncMock()
+        route.abort = AsyncMock()
+
+        with patch("map_miner.scraper.DEFAULT_STATIC_CACHE_DIR", cache_dir):
+            await global_route_handler(route)
+
+        route.continue_.assert_awaited_once()
+        route.fulfill.assert_not_called()
+        route.abort.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_static_route_cache_skips_post(tmp_path):
+    async def _run():
+        cache_dir = tmp_path / "static_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        url = "https://www.google.com/maps/_/js/k=maps.m.en.js"
+        route = AsyncMock()
+        route.request.url = url
+        route.request.method = "POST"
+        route.request.resource_type = "script"
+        route.fulfill = AsyncMock()
+        route.continue_ = AsyncMock()
+        route.abort = AsyncMock()
+
+        with patch("map_miner.scraper.DEFAULT_STATIC_CACHE_DIR", cache_dir):
+            await global_route_handler(route)
+
+        route.continue_.assert_awaited_once()
+        route.fulfill.assert_not_called()
+        route.abort.assert_not_called()
+
+    asyncio.run(_run())
+
+
+def test_static_route_cache_miss_fetches_and_saves(tmp_path):
+    async def _run():
+        cache_dir = tmp_path / "static_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        url = "https://maps.gstatic.com/maps-api-v3/api/js/59/1/intl/vi_ALL/common.js"
+        cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        cache_file = cache_dir / cache_key
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.body.return_value = b"console.log('fresh js');"
+
+        route = AsyncMock()
+        route.request.url = url
+        route.request.method = "GET"
+        route.request.resource_type = "script"
+        route.fetch = AsyncMock(return_value=mock_resp)
+        route.fulfill = AsyncMock()
+        route.continue_ = AsyncMock()
+        route.abort = AsyncMock()
+
+        with patch("map_miner.scraper.DEFAULT_STATIC_CACHE_DIR", cache_dir):
+            await global_route_handler(route)
+
+        route.fetch.assert_awaited_once()
+        route.fulfill.assert_awaited_once_with(response=mock_resp)
+        assert cache_file.is_file()
+        assert cache_file.read_bytes() == b"console.log('fresh js');"
+
+    asyncio.run(_run())
+
+
+def test_static_route_cache_css_content_type(tmp_path):
+    async def _run():
+        cache_dir = tmp_path / "static_assets"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        url = "https://www.google.com/maps/_/ss/k=maps.m.en.css"
+        cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        cache_file = cache_dir / cache_key
+        cache_file.write_bytes(b"body { color: red; }")
+
+        route = AsyncMock()
+        route.request.url = url
+        route.request.method = "GET"
+        route.request.resource_type = "stylesheet"
+        route.fulfill = AsyncMock()
+        route.continue_ = AsyncMock()
+        route.abort = AsyncMock()
+
+        with patch("map_miner.scraper.DEFAULT_STATIC_CACHE_DIR", cache_dir):
+            await global_route_handler(route)
+
+        route.fulfill.assert_awaited_once()
+        assert route.fulfill.await_args is not None
+        kwargs = route.fulfill.await_args.kwargs
+        assert kwargs["status"] == 200
+        assert kwargs["body"] == b"body { color: red; }"
+        assert kwargs["headers"]["content-type"] == "text/css; charset=utf-8"
+        assert kwargs["headers"]["x-cache"] == "HIT-ROUTE-CACHE"
 
     asyncio.run(_run())

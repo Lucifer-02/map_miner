@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-14
+
+### Added
+- **Tối Ưu Hóa Băng Thông Proxy & Cache Ứng Dụng (Application-Level Route Cache & Bypass Expansion)**:
+  - **Application-Level Route Cache**: Triển khai bộ nhớ đệm tầng ứng dụng [`DEFAULT_STATIC_CACHE_DIR`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) (`.cache/static_assets`) trong [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) cho các static scripts và stylesheets (`/maps/_/js/`, `/maps/_/ss/`, `/maps/res/`, và `gstatic.com` static assets). Phục vụ phản hồi tức thì với header `x-cache: HIT-ROUTE-CACHE` khi cache hit, loại bỏ hoàn toàn request tải lại qua proxy.
+  - **Mở Rộng Proxy Bypass**: Mở rộng [`DEFAULT_PROXY_BYPASS`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py) bổ sung các Google static CDN domains (`fonts.gstatic.com`, `apis.google.com`, `ssl.gstatic.com`), định tuyến trực tiếp static assets không tiêu tốn lưu lượng proxy dân cư.
+  - **Mở Rộng Bộ Lọc URL Rác**: Bổ sung `"feedback-pa.clients6.google.com"`, `"ogads-pa.clients6.google.com"`, `"/maps/preview/entity"` vào `BLOCKED_URL_PATTERNS`, triệt tiêu hoàn toàn các request telemetry, quảng cáo và entity dư thừa.
+- **Upper Bound Guardrails**:
+  - Thiết lập hằng số [`DEFAULT_RANGE_LIMIT = 10000.0`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) (10 km ceiling radius) làm giới hạn bán kính tìm kiếm mặc định, bảo vệ hệ thống không cào lan man ra ngoài phạm vi địa lý dự kiến.
+  - Đồng bộ hằng số [`DEFAULT_QUERY_TIMEOUT = 300.0`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) (5 phút) áp dụng trực tiếp xuyên suốt `scrape_google_maps`, `scrape_query_spa`, và `get_place_urls`.
+
+### Changed
+- **Chuẩn Hóa Tham Số & Hạn Chế Kiểu `None`**:
+  - Bắt buộc tham số `geo_coordinates: Point` trong [`create_browser_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) nhằm thiết lập geolocation nhất quán, loại bỏ kiểu `Point | None = None`.
+  - Chuyển đổi các tham số sang giá trị mặc định cụ thể (Upper Bound defaults) thay vì `None`:
+    * `range_limit: float = DEFAULT_RANGE_LIMIT` (thay vì `float | None = None`).
+    * `query_timeout: float = DEFAULT_QUERY_TIMEOUT` (thay vì `float | None = None`).
+    * `stagger_delay: tuple[float, float] | float = (1.5, 3.5)` và `cache_dir: Path | str | None = DEFAULT_CACHE_DIR`.
+    * Trong [`proxy.py`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py): `password: str = ""` (thay vì `str | None = None`) cho `renew_tor_circuit_control` và `async_renew_tor_circuit_control`; `bypass: str = DEFAULT_PROXY_BYPASS` (thay vì `str | None`) cho `get_tor_rotating_proxy`.
+  - Đơn giản hóa các khối kiểm tra điều kiện, loại bỏ việc rà soát `if range_limit is not None:` hay `if bypass is not None:`.
+- **Hoàn Thiện Bộ Kiểm Thử**:
+  - Khôi phục bộ kiểm thử dynamic versioning [`tests/test_version.py`](file:///data/IMPORTANT/map_miner/tests/test_version.py) (3 unit tests).
+  - Bổ sung 6 unit tests chuyên biệt cho proxy bypass mở rộng và application-level route cache.
+  - Tối ưu hóa mock trong `test_staggered_query_dispatch_spa` để loại bỏ hoàn toàn `RuntimeWarning: coroutine was never awaited`.
+  - Toàn bộ test suite đạt **100% tests pass** (106 tests).
+- **Đóng Gói Phân Phối (Distribution Packaging)**:
+  - Đồng bộ phiên bản `0.3.1` làm Single Source of Truth tại [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py).
+  - Hoàn tất đóng gói package phân phối chuẩn qua Hatchling: Wheel (`dist/map_miner-0.3.1-py3-none-any.whl`) và Sdist (`dist/map_miner-0.3.1.tar.gz`).
+
+---
+
 ## [0.3.0] - 2026-09-14
 
 ### Added

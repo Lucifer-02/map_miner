@@ -222,10 +222,10 @@ def test_get_tor_rotating_proxy():
     assert "username" not in proxy3
     assert "password" not in proxy3
 
-    # Bypass None
-    proxy4 = get_tor_rotating_proxy(server="socks5://localhost:9050", bypass=None)
+    # Custom bypass empty string
+    proxy4 = get_tor_rotating_proxy(server="socks5://localhost:9050", bypass="")
     assert proxy4["server"] == "socks5://localhost:9050"
-    assert "bypass" not in proxy4
+    assert proxy4["bypass"] == ""
     assert "username" not in proxy4
     assert "password" not in proxy4
 
@@ -317,7 +317,7 @@ def test_async_renew_tor_circuit_control():
         mock_sync.assert_called_once_with(
             host="127.0.0.1",
             port=9051,
-            password=None,
+            password="",
             min_cooldown=10.0,
         )
 
@@ -328,3 +328,20 @@ def test_proxy_rotator_async_renew():
     assert first == {"server": "http://p1:8080"}
     renewed = asyncio.run(rotator.async_renew())
     assert renewed == {"server": "http://p2:8080"}
+
+
+def test_default_proxy_bypass_domains():
+    expected_domains = [
+        "maps.gstatic.com",
+        "*.gstatic.com",
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
+        "apis.google.com",
+        "ssl.gstatic.com",
+    ]
+    for domain in expected_domains:
+        assert domain in DEFAULT_PROXY_BYPASS
+    assert (
+        DEFAULT_PROXY_BYPASS
+        == "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com,fonts.gstatic.com,apis.google.com,ssl.gstatic.com"
+    )

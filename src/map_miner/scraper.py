@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import itertools
 import json
 import logging
@@ -49,7 +50,9 @@ __all__ = [
     "DEFAULT_PLACE_TIMEOUT",
     "DEFAULT_PROXY_BYPASS",
     "DEFAULT_QUERY_TIMEOUT",
+    "DEFAULT_RANGE_LIMIT",
     "DEFAULT_SPA_PREVIEW_TIMEOUT",
+    "DEFAULT_STATIC_CACHE_DIR",
     "MAX_CONSECUTIVE_EMPTY_SCROLLS",
     "REQUIRED_COLUMNS",
     "ProxyRotator",
@@ -94,12 +97,33 @@ DEFAULT_QUERY_TIMEOUT = 300.0  # 5 minutes per query
 DEFAULT_PLACE_TIMEOUT = 45.0  # 45 seconds per detail place link
 DEFAULT_CAPTCHA_TIMEOUT = 85.0  # 85 seconds for multi-round reCAPTCHA solving
 DEFAULT_SPA_PREVIEW_TIMEOUT = 15000  # 15 seconds (15000ms) for SPA preview XHR response
+DEFAULT_RANGE_LIMIT: float = 10000.0  # 10 km default ceiling radius
 MAX_CONSECUTIVE_EMPTY_SCROLLS = 6
 MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
     5  # Allow enough attempts for slow network / lazy load
 )
 DEFAULT_CACHE_DIR = Path(".cache") / "chromium_cache"
+DEFAULT_STATIC_CACHE_DIR = Path(".cache") / "static_assets"
 DEFAULT_DISK_CACHE_SIZE = 1073741824  # 1 GB
+
+DYNAMIC_ROUTE_PATTERNS: tuple[str, ...] = (
+    "/maps/preview/",
+    "/maps/rpc/",
+    "/maps/search/",
+    "sorry/",
+    "recaptcha",
+)
+STATIC_ROUTE_PATTERNS: tuple[str, ...] = (
+    "/maps/_/js/",
+    "/maps/_/ss/",
+    "/maps/res/",
+)
+STATIC_EXTENSIONS: tuple[str, ...] = (
+    ".js",
+    ".css",
+    ".woff2",
+    ".png",
+)
 
 # Stable launch args: headless/stealth-safe, avoids crashes on multi-page Chromium
 LAUNCH_ARGS = [
@@ -144,6 +168,9 @@ BLOCKED_URL_PATTERNS = [
     "googleusercontent.com",
     "ggpht.com",
     "streetviewpixels",
+    "feedback-pa.clients6.google.com",
+    "ogads-pa.clients6.google.com",
+    "/maps/preview/entity",
 ]
 
 CONSENT_BUTTON_REGEX = re.compile(
@@ -168,7 +195,8 @@ END_OF_FEED_XPATHS = [
 async def global_route_handler(route: Route) -> None:
     """
     Context-wide route handler to block heavy resources and tracking,
-    saving significant network bandwidth while preserving reCAPTCHA and core APIs.
+    saving significant network bandwidth while caching static assets
+    and preserving reCAPTCHA and core APIs.
     """
     try:
         req = route.request
@@ -186,6 +214,55 @@ async def global_route_handler(route: Route) -> None:
             await route.abort()
             return
 
+        # Application-level static asset caching
+        is_static_asset = False
+        if req.method.upper() == "GET" and not any(
+            dyn in url for dyn in DYNAMIC_ROUTE_PATTERNS
+        ):
+            if any(pattern in url for pattern in STATIC_ROUTE_PATTERNS):
+                is_static_asset = True
+            elif "gstatic.com" in url:
+                clean_url = url.split("?")[0].split("#")[0]
+                if any(clean_url.endswith(ext) for ext in STATIC_EXTENSIONS):
+                    is_static_asset = True
+
+        if is_static_asset:
+            cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+            cache_file = DEFAULT_STATIC_CACHE_DIR / cache_key
+
+            try:
+                if cache_file.is_file() and cache_file.stat().st_size > 0:
+                    cached_bytes = cache_file.read_bytes()
+                    if ".js" in url or "/js/" in url:
+                        content_type = "application/javascript; charset=utf-8"
+                    elif ".css" in url or "/ss/" in url:
+                        content_type = "text/css; charset=utf-8"
+                    else:
+                        content_type = "application/octet-stream"
+
+                    await route.fulfill(
+                        body=cached_bytes,
+                        status=200,
+                        headers={
+                            "content-type": content_type,
+                            "x-cache": "HIT-ROUTE-CACHE",
+                        },
+                    )
+                    return
+            except OSError:
+                pass
+
+            response = await route.fetch()
+            if response.status == 200:
+                try:
+                    body = await response.body()
+                    DEFAULT_STATIC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                    cache_file.write_bytes(body)
+                except OSError:
+                    pass
+            await route.fulfill(response=response)
+            return
+
         await route.continue_()
     except PlaywrightError:
         try:
@@ -196,7 +273,7 @@ async def global_route_handler(route: Route) -> None:
 
 async def create_browser_context(
     browser: Browser,
-    geo_coordinates: Point | None = None,
+    geo_coordinates: Point,
     lang: str = "en",
     proxy: (
         ProxySettings
@@ -207,9 +284,18 @@ async def create_browser_context(
         | None
     ) = None,
 ) -> BrowserContext:
-    """
-    Creates and configures an isolated BrowserContext with proxy settings,
+    """Creates and configures an isolated BrowserContext with proxy settings,
     stealth overrides, geolocation, and global resource blocking.
+
+    Args:
+        browser (Browser): Playwright browser instance.
+        geo_coordinates (Point): Geographic center coordinates for geolocation mocking.
+        lang (str, optional): Language code. Defaults to "en".
+        proxy (ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None, optional):
+            Proxy settings for this context. Defaults to None.
+
+    Returns:
+        BrowserContext: Configured isolated browser context.
     """
     accept_lang = f"{lang}-{lang.upper()},{lang};q=0.9,en-US;q=0.8,en;q=0.7"
     context_options: dict[str, Any] = {
@@ -235,13 +321,11 @@ async def create_browser_context(
         "permissions": ["geolocation"],
         "timezone_id": "Asia/Ho_Chi_Minh",
         "locale": lang,
-    }
-
-    if geo_coordinates is not None:
-        context_options["geolocation"] = {
+        "geolocation": {
             "latitude": geo_coordinates.latitude,
             "longitude": geo_coordinates.longitude,
-        }
+        },
+    }
 
     if proxy is not None:
         context_options["proxy"] = proxy
@@ -560,9 +644,9 @@ async def get_place_urls(
     geo_coordinates: Point,
     zoom: float,
     lang: str = "en",
-    range_limit: float | None = 10000,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
     proxy_rotator: ProxyRotator | None = None,
-    query_timeout: float | None = None,
+    query_timeout: float = DEFAULT_QUERY_TIMEOUT,
 ) -> set[str]:
     """Navigates the search feed and scrolls to collect place links.
 
@@ -576,10 +660,10 @@ async def get_place_urls(
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
         lang (str, optional): Language code. Defaults to "en".
-        range_limit (float | None, optional): Maximum radius distance in meters
-            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to 10000m.
+        range_limit (float): Maximum radius distance in meters
+            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
         proxy_rotator (ProxyRotator | None, optional): Rotator to renew proxy on CAPTCHA block. Defaults to None.
-        query_timeout (float | None, optional): Maximum seconds allowed for this query. Defaults to None.
+        query_timeout (float): Maximum seconds allowed for this query. Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
 
     Returns:
         set[str]: Collected place URLs.
@@ -624,7 +708,26 @@ async def get_place_urls(
         # Check if single result redirect happened
         if "/maps/place/" in search_page.url:
             logger.debug("Detected single place redirect.")
-            if range_limit is not None:
+            coords = extract_coordinates_from_url(search_page.url)
+            if coords is not None:
+                dist = geodesic(
+                    (geo_coordinates.latitude, geo_coordinates.longitude),
+                    coords,
+                ).meters
+                if dist > range_limit:
+                    logger.info(
+                        "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                        search_page.url,
+                        dist,
+                        range_limit,
+                    )
+                    return place_links
+            place_links.add(search_page.url)
+            return place_links
+
+        active_feed_selector = await find_feed_selector(search_page)
+        if not active_feed_selector:
+            if "/maps/place/" in search_page.url:
                 coords = extract_coordinates_from_url(search_page.url)
                 if coords is not None:
                     dist = geodesic(
@@ -639,27 +742,6 @@ async def get_place_urls(
                             range_limit,
                         )
                         return place_links
-            place_links.add(search_page.url)
-            return place_links
-
-        active_feed_selector = await find_feed_selector(search_page)
-        if not active_feed_selector:
-            if "/maps/place/" in search_page.url:
-                if range_limit is not None:
-                    coords = extract_coordinates_from_url(search_page.url)
-                    if coords is not None:
-                        dist = geodesic(
-                            (geo_coordinates.latitude, geo_coordinates.longitude),
-                            coords,
-                        ).meters
-                        if dist > range_limit:
-                            logger.info(
-                                "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
-                                search_page.url,
-                                dist,
-                                range_limit,
-                            )
-                            return place_links
                 place_links.add(search_page.url)
                 return place_links
             logger.error("Could not find results feed selector on search page.")
@@ -674,10 +756,7 @@ async def get_place_urls(
         processed_links: set[str] = set()
 
         while True:
-            if (
-                query_timeout is not None
-                and (time.monotonic() - query_start) >= query_timeout
-            ):
+            if (time.monotonic() - query_start) >= query_timeout:
                 logger.warning(
                     "⚠️ Query '%s' reached timeout limit (%.1fs) in get_place_urls. Returning %d collected links.",
                     query,
@@ -702,22 +781,21 @@ async def get_place_urls(
                 if canonical_link in processed_links:
                     continue
 
-                if range_limit is not None:
-                    coords = extract_coordinates_from_url(link)
-                    if coords is not None:
-                        dist = geodesic(
-                            (geo_coordinates.latitude, geo_coordinates.longitude),
-                            coords,
-                        ).meters
-                        if dist > range_limit:
-                            processed_links.add(canonical_link)
-                            logger.info(
-                                "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
-                                canonical_link,
-                                dist,
-                                range_limit,
-                            )
-                            continue
+                coords = extract_coordinates_from_url(link)
+                if coords is not None:
+                    dist = geodesic(
+                        (geo_coordinates.latitude, geo_coordinates.longitude),
+                        coords,
+                    ).meters
+                    if dist > range_limit:
+                        processed_links.add(canonical_link)
+                        logger.info(
+                            "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                            canonical_link,
+                            dist,
+                            range_limit,
+                        )
+                        continue
 
                 processed_links.add(canonical_link)
                 place_links.add(link)
@@ -788,10 +866,10 @@ async def scrape_query_spa(
     max_places: int = 120,
     lang: str = "en",
     fields: Sequence[str] | set[str] | None = None,
-    range_limit: float | None = None,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
     proxy_rotator: ProxyRotator | None = None,
     max_captcha_retries: int = 2,
-    query_timeout: float | None = None,
+    query_timeout: float = DEFAULT_QUERY_TIMEOUT,
     preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT,
 ) -> list[dict[str, Any]]:
     """Scrapes Google Maps places using client-side SPA navigation:
@@ -811,11 +889,11 @@ async def scrape_query_spa(
         max_places (int, optional): Maximum places to collect. Defaults to 120.
         lang (str, optional): Language code. Defaults to "en".
         fields (Sequence[str] | set[str] | None, optional): Selected fields. Defaults to None.
-        range_limit (float | None, optional): Maximum radius distance in meters
-            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to None.
+        range_limit (float): Maximum radius distance in meters
+            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
         proxy_rotator (ProxyRotator | None, optional): Proxy rotator to renew proxy on CAPTCHA. Defaults to None.
         max_captcha_retries (int, optional): Max retries on CAPTCHA sorry page. Defaults to 2.
-        query_timeout (float | None, optional): Maximum seconds allowed for this query. Defaults to None.
+        query_timeout (float): Maximum seconds allowed for this query. Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
             waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT (15000ms).
 
@@ -896,21 +974,20 @@ async def scrape_query_spa(
         # Check if single result redirect happened
         if "/maps/place/" in search_page.url:
             logger.debug("Detected single place redirect.")
-            if range_limit is not None:
-                coords = extract_coordinates_from_url(search_page.url)
-                if coords is not None:
-                    dist = geodesic(
-                        (geo_coordinates.latitude, geo_coordinates.longitude),
-                        coords,
-                    ).meters
-                    if dist > range_limit:
-                        logger.info(
-                            "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
-                            search_page.url,
-                            dist,
-                            range_limit,
-                        )
-                        return results
+            coords = extract_coordinates_from_url(search_page.url)
+            if coords is not None:
+                dist = geodesic(
+                    (geo_coordinates.latitude, geo_coordinates.longitude),
+                    coords,
+                ).meters
+                if dist > range_limit:
+                    logger.info(
+                        "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                        search_page.url,
+                        dist,
+                        range_limit,
+                    )
+                    return results
             html_content = await search_page.content()
             place_data = extract_place_data(html_content=html_content, fields=fields)
             if place_data:
@@ -932,10 +1009,7 @@ async def scrape_query_spa(
         )
 
         while max_places is None or len(results) < max_places:
-            if (
-                query_timeout is not None
-                and (time.monotonic() - query_start) >= query_timeout
-            ):
+            if (time.monotonic() - query_start) >= query_timeout:
                 logger.warning(
                     "⚠️ Query '%s' reached timeout limit (%.1fs). Returning %d collected places.",
                     query,
@@ -965,25 +1039,24 @@ async def scrape_query_spa(
                 if canonical_link in processed_links:
                     continue
 
-                if range_limit is not None:
-                    coords = extract_coordinates_from_url(link)
-                    if coords is not None:
-                        dist = geodesic(
-                            (
-                                geo_coordinates.latitude,
-                                geo_coordinates.longitude,
-                            ),
-                            coords,
-                        ).meters
-                        if dist > range_limit:
-                            processed_links.add(canonical_link)
-                            logger.info(
-                                "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
-                                canonical_link,
-                                dist,
-                                range_limit,
-                            )
-                            continue
+                coords = extract_coordinates_from_url(link)
+                if coords is not None:
+                    dist = geodesic(
+                        (
+                            geo_coordinates.latitude,
+                            geo_coordinates.longitude,
+                        ),
+                        coords,
+                    ).meters
+                    if dist > range_limit:
+                        processed_links.add(canonical_link)
+                        logger.info(
+                            "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                            canonical_link,
+                            dist,
+                            range_limit,
+                        )
+                        continue
 
                 def is_matching_preview(
                     resp: Any, target: str = canonical_link
@@ -1403,17 +1476,17 @@ async def scrape_google_maps(
     ) = None,
     max_places: int = 120,
     lang: str = "en",
-    headless: bool = False,
+    headless: bool = True,
     n_semaphore: int = 8,
     fields: Sequence[str] | set[str] | None = None,
     flatten: bool = False,
     use_spa: bool = True,
-    cache_dir: str | Path | None = DEFAULT_CACHE_DIR,
-    range_limit: float | None = None,
-    query_timeout: float | None = DEFAULT_QUERY_TIMEOUT,
+    cache_dir: Path | str | None = DEFAULT_CACHE_DIR,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
+    query_timeout: float = DEFAULT_QUERY_TIMEOUT,
     place_timeout: float = DEFAULT_PLACE_TIMEOUT,
     preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT,
-    stagger_delay: tuple[float, float] | float | None = (1.5, 3.5),
+    stagger_delay: tuple[float, float] | float = (1.5, 3.5),
 ) -> pl.DataFrame:
     """Scrapes Google Maps for places based on queries.
 
@@ -1432,19 +1505,18 @@ async def scrape_google_maps(
             If False (default), bundles non-default fields into a 'details' JSON string column,
             keeping 11 common columns at top-level. Defaults to False.
         use_spa (bool, optional): Whether to use high-speed SPA navigation. Defaults to True.
-        cache_dir (str | Path | None, optional): Directory to store persistent Chromium disk cache.
+        cache_dir (Path | str | None, optional): Directory to store persistent Chromium disk cache.
             Defaults to DEFAULT_CACHE_DIR (".cache/chromium_cache"). If None, disk caching
             flags will not be passed.
-        range_limit (float | None, optional): Maximum radius distance in meters from
-            geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to None.
-        query_timeout (float | None, optional): Maximum seconds allowed per query before early return.
+        range_limit (float): Maximum radius distance in meters from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
+        query_timeout (float): Maximum seconds allowed per query before early return.
             Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
         place_timeout (float, optional): Maximum seconds allowed to scrape a place in fallback mode.
             Defaults to DEFAULT_PLACE_TIMEOUT (45.0s).
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
             waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT (15000ms).
-        stagger_delay (tuple[float, float] | float | None, optional): Delay range (min, max) in
-            seconds to stagger the initial launch of concurrent queries. Set to 0 or None to
+        stagger_delay (tuple[float, float] | float, optional): Delay range (min, max) in
+            seconds to stagger the initial launch of concurrent queries. Set to 0 to
             disable. Defaults to (1.5, 3.5).
 
     Returns:
@@ -1530,16 +1602,14 @@ async def scrape_google_maps(
                                 query_timeout=query_timeout,
                                 preview_timeout=preview_timeout,
                             )
-                            if query_timeout is not None:
-                                return await asyncio.wait_for(
-                                    coro, timeout=query_timeout + 10.0
-                                )
-                            return await coro
+                            return await asyncio.wait_for(
+                                coro, timeout=query_timeout + 10.0
+                            )
                         except TimeoutError:
                             logger.warning(
                                 "🚨 Hard watchdog timeout for query '%s' after %.1fs",
                                 q,
-                                (query_timeout + 10.0) if query_timeout else 0.0,
+                                query_timeout + 10.0,
                             )
                             return []
                         except Exception as e:  # noqa: BLE001
@@ -1625,11 +1695,9 @@ async def scrape_google_maps(
                                 proxy_rotator=proxy_rotator,
                                 query_timeout=query_timeout,
                             )
-                            if query_timeout is not None:
-                                return await asyncio.wait_for(
-                                    coro, timeout=query_timeout + 10.0
-                                )
-                            return await coro
+                            return await asyncio.wait_for(
+                                coro, timeout=query_timeout + 10.0
+                            )
                         except TimeoutError:
                             logger.warning(
                                 "🚨 Hard watchdog timeout for get_place_urls on query '%s'",

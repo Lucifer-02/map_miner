@@ -14,7 +14,7 @@ from playwright.async_api import ProxySettings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com"
+DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com,fonts.gstatic.com,apis.google.com,ssl.gstatic.com"
 DEFAULT_TOR_RENEW_COOLDOWN: float = 15.0
 
 _last_tor_renew_time: float = 0.0
@@ -24,7 +24,7 @@ _tor_renew_lock: threading.Lock = threading.Lock()
 def renew_tor_circuit_control(
     host: str = "127.0.0.1",
     port: int = 9051,
-    password: str | None = None,
+    password: str = "",
     min_cooldown: float = DEFAULT_TOR_RENEW_COOLDOWN,
 ) -> bool:
     """Sends SIGNAL NEWNYM to Tor ControlPort to request a fresh circuit.
@@ -35,7 +35,7 @@ def renew_tor_circuit_control(
     Args:
         host (str): Tor ControlPort host. Defaults to "127.0.0.1".
         port (int): Tor ControlPort port. Defaults to 9051.
-        password (str | None): ControlPort authentication password. Defaults to None.
+        password (str): ControlPort authentication password. Defaults to "".
         min_cooldown (float): Minimum seconds required between renewals. Defaults to 15.0.
 
     Returns:
@@ -53,7 +53,7 @@ def renew_tor_circuit_control(
             )
             return True
 
-    auth_cmd = f'AUTHENTICATE "{password or ""}"\r\n'.encode("ascii")
+    auth_cmd = f'AUTHENTICATE "{password}"\r\n'.encode("ascii")
     signal_cmd = b"SIGNAL NEWNYM\r\n"
     try:
         with socket.create_connection((host, port), timeout=2.0) as s:
@@ -87,7 +87,7 @@ def renew_tor_circuit_control(
 async def async_renew_tor_circuit_control(
     host: str = "127.0.0.1",
     port: int = 9051,
-    password: str | None = None,
+    password: str = "",
     min_cooldown: float = DEFAULT_TOR_RENEW_COOLDOWN,
 ) -> bool:
     """Asynchronously sends SIGNAL NEWNYM to Tor ControlPort to request a fresh circuit."""
@@ -102,7 +102,7 @@ async def async_renew_tor_circuit_control(
 
 def get_tor_rotating_proxy(
     server: str = "socks5://127.0.0.1:9050",
-    bypass: str | None = DEFAULT_PROXY_BYPASS,
+    bypass: str = DEFAULT_PROXY_BYPASS,
 ) -> ProxySettings:
     """Generates a Tor SOCKS5 proxy configuration.
 
@@ -113,17 +113,15 @@ def get_tor_rotating_proxy(
 
     Args:
         server (str): SOCKS5 proxy URL. Defaults to "socks5://127.0.0.1:9050".
-        bypass (str | None): Hosts to bypass proxy. Defaults to DEFAULT_PROXY_BYPASS.
+        bypass (str): Hosts to bypass proxy. Defaults to DEFAULT_PROXY_BYPASS.
 
     Returns:
         ProxySettings: Configured proxy settings dictionary without credentials.
     """
-    proxy: ProxySettings = {
+    return {
         "server": server,
+        "bypass": bypass,
     }
-    if bypass is not None:
-        proxy["bypass"] = bypass
-    return proxy
 
 
 def _normalize_proxy(proxy: Any) -> ProxySettings | None:

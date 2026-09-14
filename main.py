@@ -3,7 +3,7 @@ import logging
 
 from geopy.point import Point
 
-from map_miner import DEFAULT_PROXY_BYPASS, scrape_google_maps
+from map_miner import scrape_google_maps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,18 +24,15 @@ def main():
                 "bank",
                 "gas",
             },
-            max_places=40,
+            # max_places=40,
             lang="en",
-            headless=True,
+            headless=False,
             geo_coordinates=Point(21.018785, 105.830415),
             zoom=18,
-            fields=None,
             # Output format:
             # - flatten=False (default): Standardizes 11 common columns at top-level
             #   (name, place_id, latitude, longitude, address, link, categories, rating, reviews_count, plus_code, city)
             #   and bundles other fields into 'details' JSON
-            flatten=False,
-            preview_timeout=30000,
             # Proxy configuration:
             # - Residential proxy (Decodo): Best for avoiding CAPTCHAs
             # - Direct (None): Fast and reliable with modern stealth fingerprints
@@ -50,7 +47,7 @@ def main():
             #     "server": "socks5://127.0.0.1:9050",
             #     "bypass": DEFAULT_PROXY_BYPASS,
             # },
-            n_semaphore=12,
+            n_semaphore=8,
         )
     )
 
