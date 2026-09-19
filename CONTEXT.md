@@ -127,7 +127,7 @@ Tệp [`main.py`](file:///data/IMPORTANT/map_miner/main.py) đóng vai trò làm
   - `queries: set[str]`: Tập hợp các từ khóa tìm kiếm (ví dụ: `{"cafe", "restaurant", "hospital"}`).
   - `geo_coordinates: Point`: Tọa độ trung tâm tìm kiếm sử dụng [`Point(latitude, longitude)`](file:///data/IMPORTANT/map_miner/main.py#L30) từ `geopy.point`.
   - `zoom: float`: Mức zoom bản đồ của Google Maps (ví dụ: `18`).
-  - `max_places: int = 120`: Giới hạn số lượng địa điểm tối đa cần thu thập trên mỗi từ khóa (mặc định: `120`).
+  - `max_places: int = 120`: Giới hạn số lượng địa điểm hợp lệ tối đa cần thu thập trên mỗi từ khóa (không tính các địa điểm bị loại bỏ sớm bởi cơ chế early drop do vượt quá `range_limit`; mặc định: `120`).
   - `proxy: ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None = None`: Cấu hình proxy đơn lẻ hoặc xoay vòng round-robin, hỗ trợ `server`, `username`, `password`, `bypass` (kèm `DEFAULT_PROXY_BYPASS`).
   - `n_semaphore: int = 8`: Giới hạn mức độ tương tranh tối đa (số truy vấn chạy đồng thời trong chế độ SPA, hoặc số tab mở song song trong chế độ fallback; khuyến nghị `4` khi sử dụng Tor proxy).
   - `lang: str = "en"`: Mã ngôn ngữ giao diện Google Maps (ví dụ: `"vi"`, `"en"`, `"fr"`).
@@ -135,11 +135,11 @@ Tệp [`main.py`](file:///data/IMPORTANT/map_miner/main.py) đóng vai trò làm
   - `fields: Sequence[str] | set[str] | None = None`: Danh sách các trường dữ liệu tùy biến cần lấy. Nếu là `None`, bóc tách toàn bộ 28 trường dữ liệu chuẩn.
   - `flatten: bool = False`: Tùy chọn làm phẳng dữ liệu đầu ra. Mặc định `False`: chỉ giữ 11 cột phẳng mặc định (`DEFAULT_FLATTEN_COLUMNS`) ở top-level, toàn bộ thông tin chi tiết còn lại được gom vào cột `details` dưới dạng JSON string. Nếu `True`: bung toàn bộ 28 trường phẳng độc lập.
   - `use_spa: bool = True`: Bật chế độ SPA Navigation tốc độ cao (mặc định: `True`).
-  - `cache_dir: Path | str | None = DEFAULT_CACHE_DIR`: Thư mục lưu trữ Chromium disk cache chia sẻ giữa các context (mặc định: `.cache/chromium_cache`).
+  - `cache_dir: Path | None = DEFAULT_CACHE_DIR`: Thư mục lưu trữ Chromium disk cache chia sẻ giữa các context (mặc định: `.cache/chromium_cache`).
   - `range_limit: float = DEFAULT_RANGE_LIMIT`: Giới hạn bán kính địa lý tối đa (tính theo mét) tính từ `geo_coordinates`. Áp dụng Upper Bound Guardrail với mặc định `DEFAULT_RANGE_LIMIT = 10000.0` (10 km) thay vì `None`, kích hoạt cơ chế Early Drop khi các địa điểm nằm ngoài bán kính này.
   - `query_timeout: float = DEFAULT_QUERY_TIMEOUT`: Thời gian giới hạn tối đa cho mỗi query trước khi ngắt an toàn và trả kết quả đã thu thập (mặc định: `DEFAULT_QUERY_TIMEOUT = 300.0s`, tức 5 phút).
   - `place_timeout: float = DEFAULT_PLACE_TIMEOUT`: Thời gian giới hạn cào mỗi place trong chế độ fallback (mặc định: `45.0s`).
-  - `preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT`: Thời gian chờ gói tin XHR preview trong chế độ SPA (mặc định: `15000ms`).
+  - `preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT`: Thời gian chờ gói tin XHR preview trong chế độ SPA (mặc định: `10000ms` / 10s).
   - `stagger_delay: tuple[float, float] | float = (1.5, 3.5)`: Khoảng nghỉ ngẫu nhiên khi khởi chạy các queries song song để triệt tiêu Concurrency Spike.
 - **Xử lý đầu ra**:
   - Nhận về đối tượng `polars.DataFrame`.
@@ -156,7 +156,7 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
   - Khởi tạo **duy nhất 1 tab trình duyệt** cho mỗi truy vấn tìm kiếm.
   - Sau khi trang feed hiển thị, duyệt qua các phần tử thẻ địa điểm (`a[href*="/maps/place/"]`).
   - Kích hoạt sự kiện click client-side: `await el.evaluate("e => e.click()")` (hoặc fallback `el.click(force=True)` nếu bị che khuất).
-  - Lắng nghe response XHR tương ứng bằng `search_page.expect_response(is_matching_preview, timeout=preview_timeout_ms)` (cấu hình qua tham số `preview_timeout`, mặc định `DEFAULT_SPA_PREVIEW_TIMEOUT = 15000` ms).
+  - Lắng nghe response XHR tương ứng bằng `search_page.expect_response(is_matching_preview, timeout=preview_timeout_ms)` (cấu hình qua tham số `preview_timeout`, mặc định `DEFAULT_SPA_PREVIEW_TIMEOUT = 10000` ms).
   - Triệt tiêu 85-90% lượng request mạng thừa do không cần mở tab mới và không phải tải lại mã nguồn ứng dụng web nặng nề của Google Maps.
   - Cơ chế tự phục hồi: Thẻ địa điểm chỉ được đánh dấu là `processed_links` sau khi click thành công, đảm bảo các phần tử chưa click được sẽ được thử lại trong các lượt cuộn kế tiếp.
 - **Chế độ Multi-page Fallback ([`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L305-L409) -> [`process_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L608-L745) - Khi `use_spa=False`)**:
@@ -197,11 +197,17 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
 - Chuyển đổi dữ liệu sang Polars bằng `pl.from_dicts(results, infer_schema_length=None)` quét toàn bộ tập dữ liệu, ngăn chặn lỗi schema inference khi các hàng đầu tiên chứa giá trị null ở các cột phức tạp (`opening_hours`, `photos`).
 
 #### 6. Triết Lý Upper Bound Guardrails Theo Bán Kính (`range_limit`) & Thời Gian Chờ (`query_timeout`):
+- **Cơ sở lý thuyết thuật toán xếp hạng Google Maps (3 yếu tố: Relevance, Distance, Prominence)**:
+  - Theo tài liệu chính thức từ Google ([Google Business Support: How Google ranks local results](https://support.google.com/business/answer/7091)), kết quả tìm kiếm địa phương của Google Maps được tính toán và xếp hạng dựa trên sự kết hợp của 3 yếu tố cốt lõi:
+    1. **Độ liên quan (Relevance)**: Mức độ trùng khớp giữa hồ sơ thông tin địa điểm với từ khóa tìm kiếm của người dùng.
+    2. **Khoảng cách (Distance)**: Khoảng cách địa lý thực tế từ vị trí tìm kiếm (`geo_coordinates`) đến từng địa điểm.
+    3. **Mức độ nổi bật (Prominence)**: Độ nổi tiếng, uy tín của địa điểm trong thế giới thực và trên web (dựa trên số lượng đánh giá, điểm rating, liên kết, bài viết, vị trí trong kết quả tìm kiếm web).
+  - **Hệ quả quan trọng**: Thuật toán Google có thể quyết định rằng một doanh nghiệp ở xa hơn nhưng có **Prominence** hoặc **Relevance** vượt trội sẽ có thứ hạng cao hơn một doanh nghiệp ở gần hơn (ví dụ: một quán cà phê nổi tiếng cách 12 km có thể được hiển thị trước một quán nhỏ cách 3 km). Do đó, danh sách địa điểm trả về trên feed **không được sắp xếp đơn điệu theo khoảng cách tăng dần**.
 - **Bán kính bảo vệ (`range_limit = 10000.0` - 10 km)**: Thay vì dùng giá trị `None` dễ dẫn đến cào lan man không kiểm soát, hệ thống áp dụng trần mặc định `DEFAULT_RANGE_LIMIT = 10000.0` (10 km).
   - Hàm [`extract_coordinates_from_url`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) bóc tách tọa độ `(lat, lon)` trực tiếp từ URL của thẻ địa điểm trên feed (hỗ trợ format protobuf `!3d<lat>...!4d<lon>` và viewport `@<lat>,<lon>`).
   - Khoảng cách địa lý tính bằng `geopy.distance.geodesic((center_lat, center_lon), (lat, lon)).meters`.
-  - **Early Drop**: Bỏ qua không click thẻ địa điểm và không đợi preview XHR nếu khoảng cách > `range_limit`, đánh dấu `processed_links.add(canonical_link)` để tránh quét lại, tiết kiệm tối đa thời gian và tài nguyên duyệt.
-  - **Loại Bỏ Early Exit**: Loại bỏ logic dừng sớm khi gặp các kết quả ngoài bán kính liên tiếp nhằm tránh việc dừng cuộn feed sớm khi Google Maps trả về các kết quả ngoài bán kính xen kẽ (chẳng hạn như địa điểm tài trợ/quảng cáo hoặc gợi ý liên quan), đảm bảo thu thập đầy đủ tất cả các địa điểm hợp lệ trong bán kính cho đến khi cuộn hết danh sách kết quả (`end-of-list`).
+  - **Early Drop Từng Phần Tử (Thay Vì Early Stop Đột Ngột)**: Do đặc thù thuật toán 3 yếu tố nêu trên, một địa điểm ở xa (> `range_limit`) có thể xuất hiện xen kẽ giữa các địa điểm ở gần (< `range_limit`). Nếu dừng sớm (Early Stop) ngay khi gặp phần tử vượt khoảng cách, hệ thống sẽ bỏ sót rất nhiều địa điểm hợp lệ ở các lượt cuộn tiếp theo. Vì vậy, hệ thống áp dụng **Early Drop từng phần tử**: kiểm tra tọa độ và bỏ qua không click thẻ địa điểm, không chờ XHR preview nếu khoảng cách > `range_limit`, đồng thời đánh dấu `processed_links.add(canonical_link)` để tránh kiểm tra lại, tiết kiệm tối đa thời gian và tài nguyên mạng.
+  - **Cơ Chế Dừng Cuộn An Toàn (`consecutive_empty_scrolls`)**: Để tránh việc cuộn feed vô hạn gây lãng phí tài nguyên và làm lộ bot, hệ thống theo dõi số lần cuộn liên tiếp không thu được thêm kết quả hợp lệ mới. Khi `consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS` (mặc định: 6), điều này chỉ ra feed đã thực sự cạn kiệt kết quả liên quan hoặc toàn bộ các kết quả còn lại đều vượt quá bán kính quy định, kích hoạt ngắt cuộn an toàn.
   - Áp dụng đồng bộ trên cả **SPA Navigation mode** (`scrape_query_spa`) và **Fallback mode** (`get_place_urls`).
 - **Thời gian chờ bảo vệ (`query_timeout = 300.0s` - 5 phút)**: Thiết lập giới hạn tối đa `DEFAULT_QUERY_TIMEOUT = 300.0s` cho mỗi truy vấn, ngăn ngừa tiến trình treo vô hạn khi mạng chập chờn hoặc feed cuộn không ngừng. Khi chạm mốc timeout, hệ thống tự động ngắt cuộn và trả về toàn bộ kết quả đã thu thập được tính đến thời điểm đó.
 

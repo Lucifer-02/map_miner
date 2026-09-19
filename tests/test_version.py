@@ -13,7 +13,7 @@ def test_version_constant():
     assert hasattr(map_miner, "__version__")
     assert isinstance(map_miner.__version__, str)
     assert re.match(r"^\d+\.\d+\.\d+", map_miner.__version__)
-    assert map_miner.__version__ == "0.3.1"
+    assert map_miner.__version__ == "0.3.2"
     assert "__version__" in map_miner.__all__
 
 

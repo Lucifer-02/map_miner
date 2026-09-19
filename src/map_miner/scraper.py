@@ -65,6 +65,7 @@ __all__ = [
     "global_route_handler",
     "handle_captcha_if_present",
     "is_feed_at_end",
+    "is_no_results_page",
     "is_preview_response_for_link",
     "make_place_url",
     "pass_consent",
@@ -96,7 +97,7 @@ DEFAULT_TIMEOUT = 30000  # 30 seconds for navigation and selectors
 DEFAULT_QUERY_TIMEOUT = 300.0  # 5 minutes per query
 DEFAULT_PLACE_TIMEOUT = 45.0  # 45 seconds per detail place link
 DEFAULT_CAPTCHA_TIMEOUT = 85.0  # 85 seconds for multi-round reCAPTCHA solving
-DEFAULT_SPA_PREVIEW_TIMEOUT = 15000  # 15 seconds (15000ms) for SPA preview XHR response
+DEFAULT_SPA_PREVIEW_TIMEOUT = 10000  # 10 seconds (10000ms) for SPA preview XHR response
 DEFAULT_RANGE_LIMIT: float = 10000.0  # 10 km default ceiling radius
 MAX_CONSECUTIVE_EMPTY_SCROLLS = 6
 MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
@@ -190,6 +191,19 @@ END_OF_FEED_XPATHS = [
     '//span[contains(text(), "hết danh sách")]',
     '//div[contains(text(), "reached the end")]',
 ]
+
+NO_RESULTS_SELECTORS: tuple[str, ...] = (
+    "div.Q27duf",
+    'div[role="main"] div.Q27duf',
+)
+NO_RESULTS_TEXT_PATTERNS: tuple[str, ...] = (
+    "Google Maps can't find",
+    "Google Maps không thể tìm thấy",
+    "No results found",
+    "Không tìm thấy kết quả",
+    "Make sure your search is spelled correctly",
+    "Hãy đảm bảo rằng bạn đã viết đúng chính tả",
+)
 
 
 async def global_route_handler(route: Route) -> None:
@@ -499,7 +513,7 @@ async def find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
 async def scroll_feed(page: Page, feed_selector: str) -> None:
     """Scrolls down the search results feed container."""
     try:
-        feed_locator = page.locator(feed_selector)
+        feed_locator = page.locator(feed_selector).first
         await feed_locator.hover()
         await page.mouse.wheel(0, 5000)
     except PlaywrightError as e:
@@ -530,6 +544,31 @@ async def is_feed_at_end(page: Page) -> bool:
                 return True
         except PlaywrightError:
             continue
+    return False
+
+
+async def is_no_results_page(page: Page) -> bool:
+    """Checks if the search page indicates that no results were found for the query."""
+    for selector in NO_RESULTS_SELECTORS:
+        try:
+            loc = page.locator(selector)
+            if asyncio.iscoroutine(loc):
+                loc = await loc
+            if await loc.count() > 0 and await loc.first.is_visible():
+                return True
+        except PlaywrightError:
+            continue
+
+    for pattern in NO_RESULTS_TEXT_PATTERNS:
+        try:
+            loc = page.locator(f'text="{pattern}"')
+            if asyncio.iscoroutine(loc):
+                loc = await loc
+            if await loc.count() > 0 and await loc.first.is_visible():
+                return True
+        except PlaywrightError:
+            continue
+
     return False
 
 
@@ -651,17 +690,22 @@ async def get_place_urls(
     """Navigates the search feed and scrolls to collect place links.
 
     Used in multi-page fallback mode.
-    Supports early drop and early exit when places exceed range_limit.
+    Supports early drop when places exceed range_limit.
 
     Args:
         context (BrowserContext): Isolated browser context.
-        max_places (int): Maximum number of place links to collect.
+        max_places (int): Maximum number of valid place links to collect. Places
+            dropped via range_limit (early drop) do not count toward this limit.
         query (str): Search query string.
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
         lang (str, optional): Language code. Defaults to "en".
-        range_limit (float): Maximum radius distance in meters
-            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
+        range_limit (float): Maximum radius distance in meters from geo_coordinates.
+            Google Maps local ranking combines Relevance, Distance, and Prominence
+            (https://support.google.com/business/answer/7091). Prominent places further away
+            may be returned before closer ones, so results are not strictly monotonic by distance.
+            range_limit filters out places exceeding this radius (early drop).
+            Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
         proxy_rotator (ProxyRotator | None, optional): Rotator to renew proxy on CAPTCHA block. Defaults to None.
         query_timeout (float): Maximum seconds allowed for this query. Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
 
@@ -715,7 +759,7 @@ async def get_place_urls(
                     coords,
                 ).meters
                 if dist > range_limit:
-                    logger.info(
+                    logger.debug(
                         "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                         search_page.url,
                         dist,
@@ -735,7 +779,7 @@ async def get_place_urls(
                         coords,
                     ).meters
                     if dist > range_limit:
-                        logger.info(
+                        logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             search_page.url,
                             dist,
@@ -743,6 +787,9 @@ async def get_place_urls(
                         )
                         return place_links
                 place_links.add(search_page.url)
+                return place_links
+            if await is_no_results_page(search_page):
+                logger.info("No results found for query '%s'.", query)
                 return place_links
             logger.error("Could not find results feed selector on search page.")
             return place_links
@@ -781,6 +828,11 @@ async def get_place_urls(
                 if canonical_link in processed_links:
                     continue
 
+                # Early Drop per element: Google Maps local results balance Relevance, Distance,
+                # and Prominence (https://support.google.com/business/answer/7091). Due to high prominence,
+                # a distant place (> range_limit) can appear interspersed among closer places (< range_limit).
+                # An abrupt Early Stop would miss valid nearby places in subsequent scrolls.
+                # Therefore, each element is individually checked and dropped if out of range.
                 coords = extract_coordinates_from_url(link)
                 if coords is not None:
                     dist = geodesic(
@@ -789,7 +841,7 @@ async def get_place_urls(
                     ).meters
                     if dist > range_limit:
                         processed_links.add(canonical_link)
-                        logger.info(
+                        logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             canonical_link,
                             dist,
@@ -811,6 +863,10 @@ async def get_place_urls(
 
             logger.debug("Found %d unique place links so far...", len(place_links))
 
+            # Stopping condition (consecutive_empty_scrolls):
+            # When multiple consecutive scrolls yield no new valid links (MAX_CONSECUTIVE_EMPTY_SCROLLS = 6),
+            # the feed has exhausted relevant results or all remaining items exceed the range limit,
+            # avoiding infinite scrolling, resource waste, and bot detection.
             if new_links_count == 0:
                 consecutive_empty_scrolls += 1
                 if consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS:
@@ -851,8 +907,8 @@ async def get_place_urls(
     finally:
         if search_page and not search_page.is_closed():
             try:
-                await search_page.close()
-            except PlaywrightError:
+                await asyncio.shield(search_page.close())
+            except BaseException:  # noqa: BLE001, S110
                 pass
 
     return place_links
@@ -886,16 +942,21 @@ async def scrape_query_spa(
         query (str): Search query string.
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
-        max_places (int, optional): Maximum places to collect. Defaults to 120.
+        max_places (int, optional): Maximum valid places to collect. Places dropped
+            via range_limit (early drop) do not count toward this limit. Defaults to 120.
         lang (str, optional): Language code. Defaults to "en".
         fields (Sequence[str] | set[str] | None, optional): Selected fields. Defaults to None.
-        range_limit (float): Maximum radius distance in meters
-            from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
+        range_limit (float): Maximum radius distance in meters from geo_coordinates.
+            Google Maps local ranking combines Relevance, Distance, and Prominence
+            (https://support.google.com/business/answer/7091). Prominent places further away
+            may be returned before closer ones, so results are not strictly monotonic by distance.
+            range_limit filters out places exceeding this radius (early drop).
+            Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
         proxy_rotator (ProxyRotator | None, optional): Proxy rotator to renew proxy on CAPTCHA. Defaults to None.
         max_captcha_retries (int, optional): Max retries on CAPTCHA sorry page. Defaults to 2.
         query_timeout (float): Maximum seconds allowed for this query. Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
-            waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT (15000ms).
+            waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT.
 
     Returns:
         list[dict[str, Any]]: List of place dictionaries.
@@ -981,7 +1042,7 @@ async def scrape_query_spa(
                     coords,
                 ).meters
                 if dist > range_limit:
-                    logger.info(
+                    logger.debug(
                         "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                         search_page.url,
                         dist,
@@ -998,6 +1059,9 @@ async def scrape_query_spa(
 
         active_feed_selector = await find_feed_selector(search_page)
         if not active_feed_selector:
+            if await is_no_results_page(search_page):
+                logger.info("No results found for query '%s'.", query)
+                return results
             logger.error("Could not find results feed selector on search page.")
             return results
 
@@ -1039,6 +1103,11 @@ async def scrape_query_spa(
                 if canonical_link in processed_links:
                     continue
 
+                # Early Drop per element: Google Maps local results balance Relevance, Distance,
+                # and Prominence (https://support.google.com/business/answer/7091). Due to high prominence,
+                # a distant place (> range_limit) can appear interspersed among closer places (< range_limit).
+                # An abrupt Early Stop would miss valid nearby places in subsequent scrolls.
+                # Therefore, each element is individually checked and dropped if out of range.
                 coords = extract_coordinates_from_url(link)
                 if coords is not None:
                     dist = geodesic(
@@ -1050,7 +1119,7 @@ async def scrape_query_spa(
                     ).meters
                     if dist > range_limit:
                         processed_links.add(canonical_link)
-                        logger.info(
+                        logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             canonical_link,
                             dist,
@@ -1155,7 +1224,11 @@ async def scrape_query_spa(
                 )
                 break
 
-            if not found_new_in_batch and not has_unprocessed:
+            # Stopping condition (consecutive_empty_scrolls):
+            # When multiple consecutive scrolls yield no new items (MAX_CONSECUTIVE_EMPTY_SCROLLS = 6),
+            # the feed has exhausted relevant results or all remaining items exceed the range limit,
+            # avoiding infinite scrolling, resource waste, and bot detection.
+            if not found_new_in_batch:
                 consecutive_empty_scrolls += 1
                 if consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS:
                     logger.debug(
@@ -1190,13 +1263,13 @@ async def scrape_query_spa(
     finally:
         if search_page and not search_page.is_closed():
             try:
-                await search_page.close()
-            except PlaywrightError:
+                await asyncio.shield(search_page.close())
+            except BaseException:  # noqa: BLE001, S110
                 pass
         for extra_ctx in created_contexts:
             try:
-                await extra_ctx.close()
-            except PlaywrightError:
+                await asyncio.shield(extra_ctx.close())
+            except BaseException:  # noqa: BLE001, S110
                 pass
 
     return results
@@ -1345,8 +1418,8 @@ async def process_link(
             finally:
                 if page and not page.is_closed():
                     try:
-                        await page.close()
-                    except PlaywrightError:
+                        await asyncio.shield(page.close())
+                    except BaseException:  # noqa: BLE001, S110
                         pass
 
         return None
@@ -1481,7 +1554,7 @@ async def scrape_google_maps(
     fields: Sequence[str] | set[str] | None = None,
     flatten: bool = False,
     use_spa: bool = True,
-    cache_dir: Path | str | None = DEFAULT_CACHE_DIR,
+    cache_dir: Path | None = DEFAULT_CACHE_DIR,
     range_limit: float = DEFAULT_RANGE_LIMIT,
     query_timeout: float = DEFAULT_QUERY_TIMEOUT,
     place_timeout: float = DEFAULT_PLACE_TIMEOUT,
@@ -1496,7 +1569,8 @@ async def scrape_google_maps(
         zoom (float): Map zoom level.
         proxy (ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None, optional): Single proxy
             or sequence of proxies for round-robin rotation. Defaults to None.
-        max_places (int, optional): Maximum places to collect per query. Defaults to 120.
+        max_places (int, optional): Maximum valid places to collect per query. Places
+            dropped via range_limit (early drop) do not count toward this limit. Defaults to 120.
         lang (str, optional): Language code for Google Maps. Defaults to "en".
         headless (bool, optional): Whether to run headless browser. Defaults to False.
         n_semaphore (int, optional): Maximum concurrent browser tabs/queries. Defaults to 8.
@@ -1505,16 +1579,21 @@ async def scrape_google_maps(
             If False (default), bundles non-default fields into a 'details' JSON string column,
             keeping 11 common columns at top-level. Defaults to False.
         use_spa (bool, optional): Whether to use high-speed SPA navigation. Defaults to True.
-        cache_dir (Path | str | None, optional): Directory to store persistent Chromium disk cache.
+        cache_dir (Path | None, optional): Directory to store persistent Chromium disk cache.
             Defaults to DEFAULT_CACHE_DIR (".cache/chromium_cache"). If None, disk caching
             flags will not be passed.
-        range_limit (float): Maximum radius distance in meters from geo_coordinates. Places beyond this limit are dropped (early drop). Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
+        range_limit (float): Maximum radius distance in meters from geo_coordinates.
+            Google Maps local ranking combines Relevance, Distance, and Prominence
+            (https://support.google.com/business/answer/7091). Prominent places further away
+            may be returned before closer ones, so results are not strictly monotonic by distance.
+            range_limit filters out places exceeding this radius (early drop).
+            Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
         query_timeout (float): Maximum seconds allowed per query before early return.
             Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
         place_timeout (float, optional): Maximum seconds allowed to scrape a place in fallback mode.
             Defaults to DEFAULT_PLACE_TIMEOUT (45.0s).
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
-            waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT (15000ms).
+            waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT.
         stagger_delay (tuple[float, float] | float, optional): Delay range (min, max) in
             seconds to stagger the initial launch of concurrent queries. Set to 0 to
             disable. Defaults to (1.5, 3.5).
@@ -1528,7 +1607,7 @@ async def scrape_google_maps(
 
     launch_args = list(LAUNCH_ARGS)
     if cache_dir is not None:
-        resolved_cache = Path(cache_dir).resolve()
+        resolved_cache = cache_dir.resolve()
         resolved_cache.mkdir(parents=True, exist_ok=True)
         launch_args.extend(
             [
@@ -1612,6 +1691,9 @@ async def scrape_google_maps(
                                 query_timeout + 10.0,
                             )
                             return []
+                        except asyncio.CancelledError:
+                            logger.debug("run_spa_query cancelled for query '%s'", q)
+                            raise
                         except Exception as e:  # noqa: BLE001
                             logger.error(
                                 "❌ Error in run_spa_query for query '%s': %s",
@@ -1622,14 +1704,24 @@ async def scrape_google_maps(
                         finally:
                             if context:
                                 try:
-                                    await context.close()
-                                except PlaywrightError:
+                                    await asyncio.shield(context.close())
+                                except BaseException:  # noqa: BLE001, S110
                                     pass
 
-                spa_tasks = [run_spa_query(i, query) for i, query in enumerate(queries)]
-                list_of_results = await asyncio.gather(
-                    *spa_tasks, return_exceptions=True
-                )
+                spa_tasks = [
+                    asyncio.create_task(run_spa_query(i, query))
+                    for i, query in enumerate(queries)
+                ]
+                try:
+                    list_of_results = await asyncio.gather(
+                        *spa_tasks, return_exceptions=True
+                    )
+                except asyncio.CancelledError:
+                    for t in spa_tasks:
+                        if not t.done():
+                            t.cancel()
+                    await asyncio.gather(*spa_tasks, return_exceptions=True)
+                    raise
                 valid_results: list[list[dict[str, Any]]] = []
                 for res in list_of_results:
                     if isinstance(res, Exception):
@@ -1704,6 +1796,9 @@ async def scrape_google_maps(
                                 q,
                             )
                             return set()
+                        except asyncio.CancelledError:
+                            logger.debug("run_get_urls cancelled for query '%s'", q)
+                            raise
                         except Exception as e:  # noqa: BLE001
                             logger.error(
                                 "❌ Error in get_place_urls for query '%s': %s",
@@ -1714,14 +1809,24 @@ async def scrape_google_maps(
                         finally:
                             if context:
                                 try:
-                                    await context.close()
-                                except PlaywrightError:
+                                    await asyncio.shield(context.close())
+                                except BaseException:  # noqa: BLE001, S110
                                     pass
 
-                tasks = [run_get_urls(i, query) for i, query in enumerate(queries)]
-                list_of_sets_of_links = await asyncio.gather(
-                    *tasks, return_exceptions=True
-                )
+                tasks = [
+                    asyncio.create_task(run_get_urls(i, query))
+                    for i, query in enumerate(queries)
+                ]
+                try:
+                    list_of_sets_of_links = await asyncio.gather(
+                        *tasks, return_exceptions=True
+                    )
+                except asyncio.CancelledError:
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    raise
                 valid_link_sets: list[set[str]] = []
                 for r in list_of_sets_of_links:
                     if isinstance(r, Exception):
@@ -1771,6 +1876,11 @@ async def scrape_google_maps(
                                 link,
                             )
                             return None
+                        except asyncio.CancelledError:
+                            logger.debug(
+                                "run_process_link cancelled for link '%s'", link
+                            )
+                            raise
                         except Exception as e:  # noqa: BLE001
                             logger.error(
                                 "❌ Error processing place link %s: %s",
@@ -1781,19 +1891,30 @@ async def scrape_google_maps(
                         finally:
                             if context:
                                 try:
-                                    await context.close()
-                                except PlaywrightError:
+                                    await asyncio.shield(context.close())
+                                except BaseException:  # noqa: BLE001, S110
                                     pass
 
                 detail_tasks = [
-                    run_process_link(i, link) for i, link in enumerate(place_links)
+                    asyncio.create_task(run_process_link(i, link))
+                    for i, link in enumerate(place_links)
                 ]
-                raw_results = await asyncio.gather(
-                    *detail_tasks, return_exceptions=True
-                )
+                try:
+                    raw_results = await asyncio.gather(
+                        *detail_tasks, return_exceptions=True
+                    )
+                except asyncio.CancelledError:
+                    for t in detail_tasks:
+                        if not t.done():
+                            t.cancel()
+                    await asyncio.gather(*detail_tasks, return_exceptions=True)
+                    raise
                 results = [r for r in raw_results if isinstance(r, dict)]
                 logger.info("✅ Successfully collected %d places.", len(results))
 
+        except asyncio.CancelledError:
+            logger.info("Scraping cancelled by user/task cancellation.")
+            raise
         except PlaywrightTimeoutError:
             logger.error("Playwright timeout error during scraping process.")
         except Exception as e:  # noqa: BLE001
@@ -1801,8 +1922,8 @@ async def scrape_google_maps(
         finally:
             if browser and browser.is_connected():
                 try:
-                    await browser.close()
-                except PlaywrightError:
+                    await asyncio.shield(browser.close())
+                except BaseException:  # noqa: BLE001, S110
                     pass
 
     return format_places_dataframe(results, flatten=flatten, fields=fields)

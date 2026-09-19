@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-09-19
+
+### Fixed
+- **Vòng Lặp Cuộn Vô Hạn Khi Cạn POI Hợp Lệ (Runaway Scrolling)**:
+  - Sửa lỗi logic đếm `consecutive_empty_scrolls` trong [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): bộ đếm giờ đây dựa trên `not found_new_in_batch` thay vì bị ràng buộc bởi `has_unprocessed`.
+  - Scraper chủ động ngắt cuộn feed sau `MAX_CONSECUTIVE_EMPTY_SCROLLS` (6 lần) liên tiếp không có thêm POI hợp lệ trong bán kính, chấm dứt hoàn toàn tình trạng bị treo 300 giây (5 phút) ở các query phổ biến (`cafe`, `restaurant`, `store`, v.v.) tại khu vực thưa dân.
+- **Playwright Strict Mode Violation Trong `scroll_feed`**:
+  - Thêm `.first` vào `page.locator(feed_selector).first.hover()` trong [`scroll_feed`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) trước khi gọi wheel scroll, triệt tiêu 103 lỗi strict mode khi selector fallback `'div[role="main"] div[tabindex="-1"]'` khớp nhiều phần tử DOM.
+- **Lỗi Driver & Pending Tasks Khi Ngắt Bằng Ctrl+C / `CancelledError`**:
+  - Bọc an toàn `await asyncio.shield(resource.close())` với `except BaseException` tại tất cả các điểm giải phóng tài nguyên (`context.close()`, `browser.close()`, `page.close()`).
+  - Quản lý hủy tác vụ con đồng bộ trong [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), loại bỏ hoàn toàn các lỗi runtime `Browser.close: Connection closed while reading from the driver` và `Task was destroyed but it is pending!`.
+- **Lỗi Báo Log ERROR Sai Lệch Khi Trang 0 Kết Quả**:
+  - Bổ sung hàm [`is_no_results_page`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) kiểm tra các dấu hiệu trang rỗng ("Google Maps can't find", "No results found", "Không tìm thấy kết quả", `div.Q27duf`).
+  - Ghi log `INFO` thông báo không tìm thấy kết quả và trả về danh sách rỗng thay vì bắn `logger.error("Could not find results feed selector on search page.")`.
+
+### Changed
+- **Tối Ưu Hóa SPA Preview Timeout**:
+  - Giảm [`DEFAULT_SPA_PREVIEW_TIMEOUT`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) từ 15,000ms (15s) xuống 10,000ms (10s), tiết kiệm thời gian chờ lãng phí khi gặp thẻ không kích hoạt được request preview XHR trong khi vẫn đảm bảo độ trễ an toàn cho các proxy mạng chậm.
+- **Hạ Mức Độ Log Early Drop**:
+  - Chuyển toàn bộ các vị trí ghi log `Early drop: Place ... is ...m away` từ `INFO` xuống `DEBUG`, triệt tiêu tình trạng ngập lụt log (hơn 117,000 dòng log gây phình file 41.7MB trong log cũ).
+- **Cập Nhật Tài Liệu & Docstring Thuật Toán Xếp Hạng Google Maps**:
+  - Bổ sung tài liệu chính thức từ [Google Business Profile Help #7091](https://support.google.com/business/answer/7091) vào docstring của `range_limit` tại [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), `get_place_urls` và tài liệu kiến trúc [`CONTEXT.md`](file:///data/IMPORTANT/map_miner/CONTEXT.md).
+  - Làm rõ 3 yếu tố xếp hạng: Relevance, Distance, Prominence và rationale của việc áp dụng cơ chế Early Drop từng phần tử kết hợp bộ đếm cuộn rỗng an toàn.
+- **Tinh Gọn Bộ Kiểm Thử (`tests/test_scraper.py`)**:
+  - Cắt giảm 508 dòng code boilerplate (-18.6%), từ 2,731 dòng xuống 2,222 dòng.
+  - Chuẩn hóa các mock helpers dùng chung (`MockPlaywrightContext`, `make_fake_browser`, `make_mock_page`, `make_mock_context`).
+  - Tham số hóa 7 nhóm test trùng lặp qua `@pytest.mark.parametrize`, duy trì 100% độ bao phủ kiểm thử (**119/119 tests pass**).
+
+### Added
+- Export hàm [`is_no_results_page`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) tại tầng gốc package.
+- Các hằng số `NO_RESULTS_SELECTORS` và `NO_RESULTS_TEXT_PATTERNS`.
+
+---
+
 ## [0.3.1] - 2026-09-14
 
 ### Added

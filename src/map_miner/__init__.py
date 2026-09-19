@@ -26,10 +26,11 @@ from .scraper import (
     create_browser_context,
     extract_coordinates_from_url,
     format_places_dataframe,
+    is_no_results_page,
     scrape_google_maps,
 )
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 __all__ = [
     "DEFAULT_CAPTCHA_TIMEOUT",
@@ -51,6 +52,7 @@ __all__ = [
     "extract_place_data",
     "format_places_dataframe",
     "get_tor_rotating_proxy",
+    "is_no_results_page",
     "renew_tor_circuit_control",
     "scrape_google_maps",
 ]

@@ -5,11 +5,6 @@ from geopy.point import Point
 
 from map_miner import scrape_google_maps
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-
 
 def main():
     pois = asyncio.run(
@@ -24,9 +19,8 @@ def main():
                 "bank",
                 "gas",
             },
-            # max_places=40,
+            max_places=40,
             lang="en",
-            headless=False,
             geo_coordinates=Point(21.018785, 105.830415),
             zoom=18,
             # Output format:
@@ -57,4 +51,8 @@ def main():
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+    )
     main()
