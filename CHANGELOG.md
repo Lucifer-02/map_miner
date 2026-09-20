@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-09-20
+
+### Added
+- **Cơ Chế Cứu Vãn Dữ Liệu Hai Tầng (Two-tier Zero Data Loss Rescue)**:
+  - Bổ sung tham số `results_collector: list[dict[str, Any]] | None` trong [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) và `links_collector: set[str] | None` trong [`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py).
+  - Khởi tạo collector và truyền vào hàm cào trong `run_spa_query` và `run_get_urls`. Khi chạm Hard Watchdog Timeout (310s) hoặc gặp exception, scraper trả về toàn bộ dữ liệu đã tích lũy trong collector thay vì trả về rỗng (`[]` / `set()`), cứu vãn 100% số địa điểm đã cào được (trung bình 19.6 địa điểm/lần timeout).
+- **Dừng Sớm Khi Liên Tiếp Ra Ngoài Bán Kính (`MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS = 3`)**:
+  - Thêm hằng số `MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS = 3`. Nếu 3 lượt cuộn liên tiếp toàn bộ địa điểm mới đều vượt quá `range_limit`, scraper kích hoạt dừng cuộn sớm ngay lập tức, tiết kiệm tài nguyên khi cào các query mật độ thấp (như `courthouse`).
+- **Hậu Kiểm Bán Kính Sau Bóc Tách (Post-Extraction Radius Filtering)**:
+  - Đối với các thẻ địa điểm không chứa tọa độ trên URL, sau khi bóc tách `place_data` từ preview blob, hệ thống kiểm tra khoảng cách từ `latitude`/`longitude` trích xuất được. Nếu vượt quá `range_limit`, địa điểm bị loại bỏ (early drop) và không ghi nhận vào kết quả.
+- **Bộ Tiện Ích Giải Phóng An Toàn (Graceful Shutdown & Safe Closure)**:
+  - Bổ sung các hàm [`safe_close_page`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`safe_close_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), và [`safe_close_browser`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) hóa giải triệt để bẫy `asyncio.shield()` khi task bị huỷ (cancellation).
+  - Quản lý vòng đời task trong [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) qua `_active_route_tasks`, unroute sạch sẽ trước khi đóng context, triệt tiêu hoàn toàn 479 lỗi `Task was destroyed but it is pending!`.
+- **Tái Cấu Trúc Constants thành Dataclass `ScraperConfig`**:
+  - Định nghĩa dataclass [`ScraperConfig`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) tập trung hóa toàn bộ các thông số timeouts, guardrails, bộ nhớ đệm, retries và concurrency delays.
+  - Tích hợp tham số `config: ScraperConfig | None = None` vào [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) với cơ chế phân giải độ ưu tiên (precedence) linh hoạt.
+  - Duy trì 100% tương thích ngược với các hằng số `DEFAULT_*` và `MAX_*` module-level từ `DEFAULT_CONFIG = ScraperConfig()`.
+  - Export `ScraperConfig` và `DEFAULT_CONFIG` tại `map_miner` và `map_miner.scraper`.
+- **Bóc Tách Xử Lý Dữ Liệu Thuần Túy Ra Khỏi I/O (`src/map_miner/extractor.py`)**:
+  - Chuyển toàn bộ các logic xử lý dữ liệu thuần túy (pure data processing) từ [`scraper.py`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) sang [`extractor.py`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py): `DEFAULT_FLATTEN_COLUMNS`, `REQUIRED_COLUMNS`, `make_place_url`, `extract_coordinates_from_url`, `is_preview_response_for_link`, `_get_flatten_column_type`, `format_places_dataframe`.
+  - Bổ sung 2 hàm tiện ích tính khoảng cách và kiểm tra phạm vi: [`calculate_distance`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) và [`is_within_range`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) hỗ trợ cả `Point` lẫn `tuple[float, float]`.
+  - Re-export toàn bộ hằng số và hàm tại [`src/map_miner/scraper.py`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) và [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py), bảo đảm 100% tương thích ngược (Backward Compatibility).
+  - Thay thế toàn bộ các phép tính `geodesic(...).meters` trong `scraper.py` bằng `calculate_distance(...)`.
+
+### Changed
+- **Tối Ưu Hóa Dừng Cuộn Trống**:
+  - Giảm [`MAX_CONSECUTIVE_EMPTY_SCROLLS`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) từ 6 xuống 4 lượt cuộn.
+- **Kiểm Tra Deadline Chủ Động & Dynamic Preview Timeout**:
+  - Trong [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), tính toán `remaining_time` và kiểm tra deadline (`remaining_time <= 2.0s`) ngay trong vòng lặp duyệt thẻ địa điểm và trước khi cuộn feed.
+  - Tự động điều chỉnh động thời gian chờ preview XHR `cur_timeout_ms` không vượt quá thời gian còn lại của query.
+
+---
+
 ## [0.3.2] - 2026-09-19
 
 ### Fixed

@@ -4,10 +4,52 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import quote_plus, unquote
 
+import polars as pl
 from bs4 import BeautifulSoup
+from geopy.distance import geodesic
+from geopy.point import Point
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "DEFAULT_FLATTEN_COLUMNS",
+    "REQUIRED_COLUMNS",
+    "calculate_distance",
+    "extract_coordinates_from_url",
+    "extract_initial_json",
+    "extract_place_data",
+    "format_places_dataframe",
+    "get_address_components",
+    "is_preview_response_for_link",
+    "is_within_range",
+    "make_place_url",
+    "parse_address_string_fallback",
+    "parse_dom_from_html",
+    "parse_json_data",
+    "parse_preview_json",
+    "safe_get",
+    "strip_accents",
+]
+
+# --- Schema Columns ---
+DEFAULT_FLATTEN_COLUMNS: tuple[str, ...] = (
+    "name",
+    "place_id",
+    "latitude",
+    "longitude",
+    "address",
+    "link",
+    "categories",
+    "rating",
+    "reviews_count",
+    "plus_code",
+    "city",
+)
+REQUIRED_COLUMNS: tuple[str, ...] = (
+    DEFAULT_FLATTEN_COLUMNS  # Backward compatibility alias
+)
 
 
 def safe_get(data: Any, *keys: Any) -> Any:
@@ -810,3 +852,226 @@ def extract_place_data(
         return {f: place_details.get(f) for f in fields if f != "link"}
 
     return place_details
+
+
+def make_place_url(
+    query: str, geo_coordinates: Point, zoom: float, lang: str = "en"
+) -> str:
+    """Builds a localized Google Maps search URL."""
+    encoded_query = quote_plus(query)
+    return (
+        f"https://www.google.com/maps/search/{encoded_query}/"
+        f"@{geo_coordinates.latitude},{geo_coordinates.longitude},{zoom}z?hl={lang}"
+    )
+
+
+def extract_coordinates_from_url(url: str) -> tuple[float, float] | None:
+    """Extracts geographic coordinates (latitude, longitude) from a Google Maps URL.
+
+    Matches formats:
+    1. Feed / detail link protobuf format: '!3d<lat>...!4d<lon>'
+    2. Viewport coordinate format: '@<lat>,<lon>'
+
+    Args:
+        url (str): The Google Maps URL string.
+
+    Returns:
+        tuple[float, float] | None: (latitude, longitude) tuple or None if not found/invalid.
+    """
+    if not url or not isinstance(url, str):
+        return None
+
+    decoded_url = unquote(url)
+
+    # 1. Primary feed / place protobuf format: !3d<lat>...!4d<lon>
+    match = re.search(r"!3d(-?\d+(?:\.\d+)?).*?!4d(-?\d+(?:\.\d+)?)", decoded_url)
+    if match:
+        try:
+            lat = float(match.group(1))
+            lon = float(match.group(2))
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                return lat, lon
+        except (ValueError, TypeError):
+            pass
+
+    # 2. Fallback viewport format: @<lat>,<lon>
+    match = re.search(r"@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)", decoded_url)
+    if match:
+        try:
+            lat = float(match.group(1))
+            lon = float(match.group(2))
+            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                return lat, lon
+        except (ValueError, TypeError):
+            pass
+
+    return None
+
+
+def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
+    """Validates whether an intercepted HTTP response corresponds to the place preview
+    for a specific canonical link, avoiding race conditions and cross-place data leakage.
+    """
+    raw_url = getattr(response, "url", "")
+    status = getattr(response, "status", 0)
+    ok = getattr(response, "ok", status == 200)
+
+    if "maps/preview/place" not in raw_url or (status != 200 and not ok):
+        return False
+
+    decoded_canonical = unquote(canonical_link)
+    decoded_url = unquote(raw_url).lower()
+
+    hex_match = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", decoded_canonical)
+    if hex_match:
+        place_hex_id = hex_match.group(0).lower()
+        if place_hex_id not in decoded_url:
+            return False
+
+    return True
+
+
+def calculate_distance(
+    origin: Point | tuple[float, float],
+    target: Point | tuple[float, float],
+) -> float:
+    """Calculates the geodesic distance in meters between two points.
+
+    Args:
+        origin (Point | tuple[float, float]): Origin coordinates.
+        target (Point | tuple[float, float]): Target coordinates.
+
+    Returns:
+        float: Geodesic distance in meters.
+    """
+    p1 = (origin.latitude, origin.longitude) if isinstance(origin, Point) else origin
+    p2 = (target.latitude, target.longitude) if isinstance(target, Point) else target
+    return float(geodesic(p1, p2).meters)
+
+
+def is_within_range(
+    origin: Point | tuple[float, float],
+    target: Point | tuple[float, float],
+    range_limit: float,
+) -> bool:
+    """Checks whether target is within range_limit meters from origin.
+
+    Args:
+        origin (Point | tuple[float, float]): Origin coordinates.
+        target (Point | tuple[float, float]): Target coordinates.
+        range_limit (float): Maximum radius distance in meters.
+
+    Returns:
+        bool: True if distance <= range_limit, False otherwise.
+    """
+    return calculate_distance(origin, target) <= range_limit
+
+
+def _get_flatten_column_type(col: str) -> pl.DataType | type[pl.DataType]:
+    if col in ("latitude", "longitude", "rating"):
+        return pl.Float64
+    if col == "reviews_count":
+        return pl.Int64
+    if col == "categories":
+        return pl.List(pl.String)
+    return pl.String
+
+
+def format_places_dataframe(
+    results: list[dict[str, Any]],
+    flatten: bool = False,
+    fields: Sequence[str] | set[str] | None = None,
+) -> pl.DataFrame:
+    """Formats scraped places data into a Polars DataFrame.
+
+    When flatten=False (default), keeps 11 default top-level columns
+    ('name', 'place_id', 'latitude', 'longitude', 'address', 'link',
+    'categories', 'rating', 'reviews_count', 'plus_code', 'city')
+    and bundles all other metadata into a 'details' JSON string column.
+
+    When flatten=True, outputs all fields as flattened columns at top-level.
+
+    Args:
+        results (list[dict[str, Any]]): List of scraped place dictionaries.
+        flatten (bool, optional): Whether to flatten all fields into individual columns.
+            Defaults to False.
+        fields (Sequence[str] | set[str] | None, optional): Specific fields to include.
+            Defaults to None.
+
+    Returns:
+        pl.DataFrame: Formatted Polars DataFrame.
+    """
+    if flatten:
+        if not results:
+            if fields is not None:
+                schema = {f: pl.String for f in fields}
+                return pl.DataFrame(schema=schema)
+            return pl.DataFrame()
+        if fields is not None:
+            filtered_results = [
+                {k: item[k] for k in fields if k in item} for item in results
+            ]
+            return pl.from_dicts(filtered_results, infer_schema_length=None)
+        return pl.from_dicts(results, infer_schema_length=None)
+
+    if fields is None:
+        if not results:
+            schema: dict[str, Any] = {
+                c: _get_flatten_column_type(c) for c in DEFAULT_FLATTEN_COLUMNS
+            }
+            schema["details"] = pl.String
+            return pl.DataFrame(schema=schema)
+
+        formatted_rows: list[dict[str, Any]] = []
+        for item in results:
+            row: dict[str, Any] = {c: item.get(c) for c in DEFAULT_FLATTEN_COLUMNS}
+            details_dict = {
+                k: v
+                for k, v in item.items()
+                if k not in DEFAULT_FLATTEN_COLUMNS and v is not None
+            }
+            row["details"] = json.dumps(details_dict, ensure_ascii=False, default=str)
+            formatted_rows.append(row)
+        schema_overrides = {
+            "latitude": pl.Float64,
+            "longitude": pl.Float64,
+            "rating": pl.Float64,
+            "reviews_count": pl.Int64,
+            "categories": pl.List(pl.String),
+        }
+        return pl.from_dicts(
+            formatted_rows,
+            infer_schema_length=None,
+            schema_overrides=schema_overrides,
+        )
+
+    # fields is not None and flatten is False
+    top_cols = [f for f in fields if f in DEFAULT_FLATTEN_COLUMNS]
+    other_cols = [f for f in fields if f not in DEFAULT_FLATTEN_COLUMNS]
+    if not results:
+        schema_dict: dict[str, Any] = {c: _get_flatten_column_type(c) for c in top_cols}
+        if other_cols:
+            schema_dict["details"] = pl.String
+        return pl.DataFrame(schema=schema_dict)
+
+    formatted_rows = []
+    for item in results:
+        row = {c: item.get(c) for c in top_cols}
+        if other_cols:
+            details_dict = {
+                k: item[k] for k in other_cols if k in item and item[k] is not None
+            }
+            row["details"] = json.dumps(details_dict, ensure_ascii=False, default=str)
+        formatted_rows.append(row)
+
+    overrides: dict[str, Any] = {
+        c: _get_flatten_column_type(c)
+        for c in top_cols
+        if c in ("latitude", "longitude", "rating", "reviews_count", "categories")
+    }
+
+    return pl.from_dicts(
+        formatted_rows,
+        infer_schema_length=None,
+        schema_overrides=overrides or None,
+    )

@@ -10,7 +10,7 @@
 - **Chế độ dự phòng đa trang (Multi-page Fallback Mode)**: Hỗ trợ chế độ cào truyền thống song song qua `asyncio.Semaphore` (`use_spa=False`) mở từng tab địa điểm độc lập khi cần cô lập môi trường duyệt.
 - **Tối ưu hóa băng thông & tài nguyên toàn cục (Bandwidth & Resource Optimization)**: Sử dụng handler định tuyến mạng toàn cục [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L170-L245) kết hợp Chromium launch flags để chặn tải hình ảnh, font chữ, media, map vector/satellite tiles (`/maps/vt`, `khms`), telemetry & tracking (`google-analytics`, `gen_204`, `client_204`, `cspreport`, `play.google.com/log`, `/maps/photometa`, `feedback-pa.clients6.google.com`, `ogads-pa.clients6.google.com`, `/maps/preview/entity`). Tích hợp **Application-Level Route Cache** (`DEFAULT_STATIC_CACHE_DIR = Path(".cache") / "static_assets"`) lưu đệm các tệp JS/CSS tĩnh của Google Maps và phục vụ trực tiếp với status 200 kèm header `x-cache: HIT-ROUTE-CACHE`. Đồng thời kết hợp **Persistent Disk Cache** (`--disk-cache-dir`, `--disk-cache-size=1GB`) chia sẻ cache static assets giữa các `BrowserContext`, giảm **~94.5%** dung lượng mạng truyền tải (từ ~3.13 MB xuống còn 0.17 MB) cho các lượt cào tiếp theo và giữa các phiên xoay proxy, trong khi vẫn bảo toàn 100% luồng xác thực reCAPTCHA.
 - **Định tuyến Direct cho Static Assets (Proxy Bypass)**: Cung cấp hằng số tiện ích [`DEFAULT_PROXY_BYPASS`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py) (`"maps.gstatic.com,*.gstatic.com,fonts.googleapis.com,fonts.gstatic.com,apis.google.com,ssl.gstatic.com"`) và bảo toàn trường `bypass` trong `ProxySettings` qua [`ProxyRotator`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py). Cho phép trình duyệt định tuyến trực tiếp các static CDN assets của Google mà không đi qua proxy server, tiết kiệm tối đa băng thông dân cư đắt đỏ và loại bỏ độ trễ tunnel không cần thiết cho tài nguyên tĩnh.
-- **Trích xuất dữ liệu đa tầng bền vững (Multi-tier Resilient Extraction)**: Động cơ bóc tách thuần túy [`extractor.py`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) không có side effect, kết hợp 4 tầng dữ liệu (Payload Preview XHR `actual_data[6]`, nhúng `APP_INITIALIZATION_STATE`, DOM BeautifulSoup fallback, và bộ phân tích địa chỉ chi tiết kèm thuật toán khôi phục dấu tiếng Việt chuẩn xác bằng candidate matching).
+- **Trích xuất dữ liệu đa tầng & Xử lý dữ liệu thuần túy (Multi-tier Resilient Extraction & Pure Processing)**: Động cơ bóc tách thuần túy [`extractor.py`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) không có side effect, kết hợp 4 tầng dữ liệu (Payload Preview XHR `actual_data[6]`, nhúng `APP_INITIALIZATION_STATE`, DOM BeautifulSoup fallback, và bộ phân tích địa chỉ chi tiết kèm thuật toán khôi phục dấu tiếng Việt chuẩn xác bằng candidate matching). Đồng thời quản lý toàn bộ các thao tác xử lý và định dạng dữ liệu thuần túy (tạo URL tìm kiếm, trích xuất tọa độ từ URL, nhận diện preview XHR response, tính khoảng cách geodesic và kiểm tra bán kính, chuẩn hóa kết quả thành Polars DataFrame).
 - **Cơ chế vượt kiểm duyệt & Chẩn đoán CAPTCHA tự động (Anti-Detection & CAPTCHA Diagnostics)**:
   - Tự động phát hiện và vượt qua màn hình Cookie Consent đa ngôn ngữ (`pass_consent`).
   - Tích hợp bộ giải tự động reCAPTCHA v2 bằng phương pháp âm thanh (Audio Challenge) kết hợp mô hình nhận dạng giọng nói (`speech_recognition` + `pydub`) thông qua [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388).
@@ -191,25 +191,61 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
 - [`pass_consent`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L139-L168): Sử dụng biểu thức chính quy đa ngôn ngữ `CONSENT_BUTTON_REGEX` nhận diện các nút từ chối/chấp nhận (Reject all, Từ chối tất cả, Alle ablehnen, Tout refuser, Rechazar todo, Rifiuta tutto...) cùng fallback form nút bấm.
 - [`handle_captcha_if_present`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L171-L193): Tự động phát hiện URL `sorry/index` hoặc văn bản thông báo *"Our systems have detected unusual traffic"*, kích hoạt [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388).
 
-#### 5. Quản Lý Vòng Đời Trang An Toàn (Zero Page Leaks) & Stealth:
-- Toàn bộ các đối tượng trang `search_page` và detail `page` được bọc chặt chẽ trong khối `try ... finally: if page and not page.is_closed(): await page.close()`, triệt tiêu hoàn toàn nguy cơ rò rỉ tab trình duyệt hoặc cạn kiệt RAM.
+#### 5. Quản Lý Vòng Đời Trang An Toàn (Zero Leaks) & Graceful Shutdown:
+- **Bộ Tiện Ích Giải Phóng An Toàn (`safe_close_page`, `safe_close_context`, `safe_close_browser`)**:
+  - Hóa giải triệt để bẫy `asyncio.shield()` trong Python asyncio: Khi task cha bị huỷ (`CancelledError`), việc gọi `await asyncio.shield(coro)` thông thường sẽ ngay lập tức ném lại `CancelledError` mà không chờ `coro` hoàn thành, dẫn đến việc tài nguyên (`BrowserContext.close()`, `Page.close()`) bị bỏ rơi chạy ngầm và bị tiêu huỷ giữa chừng (`Task was destroyed but it is pending!`).
+  - Các hàm `safe_close_*` tạo task độc lập `close_task = asyncio.create_task(...)`, bọc trong `asyncio.shield(close_task)`, và khi bắt `asyncio.CancelledError` sẽ chủ động `await close_task` để đảm bảo tài nguyên Chromium được dọn dẹp triệt để trước khi lan truyền tín hiệu huỷ.
+  - Trong [`safe_close_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): Thực hiện `await context.unroute("**/*")` trước khi đóng context để ngắt hoàn toàn mọi listener của route handler.
+- **Quản Lý Vòng Đời Task Trong [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py)**:
+  - Quản lý toàn bộ task route handler đang chạy bằng tập hợp `_active_route_tasks: set[asyncio.Task[Any]] = set()`.
+  - Bắt trọn vẹn `(PlaywrightError, asyncio.CancelledError)` và kết thúc sạch sẽ, tuyệt đối không gọi lại `await route.continue_()` khi context/target đã đóng, triệt tiêu 100% lỗi pending task và rò rỉ kết nối driver.
 - Ẩn dấu vết tự động hóa bằng cách xóa thuộc tính `navigator.webdriver` qua `context.add_init_script`, giả lập viewport ngẫu nhiên và cờ `--disable-blink-features=AutomationControlled`.
 - Chuyển đổi dữ liệu sang Polars bằng `pl.from_dicts(results, infer_schema_length=None)` quét toàn bộ tập dữ liệu, ngăn chặn lỗi schema inference khi các hàng đầu tiên chứa giá trị null ở các cột phức tạp (`opening_hours`, `photos`).
 
-#### 6. Triết Lý Upper Bound Guardrails Theo Bán Kính (`range_limit`) & Thời Gian Chờ (`query_timeout`):
+#### 6. Triết Lý Upper Bound Guardrails, Cứu Vãn Dữ Liệu & Tối Ưu Early-Stop:
 - **Cơ sở lý thuyết thuật toán xếp hạng Google Maps (3 yếu tố: Relevance, Distance, Prominence)**:
   - Theo tài liệu chính thức từ Google ([Google Business Support: How Google ranks local results](https://support.google.com/business/answer/7091)), kết quả tìm kiếm địa phương của Google Maps được tính toán và xếp hạng dựa trên sự kết hợp của 3 yếu tố cốt lõi:
     1. **Độ liên quan (Relevance)**: Mức độ trùng khớp giữa hồ sơ thông tin địa điểm với từ khóa tìm kiếm của người dùng.
     2. **Khoảng cách (Distance)**: Khoảng cách địa lý thực tế từ vị trí tìm kiếm (`geo_coordinates`) đến từng địa điểm.
     3. **Mức độ nổi bật (Prominence)**: Độ nổi tiếng, uy tín của địa điểm trong thế giới thực và trên web (dựa trên số lượng đánh giá, điểm rating, liên kết, bài viết, vị trí trong kết quả tìm kiếm web).
   - **Hệ quả quan trọng**: Thuật toán Google có thể quyết định rằng một doanh nghiệp ở xa hơn nhưng có **Prominence** hoặc **Relevance** vượt trội sẽ có thứ hạng cao hơn một doanh nghiệp ở gần hơn (ví dụ: một quán cà phê nổi tiếng cách 12 km có thể được hiển thị trước một quán nhỏ cách 3 km). Do đó, danh sách địa điểm trả về trên feed **không được sắp xếp đơn điệu theo khoảng cách tăng dần**.
-- **Bán kính bảo vệ (`range_limit = 10000.0` - 10 km)**: Thay vì dùng giá trị `None` dễ dẫn đến cào lan man không kiểm soát, hệ thống áp dụng trần mặc định `DEFAULT_RANGE_LIMIT = 10000.0` (10 km).
-  - Hàm [`extract_coordinates_from_url`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) bóc tách tọa độ `(lat, lon)` trực tiếp từ URL của thẻ địa điểm trên feed (hỗ trợ format protobuf `!3d<lat>...!4d<lon>` và viewport `@<lat>,<lon>`).
-  - Khoảng cách địa lý tính bằng `geopy.distance.geodesic((center_lat, center_lon), (lat, lon)).meters`.
-  - **Early Drop Từng Phần Tử (Thay Vì Early Stop Đột Ngột)**: Do đặc thù thuật toán 3 yếu tố nêu trên, một địa điểm ở xa (> `range_limit`) có thể xuất hiện xen kẽ giữa các địa điểm ở gần (< `range_limit`). Nếu dừng sớm (Early Stop) ngay khi gặp phần tử vượt khoảng cách, hệ thống sẽ bỏ sót rất nhiều địa điểm hợp lệ ở các lượt cuộn tiếp theo. Vì vậy, hệ thống áp dụng **Early Drop từng phần tử**: kiểm tra tọa độ và bỏ qua không click thẻ địa điểm, không chờ XHR preview nếu khoảng cách > `range_limit`, đồng thời đánh dấu `processed_links.add(canonical_link)` để tránh kiểm tra lại, tiết kiệm tối đa thời gian và tài nguyên mạng.
-  - **Cơ Chế Dừng Cuộn An Toàn (`consecutive_empty_scrolls`)**: Để tránh việc cuộn feed vô hạn gây lãng phí tài nguyên và làm lộ bot, hệ thống theo dõi số lần cuộn liên tiếp không thu được thêm kết quả hợp lệ mới. Khi `consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS` (mặc định: 6), điều này chỉ ra feed đã thực sự cạn kiệt kết quả liên quan hoặc toàn bộ các kết quả còn lại đều vượt quá bán kính quy định, kích hoạt ngắt cuộn an toàn.
-  - Áp dụng đồng bộ trên cả **SPA Navigation mode** (`scrape_query_spa`) và **Fallback mode** (`get_place_urls`).
-- **Thời gian chờ bảo vệ (`query_timeout = 300.0s` - 5 phút)**: Thiết lập giới hạn tối đa `DEFAULT_QUERY_TIMEOUT = 300.0s` cho mỗi truy vấn, ngăn ngừa tiến trình treo vô hạn khi mạng chập chờn hoặc feed cuộn không ngừng. Khi chạm mốc timeout, hệ thống tự động ngắt cuộn và trả về toàn bộ kết quả đã thu thập được tính đến thời điểm đó.
+- **Bán kính bảo vệ (`range_limit = 10000.0` - 10 km) & Lọc 2 Tầng (Pre & Post Extraction)**:
+  - Thay vì dùng giá trị `None` dễ dẫn đến cào lan man không kiểm soát, hệ thống áp dụng trần mặc định `DEFAULT_RANGE_LIMIT = 10000.0` (10 km).
+  - **Tiền kiểm (Pre-extraction via URL)**: Hàm [`extract_coordinates_from_url`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) bóc tách tọa độ trực tiếp từ URL thẻ địa điểm (`!3d<lat>...!4d<lon>`). Nếu `dist > range_limit`, bỏ qua ngay lập tức không click thẻ, không chờ XHR preview (Early Drop).
+  - **Hậu kiểm (Post-extraction via Data Blob)**: Đối với các thẻ URL không chứa tọa độ, sau khi bóc tách `place_data` từ preview XHR blob, hệ thống kiểm tra `latitude` và `longitude`. Nếu `dist > range_limit`, loại bỏ khỏi kết quả và không ghi nhận `found_new_in_batch`.
+- **Cơ Chế Dừng Cuộn Sớm Cải Tiến (Early-Stop Optimization)**:
+  - **Cuộn rỗng liên tiếp (`MAX_CONSECUTIVE_EMPTY_SCROLLS = 4`)**: Khi 4 lượt cuộn liên tiếp không tìm thấy bất kỳ địa điểm hợp lệ mới nào, hệ thống dừng cuộn sớm.
+  - **Cuộn ngoài bán kính liên tiếp (`MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS = 3`)**: Khi 3 lượt cuộn liên tiếp toàn bộ kết quả tìm thấy đều nằm ngoài `range_limit` (đặc biệt hiệu quả trong các query mật độ thấp như `courthouse`), hệ thống ngắt cuộn ngay lập tức vì Google Maps đã bắt đầu mở rộng tìm kiếm sang các địa phương xa xôi.
+- **Cơ Chế Cứu Vãn Dữ Liệu 2 Tầng (Two-tier Zero Data Loss Rescue)**:
+  - **Tầng 1 - Kiểm tra Deadline Chủ Động & Dynamic Preview Timeout**:
+    * Trong [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), tính `remaining_time = query_timeout - (time.monotonic() - query_start)`. Kiểm tra `remaining_time <= 2.0s` ngay trong vòng lặp duyệt từng thẻ địa điểm và trước khi cuộn feed để trả về dữ liệu an toàn trước khi watchdog bên ngoài kích hoạt.
+    * Tự động điều chỉnh động thời gian chờ preview XHR: `cur_timeout_ms = min(preview_timeout_ms, max(1000, int((remaining_time - 0.5) * 1000)))`.
+  - **Tầng 2 - Cứu Dữ Liệu Khi Chạm Watchdog Timeout (`results_collector` / `links_collector`)**:
+    * `scrape_query_spa` và `get_place_urls` nhận collector dạng mutable list/set.
+    * Trong `run_spa_query` và `run_get_urls`, nếu `asyncio.wait_for` chạm `TimeoutError` (310s), hệ thống **bảo toàn và trả về toàn bộ kết quả trong collector thay vì trả về rỗng**, cứu vãn 100% dữ liệu đã bóc tách được trước đó.
+
+#### 7. Tái Cấu Trúc Cấu Hình Tập Trung Với Dataclass `ScraperConfig` ([`ScraperConfig`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py)):
+- **Dataclass `ScraperConfig`**: Gom nhóm toàn bộ các tham số cấu hình rời rạc (timeouts, guardrails, bộ nhớ đệm, retries, concurrency delays):
+  * `navigation_timeout: int = 30000` (ms)
+  * `query_timeout: float = 300.0` (giây)
+  * `place_timeout: float = 45.0` (giây)
+  * `captcha_timeout: float = 85.0` (giây)
+  * `spa_preview_timeout: float | int = 10000` (ms)
+  * `range_limit: float = 10000.0` (mét)
+  * `max_consecutive_empty_scrolls: int = 4`
+  * `max_consecutive_out_of_range_scrolls: int = 3`
+  * `max_scroll_attempts_without_new_links: int = 5`
+  * `cache_dir: Path | None = Path(".cache") / "chromium_cache"`
+  * `static_cache_dir: Path = Path(".cache") / "static_assets"`
+  * `disk_cache_size: int = 1073741824` (1 GB)
+  * `max_captcha_retries: int = 2`
+  * `stagger_delay: tuple[float, float] | float = (1.5, 3.5)`
+- **Bảo Toàn Tương Thích Ngược 100%**:
+  * Duy trì toàn bộ hằng số module-level `DEFAULT_*`, `MAX_*` liên kết trực tiếp từ `DEFAULT_CONFIG = ScraperConfig()`.
+  * Export `ScraperConfig` và `DEFAULT_CONFIG` tại cả `map_miner.scraper` và `map_miner`.
+- **Quy Tắc Ưu Tiên Linh Hoạt (Precedence Resolution)**:
+  * Khi truyền `config`: các hàm (`scrape_google_maps`, `scrape_query_spa`, `get_place_urls`) đọc giá trị cấu hình từ `config`. Nếu người dùng đồng thời truyền tham số riêng lẻ khác giá trị mặc định của module (ví dụ `query_timeout=60.0`), tham số riêng lẻ sẽ ghi đè thuộc tính tương ứng của `config`.
+  * Khi `config is None`: sử dụng các tham số riêng lẻ truyền vào hàm (giữ nguyên trọn vẹn hành vi trước đó).
 
 ---
 
