@@ -18,7 +18,9 @@ from map_miner.scraper import (
     DEFAULT_CACHE_DIR,
     DEFAULT_CAPTCHA_TIMEOUT,
     DEFAULT_CONFIG,
+    DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD,
     DEFAULT_DISK_CACHE_SIZE,
+    DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS,
     DEFAULT_PLACE_TIMEOUT,
     DEFAULT_PROXY_BYPASS,
     DEFAULT_QUERY_TIMEOUT,
@@ -2407,7 +2409,7 @@ def test_scrape_query_spa_early_stop_out_of_range():
             loc.first.is_visible.return_value = False
             if 'a[href*="/maps/place/"]' in selector:
                 el = AsyncMock()
-                url = f"https://www.google.com/maps/place/FarCourt{scroll_idx}/data=!1s0x{scroll_idx}:0x{scroll_idx}!8m2!3d22.0!4d106.0"
+                url = f"https://www.google.com/maps/place/FarCourt{scroll_idx}/data=!1s0x{scroll_idx}:0x{scroll_idx}!8m2!3d21.02!4d105.8"
                 el.get_attribute.return_value = url
                 el.evaluate.return_value = None
                 loc.all.return_value = [el]
@@ -2802,5 +2804,220 @@ def test_scrape_query_spa_with_config():
             assert results == []
             # With max_consecutive_empty_scrolls=2, scroll_feed should be called exactly 2 times
             assert mock_scroll.await_count == 2
+
+    asyncio.run(_run())
+
+
+def test_scraper_config_cross_city_defaults():
+    """Kiểm tra giá trị mặc định của cấu hình Cross-City jump trong ScraperConfig."""
+    cfg = ScraperConfig()
+    assert cfg.cross_city_distance_threshold == 50000.0
+    assert cfg.max_consecutive_cross_city_jumps == 2
+    assert DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD == 50000.0
+    assert DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS == 2
+
+
+def test_scrape_query_spa_cross_city_jump_early_stop():
+    """Kiểm tra scrape_query_spa dừng sớm an toàn khi gặp liên tiếp 2 lần POI cách xa > 50km."""
+
+    async def _run():
+        mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
+        mock_context = make_mock_context(page=mock_page)
+
+        scroll_idx = 0
+
+        def mock_feed_locator(selector):
+            nonlocal scroll_idx
+            loc = AsyncMock()
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            if 'a[href*="/maps/place/"]' in selector:
+                el = AsyncMock()
+                # 10.8, 106.6 is HCMC, ~1140 km away from Hanoi (21.0, 105.8)
+                url = f"https://www.google.com/maps/place/FarCityCafe{scroll_idx}/data=!1s0x{scroll_idx}:0x{scroll_idx}!8m2!3d10.8!4d106.6"
+                el.get_attribute.return_value = url
+                el.evaluate.return_value = None
+                loc.all.return_value = [el]
+                loc.evaluate_all.return_value = [url]
+            return loc
+
+        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
+
+        height_counter = 0
+
+        async def mock_eval(script, *args):
+            nonlocal height_counter
+            height_counter += 200
+            return height_counter
+
+        mock_page.evaluate = AsyncMock(side_effect=mock_eval)
+
+        scroll_count = 0
+
+        async def mock_scroll(page, selector):
+            nonlocal scroll_count, scroll_idx
+            scroll_count += 1
+            scroll_idx += 1
+
+        with (
+            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
+            patch("map_miner.scraper.scroll_feed", side_effect=mock_scroll),
+            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=False)),
+        ):
+            results = await scrape_query_spa(
+                context=mock_context,
+                query="cafe",
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                max_places=10,
+                range_limit=5000.0,
+            )
+
+        assert len(results) == 0
+        # Stops after DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS (2), NOT waiting for 3 or 4 scrolls!
+        assert scroll_count == DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS
+
+    asyncio.run(_run())
+
+
+def test_scrape_query_spa_cross_city_jump_reset_on_local():
+    """Kiểm tra cross-city jump counter bị reset về 0 ngay khi xuất hiện POI hợp lệ trong bán kính."""
+
+    async def _run():
+        mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
+        mock_context = make_mock_context(page=mock_page)
+
+        # Batch 1: 1 cross-city place (> 50km) AND 1 local place (< 5km)
+        el_far = AsyncMock()
+        url_far = "https://www.google.com/maps/place/FarCafe/data=!1s0x1:0x1!8m2!3d10.8!4d106.6"
+        el_far.get_attribute.return_value = url_far
+
+        el_near = AsyncMock()
+        url_near = "https://www.google.com/maps/place/NearCafe/data=!1s0x2:0x2!8m2!3d21.01!4d105.81"
+        el_near.get_attribute.return_value = url_near
+        el_near.evaluate.return_value = None
+
+        def mock_feed_locator(selector):
+            loc = AsyncMock()
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            if 'a[href*="/maps/place/"]' in selector:
+                loc.all.return_value = [el_far, el_near]
+                loc.evaluate_all.return_value = [url_far, url_near]
+            return loc
+
+        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
+        mock_page.evaluate = AsyncMock(return_value=1000)
+
+        # Mock expect_response to return mock preview for NearCafe
+        mock_response = AsyncMock()
+        mock_response.text.return_value = ')]}\'\n[null,null,null,null,null,null,[null,null,null,null,null,null,null,null,null,null,null,"NearCafe"]]'
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(mock_response)
+        mock_resp_info = MagicMock()
+        mock_resp_info.value = fut
+
+        class MockExpectResponse:
+            async def __aenter__(self):
+                return mock_resp_info
+
+            async def __aexit__(self, *args):
+                return None
+
+        mock_page.expect_response = MagicMock(return_value=MockExpectResponse())
+
+        with (
+            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
+            patch("map_miner.scraper.scroll_feed", AsyncMock()),
+            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=True)),
+        ):
+            results = await scrape_query_spa(
+                context=mock_context,
+                query="cafe",
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                max_places=1,
+                range_limit=5000.0,
+            )
+
+        assert len(results) == 1
+        assert results[0].get("name") == "NearCafe"
+
+    asyncio.run(_run())
+
+
+def test_scrape_query_spa_fallback_rescue_from_dom():
+    """Kiểm tra Fallback Rescue cứu được dữ liệu từ feed card DOM khi preview XHR bị timeout/lỗi."""
+
+    async def _run():
+        mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
+        mock_context = make_mock_context(page=mock_page)
+
+        el = AsyncMock()
+        url = "https://www.google.com/maps/place/RescuedCafe/data=!1s0x31752:0x7c963!8m2!3d21.01!4d105.81"
+        el.get_attribute.return_value = url
+
+        # When el.evaluate is called for card outerHTML, return sample feed card HTML
+        card_html = """
+        <div class="Nv2PK">
+            <div class="qBF1Pd">Rescued Cafe</div>
+            <span class="MW4etd">4.7</span>
+            <span class="UY7F9">(89)</span>
+            <div class="W4Efsd"><span>Quán cà phê</span> · <span>456 Tran Hung Dao</span></div>
+        </div>
+        """
+
+        async def mock_el_eval(script, *args):
+            if "closest" in script:
+                return card_html
+            return None
+
+        el.evaluate = AsyncMock(side_effect=mock_el_eval)
+
+        def mock_feed_locator(selector):
+            loc = AsyncMock()
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            if 'a[href*="/maps/place/"]' in selector:
+                loc.all.return_value = [el]
+                loc.evaluate_all.return_value = [url]
+            return loc
+
+        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
+        mock_page.evaluate = AsyncMock(return_value=1000)
+
+        # Mock expect_response to fail with timeout
+        class MockFailingExpectResponse:
+            async def __aenter__(self):
+                from playwright.async_api import (
+                    TimeoutError as PlaywrightTimeoutError,
+                )
+
+                raise PlaywrightTimeoutError("Timeout waiting for preview")
+
+            async def __aexit__(self, *args):
+                return None
+
+        mock_page.expect_response = MagicMock(return_value=MockFailingExpectResponse())
+
+        with (
+            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
+            patch("map_miner.scraper.scroll_feed", AsyncMock()),
+            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=True)),
+        ):
+            results = await scrape_query_spa(
+                context=mock_context,
+                query="cafe",
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                max_places=1,
+                range_limit=5000.0,
+            )
+
+        assert len(results) == 1
+        assert results[0].get("name") == "Rescued Cafe"
+        assert results[0].get("rating") == 4.7
+        assert results[0].get("reviews_count") == 89
+        assert "Quán cà phê" in results[0].get("categories", [])
 
     asyncio.run(_run())

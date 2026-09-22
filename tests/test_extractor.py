@@ -10,6 +10,7 @@ from map_miner.extractor import (
     REQUIRED_COLUMNS,
     calculate_distance,
     extract_coordinates_from_url,
+    extract_feed_item_dom,
     extract_place_data,
     format_places_dataframe,
     is_preview_response_for_link,
@@ -286,3 +287,97 @@ def test_format_places_dataframe_in_extractor():
     assert "details" in df.columns
     assert df["name"][0] == "Test Place"
     assert '"custom_field": "extra_val"' in df["details"][0]
+
+
+def test_is_preview_response_for_link_place_id():
+    """Verifies is_preview_response_for_link matching with Google Place ID (ChIJ...)."""
+    chij_link = (
+        "https://www.google.com/maps/place/?q=place_id:ChIJdWb_e3MvdTERRLy4KKg2lnw"
+    )
+    preview_url_chij = "https://www.google.com/maps/preview/place?authuser=0&pb=!1m18!1sChIJdWb_e3MvdTERRLy4KKg2lnw"
+    preview_url_mismatch = "https://www.google.com/maps/preview/place?authuser=0&pb=!1m18!1sChIJotherplaceid123456"
+
+    # Match
+    resp_match = MagicMock(url=preview_url_chij, status=200, ok=True)
+    assert is_preview_response_for_link(resp_match, chij_link) is True
+
+    # Mismatch
+    resp_mismatch = MagicMock(url=preview_url_mismatch, status=200, ok=True)
+    assert is_preview_response_for_link(resp_mismatch, chij_link) is False
+
+    # Link with neither ID (falls back to URL structure check)
+    simple_link = "https://www.google.com/maps/place/SomeCafe"
+    assert is_preview_response_for_link(resp_match, simple_link) is True
+
+
+def test_extract_feed_item_dom():
+    """Verifies pure extraction from rendered feed card HTML DOM."""
+    card_html = """
+    <div class="Nv2PK THOPZb">
+        <a class="hfpxzc" href="https://www.google.com/maps/place/Cafe+Highlands/data=!4m7!3m6!1s0x31752f3b9c025075:0x7c96362828b8cf44!8m2!3d10.771971!4d106.698345" aria-label="Cafe Highlands"></a>
+        <div class="qBF1Pd fontHeadlineSmall">Cafe Highlands</div>
+        <div class="W4Efsd">
+            <span class="MW4etd">4.6</span>
+            <span class="UY7F9">(1,520)</span>
+            <span> · </span>
+            <span>Quán cà phê</span>
+        </div>
+        <div class="W4Efsd">
+            <span>123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh</span>
+        </div>
+    </div>
+    """
+    data = extract_feed_item_dom(card_html)
+    assert data["name"] == "Cafe Highlands"
+    assert data["rating"] == 4.6
+    assert data["reviews_count"] == 1520
+    assert "Quán cà phê" in data.get("categories", [])
+    assert "123 Đường Lê Lợi" in data.get("address", "")
+    assert data.get("city") is not None and "Hồ Chí Minh" in data["city"]
+    assert data.get("latitude") == 10.771971
+    assert data.get("longitude") == 106.698345
+    assert data.get("place_id") == "0x31752f3b9c025075:0x7c96362828b8cf44"
+
+    # Filter with fields
+    filtered = extract_feed_item_dom(card_html, fields=["name", "rating"])
+    assert filtered == {"name": "Cafe Highlands", "rating": 4.6}
+
+    # Empty card html
+    assert extract_feed_item_dom("") == {}
+
+
+def test_format_places_dataframe_reviews_count_int64():
+    """Verifies that reviews_count consistently retains pl.Int64 schema across all branches."""
+    # 1. flatten=True empty with fields
+    df_empty_fields = format_places_dataframe(
+        [], flatten=True, fields=["name", "reviews_count"]
+    )
+    assert df_empty_fields["reviews_count"].dtype == pl.Int64
+
+    # 2. flatten=True populated with mixed types (int, float, str numeric, None, nan)
+    data = [
+        {"name": "Place 1", "reviews_count": 10},
+        {"name": "Place 2", "reviews_count": 25.0},
+        {"name": "Place 3", "reviews_count": "150"},
+        {"name": "Place 4", "reviews_count": None},
+        {"name": "Place 5", "reviews_count": float("nan")},
+        {"name": "Place 6", "reviews_count": "invalid_str"},
+    ]
+    df_flat = format_places_dataframe(data, flatten=True)
+    assert df_flat["reviews_count"].dtype == pl.Int64
+    assert df_flat["reviews_count"].to_list() == [10, 25, 150, None, None, None]
+
+    # 3. flatten=False empty (default schema)
+    df_empty_default = format_places_dataframe([], flatten=False)
+    assert df_empty_default["reviews_count"].dtype == pl.Int64
+
+    # 4. flatten=False populated
+    df_pop = format_places_dataframe(data, flatten=False)
+    assert df_pop["reviews_count"].dtype == pl.Int64
+    assert df_pop["reviews_count"].to_list() == [10, 25, 150, None, None, None]
+
+    # 5. 100% null values in reviews_count
+    all_nulls = [{"name": "A", "reviews_count": None}, {"name": "B"}]
+    df_nulls = format_places_dataframe(all_nulls, flatten=True)
+    assert df_nulls["reviews_count"].dtype == pl.Int64
+    assert df_nulls["reviews_count"].to_list() == [None, None]

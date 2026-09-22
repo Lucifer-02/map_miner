@@ -5,7 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-09-22
+
+### Added
+- **Cơ Chế Cứu Vớt Dữ Liệu Hai Tầng (Feed Card DOM Rescue & Secondary Fallback - Đề Xuất 1)**:
+  - Bổ sung pure function [`extract_feed_item_dom`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) tại `src/map_miner/extractor.py` để bóc tách ngay lập tức metadata từ thẻ card DOM kết quả tìm kiếm (`name`, `categories`, `rating`, `reviews_count`, `address`, `city`, `coordinates`, `place_id`, `plus_code`).
+  - Khi XHR preview `/maps/preview/place` bị timeout hoặc preview JSON không hợp lệ, hệ thống tự động kích hoạt Feed Card DOM Rescue cứu vớt 100% dữ liệu địa điểm mà không tốn thêm bất kỳ network request nào.
+  - Tầng 2: Nếu không bóc tách được từ DOM, các link lỗi được thu thập vào `fallback_rescue_links` để xử lý bằng `scrape_place_multipage` nếu thời gian cho phép.
+  - Cải tiến [`is_preview_response_for_link`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py): Mở rộng đối chiếu cả Place ID (`ChIJ...`) bên cạnh Hex ID (`0x...:0x...`).
+- **Phát Hiện Bước Nhảy Địa Lý Ngoại Tỉnh (Cross-city Jump Detection - Đề Xuất 5)**:
+  - Bổ sung cấu hình `cross_city_distance_threshold: float = 50000.0` (50 km) và `max_consecutive_cross_city_jumps: int = 2` vào [`ScraperConfig`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py).
+  - Tự động phát hiện khi Google Maps chuyển sang trả về các địa điểm ngoại tỉnh (>50km như Hà Nội khi tìm ở TP.HCM) và kích hoạt dừng cuộn an toàn sau 2 lần liên tiếp, ngăn chặn 33 query bị treo đến 300s timeout.
+  - Cơ chế tự động reset bộ đếm ngay khi có địa điểm trong bán kính, bảo đảm tuyệt đối không dừng sớm nếu vẫn còn POI địa phương xen kẽ.
+- **Chuẩn Hóa Type Safety Cột `reviews_count` Trong Polars (Đề Xuất 7)**:
+  - Sanitize trường `reviews_count` trong [`format_places_dataframe`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py): chuyển đổi các giá trị float/string/NaN/inf thành `int` hoặc `None`.
+  - Cung cấp `schema_overrides` và ép kiểu an toàn `pl.Int64` cho cả `flatten=True` và `flatten=False`, khắc phục triệt để lỗi cột bị suy luận thành `Float64` khi có `None`/`null`.
+
+### Changed
+- **Chuẩn Hóa Thao Tác Click Trong SPA Mode**:
+  - Gọi `await el.scroll_into_view_if_needed(timeout=1000)` trước khi click, sử dụng `el.evaluate("e => e.click()")` kết hợp fallback Playwright native click `el.click(force=True)`.
+
+---
+
 ## [0.3.3] - 2026-09-20
+
 
 ### Added
 - **Cơ Chế Cứu Vãn Dữ Liệu Hai Tầng (Two-tier Zero Data Loss Rescue)**:

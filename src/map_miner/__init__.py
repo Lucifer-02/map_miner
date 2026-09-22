@@ -7,6 +7,7 @@ from .extractor import (
     REQUIRED_COLUMNS,
     calculate_distance,
     extract_coordinates_from_url,
+    extract_feed_item_dom,
     extract_place_data,
     format_places_dataframe,
     is_preview_response_for_link,
@@ -29,6 +30,8 @@ from .recaptcha_solver import (
 from .scraper import (
     DEFAULT_CAPTCHA_TIMEOUT,
     DEFAULT_CONFIG,
+    DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD,
+    DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS,
     DEFAULT_RANGE_LIMIT,
     DEFAULT_SPA_PREVIEW_TIMEOUT,
     DEFAULT_STATIC_CACHE_DIR,
@@ -38,12 +41,14 @@ from .scraper import (
     scrape_google_maps,
 )
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 __all__ = [
     "DEFAULT_CAPTCHA_TIMEOUT",
     "DEFAULT_CONFIG",
+    "DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD",
     "DEFAULT_FLATTEN_COLUMNS",
+    "DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS",
     "DEFAULT_PROXY_BYPASS",
     "DEFAULT_RANGE_LIMIT",
     "DEFAULT_SPA_PREVIEW_TIMEOUT",
@@ -60,6 +65,7 @@ __all__ = [
     "calculate_distance",
     "create_browser_context",
     "extract_coordinates_from_url",
+    "extract_feed_item_dom",
     "extract_place_data",
     "format_places_dataframe",
     "get_tor_rotating_proxy",

@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -18,6 +19,7 @@ __all__ = [
     "REQUIRED_COLUMNS",
     "calculate_distance",
     "extract_coordinates_from_url",
+    "extract_feed_item_dom",
     "extract_initial_json",
     "extract_place_data",
     "format_places_dataframe",
@@ -911,6 +913,7 @@ def extract_coordinates_from_url(url: str) -> tuple[float, float] | None:
 def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
     """Validates whether an intercepted HTTP response corresponds to the place preview
     for a specific canonical link, avoiding race conditions and cross-place data leakage.
+    Supports both Hex ID (0x...:0x...) and Google Place ID (ChIJ...).
     """
     raw_url = getattr(response, "url", "")
     status = getattr(response, "status", 0)
@@ -920,15 +923,209 @@ def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
         return False
 
     decoded_canonical = unquote(canonical_link)
-    decoded_url = unquote(raw_url).lower()
+    decoded_url = unquote(raw_url)
+    decoded_url_lower = decoded_url.lower()
 
     hex_match = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", decoded_canonical)
-    if hex_match:
-        place_hex_id = hex_match.group(0).lower()
-        if place_hex_id not in decoded_url:
+    place_id_match = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", decoded_canonical)
+
+    has_hex = hex_match is not None
+    has_place_id = place_id_match is not None
+
+    if has_hex or has_place_id:
+        matched = False
+        if has_hex:
+            hex_id = hex_match.group(0).lower()
+            if hex_id in decoded_url_lower:
+                matched = True
+        if has_place_id:
+            place_id = place_id_match.group(1)
+            if place_id in decoded_url or place_id.lower() in decoded_url_lower:
+                matched = True
+        if not matched:
             return False
 
     return True
+
+
+def extract_feed_item_dom(
+    card_html: str,
+    link: str | None = None,
+    coords: tuple[float, float] | None = None,
+    fields: Sequence[str] | set[str] | None = None,
+) -> dict[str, Any]:
+    """Pure extraction function to parse place attributes from a Google Maps feed card DOM element.
+    Used as an ultra-fast and resilient fallback rescue mechanism when SPA preview requests fail or time out.
+    """
+    if not card_html or not isinstance(card_html, str):
+        return {}
+
+    soup = BeautifulSoup(card_html, "html.parser")
+    res: dict[str, Any] = {}
+
+    # 1. Target link
+    target_link = link
+    if not target_link:
+        a_tag = soup.select_one("a[href*='/maps/place/']")
+        if a_tag and a_tag.get("href"):
+            target_link = str(a_tag["href"])
+    if target_link:
+        res["link"] = target_link
+
+    # 2. Place ID from link
+    if target_link:
+        chij_m = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", target_link)
+        if chij_m:
+            res["place_id"] = chij_m.group(1)
+        else:
+            hex_m = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", unquote(target_link))
+            if hex_m:
+                res["place_id"] = hex_m.group(0)
+
+    # 3. Name
+    name = None
+    name_el = soup.select_one("div.qBF1Pd, div[role='heading'], h3")
+    if name_el and name_el.get_text(strip=True):
+        name = name_el.get_text(strip=True)
+    if not name:
+        a_tag = soup.select_one(
+            "a[href*='/maps/place/'][aria-label], a.hfpxzc[aria-label]"
+        )
+        if a_tag and a_tag.get("aria-label"):
+            name = str(a_tag["aria-label"]).strip()
+    if name:
+        res["name"] = name
+
+    # 4. Rating
+    rating = None
+    rating_el = soup.select_one("span.MW4etd")
+    if rating_el and rating_el.get_text(strip=True):
+        try:
+            rating = float(rating_el.get_text(strip=True).replace(",", "."))
+        except ValueError:
+            pass
+    if rating is None:
+        star_el = soup.select_one("[aria-label*='star'], [aria-label*='sao']")
+        if star_el:
+            lbl = star_el.get("aria-label", "")
+            m = re.search(
+                r"([0-9]+(?:[.,][0-9]+)?)\s*(?:stars|sao|star)",
+                str(lbl),
+                re.IGNORECASE,
+            )
+            if m:
+                try:
+                    rating = float(m.group(1).replace(",", "."))
+                except ValueError:
+                    pass
+    if rating is not None:
+        res["rating"] = rating
+
+    # 5. Reviews Count
+    reviews_count = None
+    rev_el = soup.select_one("span.UY7F9")
+    if rev_el and rev_el.get_text(strip=True):
+        m = re.search(r"([0-9,.]+)", rev_el.get_text(strip=True))
+        if m:
+            clean_num = m.group(1).replace(",", "").replace(".", "")
+            try:
+                reviews_count = int(clean_num)
+            except ValueError:
+                pass
+    if reviews_count is None:
+        rev_aria = soup.select_one("[aria-label*='reviews'], [aria-label*='đánh giá']")
+        if rev_aria:
+            lbl = rev_aria.get("aria-label", "")
+            m = re.search(r"([0-9,.]+)\s*(?:reviews|đánh giá)", str(lbl), re.IGNORECASE)
+            if m:
+                clean_num = m.group(1).replace(",", "").replace(".", "")
+                try:
+                    reviews_count = int(clean_num)
+                except ValueError:
+                    pass
+    if reviews_count is None:
+        m = re.search(r"\(([0-9,.]+)\)", card_html)
+        if m:
+            clean_num = m.group(1).replace(",", "").replace(".", "")
+            try:
+                reviews_count = int(clean_num)
+            except ValueError:
+                pass
+    if reviews_count is not None:
+        res["reviews_count"] = reviews_count
+
+    # 6. Categories and Address from div.W4Efsd
+    categories = None
+    cat_btn = soup.select_one("button[jsaction*='category']")
+    if cat_btn and cat_btn.get_text(strip=True):
+        categories = [cat_btn.get_text(strip=True)]
+
+    w4_divs = soup.select("div.W4Efsd")
+    address = None
+    for w4 in w4_divs:
+        line_text = w4.get_text(" · ", strip=True)
+        tokens = [t.strip() for t in re.split(r"[·•]+", line_text) if t.strip()]
+        for token in tokens:
+            if re.fullmatch(r"[0-9]+(?:[.,][0-9]+)?", token) or re.fullmatch(
+                r"\([0-9,.]+\)", token
+            ):
+                continue
+            if any(
+                s in token.lower()
+                for s in [
+                    "open",
+                    "closed",
+                    "đang mở",
+                    "đã đóng",
+                    "mở cửa",
+                    "đóng cửa",
+                ]
+            ):
+                continue
+            if (
+                not categories
+                and len(token) < 40
+                and not any(c.isdigit() for c in token)
+                and "," not in token
+            ):
+                categories = [token]
+                continue
+            if not address and (
+                len(token) > 8 or "," in token or any(c.isdigit() for c in token)
+            ):
+                address = token
+
+    if categories:
+        res["categories"] = categories
+
+    if address:
+        res["address"] = address
+        comps = parse_address_string_fallback(address)
+        if comps.get("city"):
+            res["city"] = comps["city"]
+
+    # 7. Coordinates
+    if coords is not None:
+        res["latitude"] = coords[0]
+        res["longitude"] = coords[1]
+    elif target_link:
+        extracted_coords = extract_coordinates_from_url(target_link)
+        if extracted_coords:
+            res["latitude"] = extracted_coords[0]
+            res["longitude"] = extracted_coords[1]
+
+    # 8. Plus code
+    pc_m = re.search(
+        r"\b([2-9CFGHJMPQRVWX]{4}\+[2-9CFGHJMPQRVWX]{2,}(?:\s+[^,\n<]+)?)\b",
+        card_html,
+    )
+    if pc_m:
+        res["plus_code"] = pc_m.group(1).strip()
+
+    if fields is not None:
+        return {f: res.get(f) for f in fields if f in res and res.get(f) is not None}
+
+    return {k: v for k, v in res.items() if v is not None}
 
 
 def calculate_distance(
@@ -991,6 +1188,9 @@ def format_places_dataframe(
 
     When flatten=True, outputs all fields as flattened columns at top-level.
 
+    Guarantees 'reviews_count' column consistently retains pl.Int64 datatype
+    across both flatten=True and flatten=False modes.
+
     Args:
         results (list[dict[str, Any]]): List of scraped place dictionaries.
         flatten (bool, optional): Whether to flatten all fields into individual columns.
@@ -1001,18 +1201,54 @@ def format_places_dataframe(
     Returns:
         pl.DataFrame: Formatted Polars DataFrame.
     """
+    sanitized_results: list[dict[str, Any]] = []
+    for item in results:
+        item_copy = dict(item)
+        if "reviews_count" in item_copy:
+            val = item_copy.get("reviews_count")
+            if val is not None:
+                try:
+                    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                        item_copy["reviews_count"] = None
+                    else:
+                        item_copy["reviews_count"] = int(val)
+                except (ValueError, TypeError):
+                    item_copy["reviews_count"] = None
+        sanitized_results.append(item_copy)
+    results = sanitized_results
+
     if flatten:
         if not results:
             if fields is not None:
-                schema = {f: pl.String for f in fields}
+                schema = {
+                    f: (pl.Int64 if f == "reviews_count" else pl.String) for f in fields
+                }
                 return pl.DataFrame(schema=schema)
             return pl.DataFrame()
+
+        schema_overrides: dict[str, Any] = {}
         if fields is not None:
+            if "reviews_count" in fields:
+                schema_overrides["reviews_count"] = pl.Int64
             filtered_results = [
                 {k: item[k] for k in fields if k in item} for item in results
             ]
-            return pl.from_dicts(filtered_results, infer_schema_length=None)
-        return pl.from_dicts(results, infer_schema_length=None)
+            df = pl.from_dicts(
+                filtered_results,
+                infer_schema_length=None,
+                schema_overrides=schema_overrides or None,
+            )
+        else:
+            if any("reviews_count" in item for item in results):
+                schema_overrides["reviews_count"] = pl.Int64
+            df = pl.from_dicts(
+                results,
+                infer_schema_length=None,
+                schema_overrides=schema_overrides or None,
+            )
+        if "reviews_count" in df.columns and df["reviews_count"].dtype != pl.Int64:
+            df = df.with_columns(pl.col("reviews_count").cast(pl.Int64))
+        return df
 
     if fields is None:
         if not results:
@@ -1039,11 +1275,14 @@ def format_places_dataframe(
             "reviews_count": pl.Int64,
             "categories": pl.List(pl.String),
         }
-        return pl.from_dicts(
+        df = pl.from_dicts(
             formatted_rows,
             infer_schema_length=None,
             schema_overrides=schema_overrides,
         )
+        if "reviews_count" in df.columns and df["reviews_count"].dtype != pl.Int64:
+            df = df.with_columns(pl.col("reviews_count").cast(pl.Int64))
+        return df
 
     # fields is not None and flatten is False
     top_cols = [f for f in fields if f in DEFAULT_FLATTEN_COLUMNS]
@@ -1070,8 +1309,11 @@ def format_places_dataframe(
         if c in ("latitude", "longitude", "rating", "reviews_count", "categories")
     }
 
-    return pl.from_dicts(
+    df = pl.from_dicts(
         formatted_rows,
         infer_schema_length=None,
         schema_overrides=overrides or None,
     )
+    if "reviews_count" in df.columns and df["reviews_count"].dtype != pl.Int64:
+        df = df.with_columns(pl.col("reviews_count").cast(pl.Int64))
+    return df

@@ -32,6 +32,7 @@ from .extractor import (
     REQUIRED_COLUMNS,
     calculate_distance,
     extract_coordinates_from_url,
+    extract_feed_item_dom,
     extract_place_data,
     format_places_dataframe,
     is_preview_response_for_link,
@@ -64,6 +65,8 @@ class ScraperConfig:
     captcha_timeout: float = 85.0  # seconds
     spa_preview_timeout: float | int = 10000  # ms (10s)
     range_limit: float = 10000.0  # meters (10 km)
+    cross_city_distance_threshold: float = 50000.0  # meters (50 km)
+    max_consecutive_cross_city_jumps: int = 2
     max_consecutive_empty_scrolls: int = 4
     max_consecutive_out_of_range_scrolls: int = 3
     max_scroll_attempts_without_new_links: int = 5
@@ -79,8 +82,10 @@ DEFAULT_CONFIG = ScraperConfig()
 __all__ = [
     "DEFAULT_CAPTCHA_TIMEOUT",
     "DEFAULT_CONFIG",
+    "DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD",
     "DEFAULT_DISK_CACHE_SIZE",
     "DEFAULT_FLATTEN_COLUMNS",
+    "DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS",
     "DEFAULT_PLACE_TIMEOUT",
     "DEFAULT_PROXY_BYPASS",
     "DEFAULT_QUERY_TIMEOUT",
@@ -97,6 +102,7 @@ __all__ = [
     "calculate_distance",
     "create_browser_context",
     "extract_coordinates_from_url",
+    "extract_feed_item_dom",
     "find_feed_selector",
     "format_places_dataframe",
     "get_place_urls",
@@ -126,6 +132,10 @@ DEFAULT_PLACE_TIMEOUT = DEFAULT_CONFIG.place_timeout
 DEFAULT_CAPTCHA_TIMEOUT = DEFAULT_CONFIG.captcha_timeout
 DEFAULT_SPA_PREVIEW_TIMEOUT = DEFAULT_CONFIG.spa_preview_timeout
 DEFAULT_RANGE_LIMIT = DEFAULT_CONFIG.range_limit
+DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD = DEFAULT_CONFIG.cross_city_distance_threshold
+DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS = (
+    DEFAULT_CONFIG.max_consecutive_cross_city_jumps
+)
 MAX_CONSECUTIVE_EMPTY_SCROLLS = DEFAULT_CONFIG.max_consecutive_empty_scrolls
 MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS = (
     DEFAULT_CONFIG.max_consecutive_out_of_range_scrolls
@@ -741,6 +751,11 @@ async def get_place_urls(
     eff_range_limit = (
         range_limit if range_limit != DEFAULT_RANGE_LIMIT else cfg.range_limit
     )
+    eff_cross_city_threshold = max(
+        cfg.cross_city_distance_threshold, eff_range_limit * 2.0
+    )
+    eff_max_consecutive_cross_city_jumps = cfg.max_consecutive_cross_city_jumps
+    consecutive_cross_city_jumps = 0
     eff_query_timeout = (
         query_timeout if query_timeout != DEFAULT_QUERY_TIMEOUT else cfg.query_timeout
     )
@@ -859,6 +874,8 @@ async def get_place_urls(
 
             new_links_count = 0
             batch_had_out_of_range = False
+            batch_had_in_range = False
+            batch_had_cross_city = False
 
             for link in current_links_list:
                 if not link:
@@ -876,9 +893,19 @@ async def get_place_urls(
                 coords = extract_coordinates_from_url(link)
                 if coords is not None:
                     dist = calculate_distance(geo_coordinates, coords)
-                    if dist > eff_range_limit:
+                    if dist <= eff_range_limit:
+                        batch_had_in_range = True
+                        consecutive_cross_city_jumps = 0
+                    else:
                         processed_links.add(canonical_link)
                         batch_had_out_of_range = True
+                        if dist >= eff_cross_city_threshold:
+                            batch_had_cross_city = True
+                            logger.info(
+                                "Cross-city jump detected: %s is %.1fkm away",
+                                canonical_link,
+                                dist / 1000,
+                            )
                         logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             canonical_link,
@@ -890,6 +917,8 @@ async def get_place_urls(
                 processed_links.add(canonical_link)
                 place_links.add(link)
                 new_links_count += 1
+                batch_had_in_range = True
+                consecutive_cross_city_jumps = 0
 
                 if max_places is not None and len(place_links) >= max_places:
                     logger.debug("Reached max_places limit (%d).", max_places)
@@ -903,6 +932,22 @@ async def get_place_urls(
                 break
 
             logger.debug("Found %d unique place links so far...", len(place_links))
+
+            # Stopping condition (cross_city_jumps):
+            if batch_had_in_range:
+                consecutive_cross_city_jumps = 0
+            elif batch_had_cross_city and new_links_count == 0:
+                consecutive_cross_city_jumps += 1
+                logger.info(
+                    "Cross-city consecutive count: %d/%d",
+                    consecutive_cross_city_jumps,
+                    eff_max_consecutive_cross_city_jumps,
+                )
+                if consecutive_cross_city_jumps >= eff_max_consecutive_cross_city_jumps:
+                    logger.info(
+                        "Stopping scroll in get_place_urls safely due to persistent cross-city jump."
+                    )
+                    break
 
             # Stopping condition (consecutive_empty_scrolls):
             if new_links_count == 0:
@@ -1027,6 +1072,12 @@ async def scrape_query_spa(
     eff_range_limit = (
         range_limit if range_limit != DEFAULT_RANGE_LIMIT else cfg.range_limit
     )
+    eff_cross_city_threshold = max(
+        cfg.cross_city_distance_threshold, eff_range_limit * 2.0
+    )
+    eff_max_consecutive_cross_city_jumps = cfg.max_consecutive_cross_city_jumps
+    consecutive_cross_city_jumps = 0
+    fallback_rescue_links: list[str] = []
     eff_query_timeout = (
         query_timeout if query_timeout != DEFAULT_QUERY_TIMEOUT else cfg.query_timeout
     )
@@ -1125,12 +1176,12 @@ async def scrape_query_spa(
             coords = extract_coordinates_from_url(search_page.url)
             if coords is not None:
                 dist = calculate_distance(geo_coordinates, coords)
-                if dist > range_limit:
+                if dist > eff_range_limit:
                     logger.debug(
                         "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                         search_page.url,
                         dist,
-                        range_limit,
+                        eff_range_limit,
                     )
                     return results
             html_content = await search_page.content()
@@ -1175,13 +1226,15 @@ async def scrape_query_spa(
 
             found_new_in_batch = False
             batch_had_out_of_range = False
+            batch_had_in_range = False
+            batch_had_cross_city = False
 
             for el in link_elements:
                 if max_places is not None and len(results) >= max_places:
                     break
 
                 elapsed = time.monotonic() - query_start
-                remaining_time = query_timeout - elapsed
+                remaining_time = eff_query_timeout - elapsed
                 if remaining_time <= 2.0:
                     logger.warning(
                         "⚠️ Query '%s' approaching timeout limit (%.1fs remaining). Returning %d collected places.",
@@ -1210,9 +1263,19 @@ async def scrape_query_spa(
                 coords = extract_coordinates_from_url(link)
                 if coords is not None:
                     dist = calculate_distance(geo_coordinates, coords)
-                    if dist > eff_range_limit:
+                    if dist <= eff_range_limit:
+                        batch_had_in_range = True
+                        consecutive_cross_city_jumps = 0
+                    else:
                         processed_links.add(canonical_link)
                         batch_had_out_of_range = True
+                        if dist >= eff_cross_city_threshold:
+                            batch_had_cross_city = True
+                            logger.info(
+                                "Cross-city jump detected: %s is %.1fkm away",
+                                canonical_link,
+                                dist / 1000,
+                            )
                         logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             canonical_link,
@@ -1225,8 +1288,6 @@ async def scrape_query_spa(
                     resp: Any, target: str = canonical_link
                 ) -> bool:
                     return is_preview_response_for_link(resp, target)
-
-                click_succeeded = False
 
                 # Human-like pre-click jitter delay
                 await asyncio.sleep(random.uniform(0.3, 0.8))
@@ -1241,6 +1302,13 @@ async def scrape_query_spa(
                     max(1000, int((remaining_time - 0.5) * 1000)),
                 )
 
+                # Ensure element is scrolled into view before clicking
+                try:
+                    await el.scroll_into_view_if_needed(timeout=1000)
+                except PlaywrightError:
+                    pass
+
+                preview_json: str | None = None
                 try:
                     async with search_page.expect_response(
                         is_matching_preview,
@@ -1248,81 +1316,158 @@ async def scrape_query_spa(
                     ) as response_info:
                         try:
                             await el.evaluate("e => e.click()")
-                            click_succeeded = True
                         except PlaywrightError:
                             await el.scroll_into_view_if_needed(timeout=1000)
                             await el.click(force=True, timeout=1000)
-                            click_succeeded = True
 
                     response = await response_info.value
                     preview_json = await response.text()
                 except (PlaywrightTimeoutError, PlaywrightError) as e:
-                    if click_succeeded:
-                        # Click succeeded but preview timed out; mark to avoid repeated attempts
-                        processed_links.add(canonical_link)
                     logger.warning(
                         "  ⚠️ Error or timeout waiting for SPA preview (timeout=%dms): %s (%s)",
                         cur_timeout_ms,
                         canonical_link,
                         e,
                     )
-                    continue
-
-                # Add to processed_links only after click succeeded
-                processed_links.add(canonical_link)
 
                 preview_blob = (
                     parse_preview_json(preview_json) if preview_json else None
                 )
-                if not preview_blob:
-                    logger.warning(
-                        "  ⚠️ Invalid preview JSON structure for: %s",
-                        canonical_link,
+
+                if preview_blob is not None:
+                    # Add to processed_links after successful preview parsing
+                    processed_links.add(canonical_link)
+                    place_data = extract_place_data(
+                        html_content=None,
+                        preview_blob=preview_blob,
+                        preview_json=preview_json,
+                        fields=fields,
                     )
-                    continue
 
-                place_data = extract_place_data(
-                    html_content=None,
-                    preview_blob=preview_blob,
-                    preview_json=preview_json,
-                    fields=fields,
-                )
+                    # Post-extraction radius filtering if coords were not in the URL
+                    if coords is None and place_data:
+                        p_lat = place_data.get("latitude")
+                        p_lng = place_data.get("longitude")
+                        if p_lat is not None and p_lng is not None:
+                            try:
+                                post_dist = calculate_distance(
+                                    geo_coordinates,
+                                    (float(p_lat), float(p_lng)),
+                                )
+                                if post_dist <= eff_range_limit:
+                                    batch_had_in_range = True
+                                    consecutive_cross_city_jumps = 0
+                                else:
+                                    batch_had_out_of_range = True
+                                    if post_dist >= eff_cross_city_threshold:
+                                        batch_had_cross_city = True
+                                        logger.info(
+                                            "Cross-city jump detected: %s is %.1fkm away",
+                                            canonical_link,
+                                            post_dist / 1000,
+                                        )
+                                    logger.debug(
+                                        "Post-extraction drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                                        canonical_link,
+                                        post_dist,
+                                        eff_range_limit,
+                                    )
+                                    continue
+                            except (ValueError, TypeError):
+                                pass
 
-                # Post-extraction radius filtering if coords were not in the URL
-                if coords is None and place_data:
-                    p_lat = place_data.get("latitude")
-                    p_lng = place_data.get("longitude")
-                    if p_lat is not None and p_lng is not None:
-                        try:
-                            post_dist = calculate_distance(
-                                geo_coordinates,
-                                (float(p_lat), float(p_lng)),
-                            )
-                            if post_dist > eff_range_limit:
+                    if place_data and (
+                        fields is not None
+                        or "name" in place_data
+                        or len(place_data) >= 3
+                    ):
+                        if fields is None or "link" in fields:
+                            place_data["link"] = link
+                        results.append(place_data)
+                        found_new_in_batch = True
+                        batch_had_in_range = True
+                        consecutive_cross_city_jumps = 0
+                        logger.info(
+                            "  ✅ [SPA %d/%s] Extracted: %s",
+                            len(results),
+                            str(max_places),
+                            place_data.get("name", canonical_link),
+                        )
+                else:
+                    # 🆘 Fallback Rescue via feed card DOM
+                    card_html = ""
+                    try:
+                        card_html = await el.evaluate(
+                            "e => e.closest('div.Nv2PK, div[role=\"article\"], div.THOPZb, div.fontBodyMedium')?.outerHTML || e.parentElement?.parentElement?.outerHTML || e.outerHTML"
+                        )
+                    except PlaywrightError:
+                        pass
+
+                    rescued_place = (
+                        extract_feed_item_dom(
+                            card_html, link=link, coords=coords, fields=fields
+                        )
+                        if card_html
+                        else {}
+                    )
+
+                    if rescued_place and rescued_place.get("name"):
+                        r_coords = coords
+                        if (
+                            r_coords is None
+                            and rescued_place.get("latitude") is not None
+                            and rescued_place.get("longitude") is not None
+                        ):
+                            try:
+                                r_coords = (
+                                    float(rescued_place["latitude"]),
+                                    float(rescued_place["longitude"]),
+                                )
+                            except (ValueError, TypeError):
+                                r_coords = None
+
+                        is_in_range = True
+                        if r_coords is not None:
+                            post_dist = calculate_distance(geo_coordinates, r_coords)
+                            if post_dist <= eff_range_limit:
+                                batch_had_in_range = True
+                                consecutive_cross_city_jumps = 0
+                            else:
+                                is_in_range = False
+                                processed_links.add(canonical_link)
                                 batch_had_out_of_range = True
+                                if post_dist >= eff_cross_city_threshold:
+                                    batch_had_cross_city = True
+                                    logger.info(
+                                        "Cross-city jump detected (rescued DOM): %s is %.1fkm away",
+                                        canonical_link,
+                                        post_dist / 1000,
+                                    )
                                 logger.debug(
-                                    "Post-extraction drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
+                                    "Rescued place out of range: %s (%.1fm > %.1fm)",
                                     canonical_link,
                                     post_dist,
                                     eff_range_limit,
                                 )
-                                continue
-                        except (ValueError, TypeError):
-                            pass
 
-                if place_data and (
-                    fields is not None or "name" in place_data or len(place_data) >= 3
-                ):
-                    if fields is None or "link" in fields:
-                        place_data["link"] = link
-                    results.append(place_data)
-                    found_new_in_batch = True
-                    logger.info(
-                        "  ✅ [SPA %d/%s] Extracted: %s",
-                        len(results),
-                        str(max_places),
-                        place_data.get("name", canonical_link),
-                    )
+                        if is_in_range:
+                            if fields is None or "link" in fields:
+                                rescued_place["link"] = link
+                            results.append(rescued_place)
+                            found_new_in_batch = True
+                            batch_had_in_range = True
+                            consecutive_cross_city_jumps = 0
+                            processed_links.add(canonical_link)
+                            logger.info(
+                                "  🆘 [Fallback Rescue] Rescued place data from feed DOM for: %s",
+                                rescued_place.get("name"),
+                            )
+                    else:
+                        logger.warning(
+                            "  ⚠️ Could not rescue place data from feed DOM for: %s",
+                            canonical_link,
+                        )
+                        fallback_rescue_links.append(link)
 
                 await asyncio.sleep(random.uniform(0.15, 0.35))
 
@@ -1353,6 +1498,22 @@ async def scrape_query_spa(
                     "Reached end of results list marker in SPA feed and all items processed."
                 )
                 break
+
+            # Stopping condition (cross_city_jumps):
+            if batch_had_in_range:
+                consecutive_cross_city_jumps = 0
+            elif batch_had_cross_city and not found_new_in_batch:
+                consecutive_cross_city_jumps += 1
+                logger.info(
+                    "Cross-city consecutive count: %d/%d",
+                    consecutive_cross_city_jumps,
+                    eff_max_consecutive_cross_city_jumps,
+                )
+                if consecutive_cross_city_jumps >= eff_max_consecutive_cross_city_jumps:
+                    logger.info(
+                        "Stopping SPA scroll safely due to persistent cross-city jump."
+                    )
+                    break
 
             # Stopping condition (consecutive_empty_scrolls & out of range scrolls):
             if not found_new_in_batch:
@@ -1399,6 +1560,50 @@ async def scrape_query_spa(
             else:
                 last_height = new_height
                 scroll_attempts_no_new = 0
+
+        # Secondary fallback rescue for unresolved links via process_link if time permits
+        if fallback_rescue_links and (max_places is None or len(results) < max_places):
+            remaining_time = eff_query_timeout - (time.monotonic() - query_start)
+            if remaining_time > 5.0:
+                logger.info(
+                    "Attempting secondary fallback rescue for %d unresolved links...",
+                    len(fallback_rescue_links),
+                )
+                rescue_sem = asyncio.Semaphore(min(4, len(fallback_rescue_links)))
+                for f_link in fallback_rescue_links:
+                    f_canon = f_link.split("?")[0]
+                    if f_canon in processed_links:
+                        continue
+                    if max_places is not None and len(results) >= max_places:
+                        break
+                    if (eff_query_timeout - (time.monotonic() - query_start)) <= 3.0:
+                        break
+                    try:
+                        f_data = await process_link(
+                            context=context,
+                            link=f_link,
+                            count=len(results) + 1,
+                            total=max_places
+                            or (len(results) + len(fallback_rescue_links)),
+                            semaphore=rescue_sem,
+                            fields=fields,
+                            max_retries=1,
+                        )
+                        if f_data and (
+                            fields is not None or "name" in f_data or len(f_data) >= 3
+                        ):
+                            processed_links.add(f_canon)
+                            results.append(f_data)
+                            logger.info(
+                                "  🆘 [Secondary Rescue] Rescued via process_link: %s",
+                                f_data.get("name", f_link),
+                            )
+                    except Exception as rescue_err:  # noqa: BLE001
+                        logger.debug(
+                            "Secondary rescue error for %s: %s",
+                            f_link,
+                            rescue_err,
+                        )
 
     except Exception as e:  # noqa: BLE001
         logger.error("Error during scrape_query_spa: %s", e)
