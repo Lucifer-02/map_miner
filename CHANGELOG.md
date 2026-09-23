@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.4] - 2026-09-22
 
 ### Added
+- **Mở Rộng Toàn Bộ 14 Tham Số Cấu Hình Cho Entrypoint `scrape_google_maps`**:
+  - Bổ sung 8 tham số cấu hình cấp module còn thiếu vào signature của hàm entrypoint [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): `navigation_timeout`, `captcha_timeout`, `max_captcha_retries`, `static_cache_dir`, `disk_cache_size`, `max_consecutive_empty_scrolls`, `max_consecutive_out_of_range_scrolls`, `max_scroll_attempts_without_new_links`.
+  - Truyền trực tiếp và xuyên suốt toàn bộ 14 tham số cấu hình xuống các private helpers nội bộ (`_create_browser_context`, `_global_route_handler`, `_scrape_query_spa`, `_get_place_urls`, `_process_link`), cho phép người dùng tùy biến triệt để các timeouts, guardrails, kích thước cache và chiến lược cuộn trang mà không vi phạm quy chuẩn đóng gói public API.
 - **Cơ Chế Cứu Vớt Dữ Liệu Hai Tầng (Feed Card DOM Rescue & Secondary Fallback - Đề Xuất 1)**:
   - Bổ sung pure function [`extract_feed_item_dom`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py) tại `src/map_miner/extractor.py` để bóc tách ngay lập tức metadata từ thẻ card DOM kết quả tìm kiếm (`name`, `categories`, `rating`, `reviews_count`, `address`, `city`, `coordinates`, `place_id`, `plus_code`).
   - Khi XHR preview `/maps/preview/place` bị timeout hoặc preview JSON không hợp lệ, hệ thống tự động kích hoạt Feed Card DOM Rescue cứu vớt 100% dữ liệu địa điểm mà không tốn thêm bất kỳ network request nào.
@@ -18,12 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Cung cấp `schema_overrides` và ép kiểu an toàn `pl.Int64` cho cả `flatten=True` và `flatten=False`, khắc phục triệt để lỗi cột bị suy luận thành `Float64` khi có `None`/`null`.
 
 ### Changed
+- **Triển Khai Phương Án Tối Giản Cực Đại (Zero Module Constants Trong `scraper.py`)**:
+  - Xóa sạch toàn bộ 14 hằng số cấu hình cấp module (`DEFAULT_*` và `MAX_*`) trong [`src/map_miner/scraper.py`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py).
+  - Toàn bộ giá trị mặc định được khai báo trực tiếp vào default parameter values trong signature của `scrape_google_maps` và các private helpers (`_create_browser_context`, `_global_route_handler`, `_scrape_query_spa`, `_get_place_urls`, `_process_link`, `_handle_captcha_if_present`).
+  - Toàn bộ logic bên trong thân hàm sử dụng biến tham số, tuyệt đối không inline/hardcode magic numbers.
+  - `src/map_miner/scraper.py` chỉ export duy nhất `scrape_google_maps` trong `__all__ = ["scrape_google_maps"]`.
+  - `src/map_miner/__init__.py` chỉ export `scrape_google_maps` từ module scraper, loại bỏ hoàn toàn các re-export hằng số cấu hình.
+- **Tối Giản Hóa Public API Surface Module Scraper**:
+  - Chuyển toàn bộ 15 hàm và class phụ trợ/điều phối nội bộ trong [`src/map_miner/scraper.py`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) thành private helpers (tiền tố `_`): `_create_browser_context`, `_scrape_query_spa`, `_get_place_urls`, `_process_link`, `_global_route_handler`, `_safe_close_page`, `_safe_close_context`, `_safe_close_browser`, `_pass_consent`, `_handle_captcha_if_present`, `_find_feed_selector`, `_scroll_feed`, `_is_feed_at_end`, `_is_no_results_page`, `_PreviewInterceptor`.
+  - Loại bỏ `create_browser_context` và `is_no_results_page` khỏi [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) và dọn dẹp các re-export không liên quan.
 - **Chuẩn Hóa Thao Tác Click Trong SPA Mode**:
   - Gọi `await el.scroll_into_view_if_needed(timeout=1000)` trước khi click, sử dụng `el.evaluate("e => e.click()")` kết hợp fallback Playwright native click `el.click(force=True)`.
 
 ### Removed
+- **Xóa Bỏ 14 Hằng Số Cấu Hình Cấp Module trong `scraper.py`**:
+  - `DEFAULT_TIMEOUT`, `DEFAULT_QUERY_TIMEOUT`, `DEFAULT_PLACE_TIMEOUT`, `DEFAULT_CAPTCHA_TIMEOUT`, `DEFAULT_SPA_PREVIEW_TIMEOUT`, `DEFAULT_RANGE_LIMIT`, `DEFAULT_MAX_CAPTCHA_RETRIES`, `DEFAULT_STAGGER_DELAY`, `DEFAULT_CACHE_DIR`, `DEFAULT_STATIC_CACHE_DIR`, `DEFAULT_DISK_CACHE_SIZE`, `MAX_CONSECUTIVE_EMPTY_SCROLLS`, `MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS`, `MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS`.
 - **Loại Bỏ Dataclass `ScraperConfig` và `DEFAULT_CONFIG`**:
-  - Loại bỏ hoàn toàn dataclass `ScraperConfig` và thể hiện `DEFAULT_CONFIG`, khôi phục hệ thống hằng số cấu hình truyền thống độc lập ở cấp module (`DEFAULT_*`, `MAX_*`).
+  - Loại bỏ hoàn toàn dataclass `ScraperConfig` và thể hiện `DEFAULT_CONFIG`.
   - Đơn giản hóa API của [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), và [`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), loại bỏ tham số `config` và toàn bộ các biến phân giải trung gian `eff_*`.
 
 ---

@@ -6,10 +6,12 @@ import polars as pl
 import pytest
 from geopy.point import Point
 
-from map_miner.scraper import (
+from map_miner.extractor import (
     DEFAULT_FLATTEN_COLUMNS,
     REQUIRED_COLUMNS,
     format_places_dataframe,
+)
+from map_miner.scraper import (
     scrape_google_maps,
 )
 
@@ -304,7 +306,7 @@ def test_scrape_google_maps_forwards_flatten_parameter():
                 "map_miner.scraper.async_playwright",
                 return_value=MockPlaywrightContext(),
             ),
-            patch("map_miner.scraper.scrape_query_spa", mock_spa),
+            patch("map_miner.scraper._scrape_query_spa", mock_spa),
         ):
             df_default = await scrape_google_maps(
                 queries={"coffee"},
@@ -329,7 +331,7 @@ def test_scrape_google_maps_forwards_flatten_parameter():
                 "map_miner.scraper.async_playwright",
                 return_value=MockPlaywrightContext(),
             ),
-            patch("map_miner.scraper.scrape_query_spa", mock_spa),
+            patch("map_miner.scraper._scrape_query_spa", mock_spa),
         ):
             df_flattened = await scrape_google_maps(
                 queries={"coffee"},

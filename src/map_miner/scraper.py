@@ -27,23 +27,17 @@ from playwright.async_api import (
 )
 
 from .extractor import (
-    DEFAULT_FLATTEN_COLUMNS,
-    REQUIRED_COLUMNS,
     calculate_distance,
     extract_coordinates_from_url,
     extract_feed_item_dom,
     extract_place_data,
     format_places_dataframe,
     is_preview_response_for_link,
-    is_within_range,
     make_place_url,
     parse_preview_json,
 )
 from .proxy import (
-    DEFAULT_PROXY_BYPASS,
     ProxyRotator,
-    get_tor_rotating_proxy,
-    renew_tor_circuit_control,
 )
 from .recaptcha_solver import (
     RecaptchaBlockedError,
@@ -54,64 +48,10 @@ from .recaptcha_solver import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "DEFAULT_CAPTCHA_TIMEOUT",
-    "DEFAULT_DISK_CACHE_SIZE",
-    "DEFAULT_FLATTEN_COLUMNS",
-    "DEFAULT_MAX_CAPTCHA_RETRIES",
-    "DEFAULT_PLACE_TIMEOUT",
-    "DEFAULT_PROXY_BYPASS",
-    "DEFAULT_QUERY_TIMEOUT",
-    "DEFAULT_RANGE_LIMIT",
-    "DEFAULT_SPA_PREVIEW_TIMEOUT",
-    "DEFAULT_STAGGER_DELAY",
-    "DEFAULT_STATIC_CACHE_DIR",
-    "DEFAULT_TIMEOUT",
-    "MAX_CONSECUTIVE_EMPTY_SCROLLS",
-    "MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS",
-    "MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS",
-    "REQUIRED_COLUMNS",
-    "ProxyRotator",
-    "calculate_distance",
-    "create_browser_context",
-    "extract_coordinates_from_url",
-    "extract_feed_item_dom",
-    "find_feed_selector",
-    "format_places_dataframe",
-    "get_place_urls",
-    "get_tor_rotating_proxy",
-    "global_route_handler",
-    "handle_captcha_if_present",
-    "is_feed_at_end",
-    "is_no_results_page",
-    "is_preview_response_for_link",
-    "is_within_range",
-    "make_place_url",
-    "pass_consent",
-    "process_link",
-    "renew_tor_circuit_control",
-    "safe_close_browser",
-    "safe_close_context",
-    "safe_close_page",
     "scrape_google_maps",
-    "scrape_query_spa",
-    "scroll_feed",
 ]
 
-# --- Constants ---
-DEFAULT_TIMEOUT: int = 30000  # ms (30s)
-DEFAULT_QUERY_TIMEOUT: float = 300.0  # seconds (5 min)
-DEFAULT_PLACE_TIMEOUT: float = 45.0  # seconds
-DEFAULT_CAPTCHA_TIMEOUT: float = 85.0  # seconds
-DEFAULT_SPA_PREVIEW_TIMEOUT: float | int = 10000  # ms (10s)
-DEFAULT_RANGE_LIMIT: float = 10000.0  # meters (10 km)
-DEFAULT_MAX_CAPTCHA_RETRIES: int = 2
-DEFAULT_STAGGER_DELAY: tuple[float, float] | float = (1.5, 3.5)
-DEFAULT_CACHE_DIR: Path | None = Path(".cache") / "chromium_cache"
-DEFAULT_STATIC_CACHE_DIR: Path = Path(".cache") / "static_assets"
-DEFAULT_DISK_CACHE_SIZE: int = 1073741824  # 1 GB
-MAX_CONSECUTIVE_EMPTY_SCROLLS: int = 4
-MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS: int = 3
-MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS: int = 5
+# --- Route & Browser Constants ---
 
 DYNAMIC_ROUTE_PATTERNS: tuple[str, ...] = (
     "/maps/preview/",
@@ -215,10 +155,18 @@ NO_RESULTS_TEXT_PATTERNS: tuple[str, ...] = (
 _active_route_tasks: set[asyncio.Task[Any]] = set()
 
 
-async def global_route_handler(route: Route) -> None:
+async def _global_route_handler(
+    route: Route,
+    static_cache_dir: Path = Path(".cache") / "static_assets",
+) -> None:
     """Context-wide route handler to block heavy resources and tracking,
     saving significant network bandwidth while caching static assets
     and preserving reCAPTCHA and core APIs.
+
+    Args:
+        route (Route): Playwright route object.
+        static_cache_dir (Path, optional): Directory to store static assets cache.
+            Defaults to Path(".cache") / "static_assets".
     """
     curr_task = asyncio.current_task()
     if curr_task is not None:
@@ -255,7 +203,7 @@ async def global_route_handler(route: Route) -> None:
 
         if is_static_asset:
             cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-            cache_file = DEFAULT_STATIC_CACHE_DIR / cache_key
+            cache_file = static_cache_dir / cache_key
 
             try:
                 if cache_file.is_file() and cache_file.stat().st_size > 0:
@@ -283,7 +231,7 @@ async def global_route_handler(route: Route) -> None:
             if response.status == 200:
                 try:
                     body = await response.body()
-                    DEFAULT_STATIC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                    static_cache_dir.mkdir(parents=True, exist_ok=True)
                     cache_file.write_bytes(body)
                 except OSError:
                     pass
@@ -296,7 +244,7 @@ async def global_route_handler(route: Route) -> None:
         return
 
 
-async def safe_close_page(page: Page | None) -> None:
+async def _safe_close_page(page: Page | None) -> None:
     """Safely closes a Playwright Page, ensuring proper cleanup even under task cancellation."""
     if not page:
         return
@@ -315,7 +263,7 @@ async def safe_close_page(page: Page | None) -> None:
         pass
 
 
-async def safe_close_context(context: BrowserContext | None) -> None:
+async def _safe_close_context(context: BrowserContext | None) -> None:
     """Safely closes a Playwright BrowserContext, unrouting handlers and ensuring
     proper cleanup without dangling pending tasks under cancellation."""
     if not context:
@@ -338,7 +286,7 @@ async def safe_close_context(context: BrowserContext | None) -> None:
         pass
 
 
-async def safe_close_browser(browser: Browser | None) -> None:
+async def _safe_close_browser(browser: Browser | None) -> None:
     """Safely closes a Playwright Browser instance without leaving dangling tasks."""
     if not browser:
         return
@@ -357,7 +305,7 @@ async def safe_close_browser(browser: Browser | None) -> None:
         pass
 
 
-async def create_browser_context(
+async def _create_browser_context(
     browser: Browser,
     geo_coordinates: Point,
     lang: str = "en",
@@ -369,6 +317,7 @@ async def create_browser_context(
         | Sequence[str]
         | None
     ) = None,
+    static_cache_dir: Path = Path(".cache") / "static_assets",
 ) -> BrowserContext:
     """Creates and configures an isolated BrowserContext with proxy settings,
     stealth overrides, geolocation, and global resource blocking.
@@ -379,6 +328,8 @@ async def create_browser_context(
         lang (str, optional): Language code. Defaults to "en".
         proxy (ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None, optional):
             Proxy settings for this context. Defaults to None.
+        static_cache_dir (Path, optional): Directory to store static assets cache.
+            Defaults to Path(".cache") / "static_assets".
 
     Returns:
         BrowserContext: Configured isolated browser context.
@@ -478,12 +429,15 @@ async def create_browser_context(
     await context.add_init_script(stealth_script)
 
     # Context-wide bandwidth-saving route handler
-    await context.route("**/*", global_route_handler)
+    async def route_handler(route: Route) -> None:
+        await _global_route_handler(route, static_cache_dir=static_cache_dir)
+
+    await context.route("**/*", route_handler)
 
     return context
 
 
-async def pass_consent(page: Page) -> bool:
+async def _pass_consent(page: Page) -> bool:
     """
     Attempts to dismiss Google's cookie/privacy consent banner
     across multiple languages safely.
@@ -515,10 +469,10 @@ async def pass_consent(page: Page) -> bool:
     return False
 
 
-async def handle_captcha_if_present(
+async def _handle_captcha_if_present(
     page: Page,
     context_label: str = "",
-    timeout: float = DEFAULT_CAPTCHA_TIMEOUT,
+    timeout: float = 85.0,
 ) -> bool:
     """Detects and attempts to solve reCAPTCHA if encountered."""
     is_captcha = "sorry/index" in page.url
@@ -559,7 +513,7 @@ async def handle_captcha_if_present(
     return False
 
 
-async def find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
+async def _find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
     """Locates the results feed container selector on a Google Maps search page."""
     try:
         await page.wait_for_selector('[role="feed"]', state="visible", timeout=timeout)
@@ -571,7 +525,7 @@ async def find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
     return None
 
 
-async def scroll_feed(page: Page, feed_selector: str) -> None:
+async def _scroll_feed(page: Page, feed_selector: str) -> None:
     """Scrolls down the search results feed container."""
     try:
         feed_locator = page.locator(feed_selector).first
@@ -594,7 +548,7 @@ async def scroll_feed(page: Page, feed_selector: str) -> None:
     await asyncio.sleep(random.uniform(1.0, 1.6))
 
 
-async def is_feed_at_end(page: Page) -> bool:
+async def _is_feed_at_end(page: Page) -> bool:
     """Checks if any multi-lingual end of results list marker is visible."""
     for xpath in END_OF_FEED_XPATHS:
         try:
@@ -608,7 +562,7 @@ async def is_feed_at_end(page: Page) -> bool:
     return False
 
 
-async def is_no_results_page(page: Page) -> bool:
+async def _is_no_results_page(page: Page) -> bool:
     """Checks if the search page indicates that no results were found for the query."""
     for selector in NO_RESULTS_SELECTORS:
         try:
@@ -633,7 +587,7 @@ async def is_no_results_page(page: Page) -> bool:
     return False
 
 
-class PreviewInterceptor:
+class _PreviewInterceptor:
     """
     Listens for /maps/preview/place XHR responses on a Page,
     capturing the rich place detail payload.
@@ -669,17 +623,22 @@ class PreviewInterceptor:
             return None
 
 
-async def get_place_urls(
+async def _get_place_urls(
     context: BrowserContext,
     max_places: int,
     query: str,
     geo_coordinates: Point,
     zoom: float,
     lang: str = "en",
-    range_limit: float = DEFAULT_RANGE_LIMIT,
+    range_limit: float = 10000.0,
     proxy_rotator: ProxyRotator | None = None,
-    query_timeout: float = DEFAULT_QUERY_TIMEOUT,
+    query_timeout: float = 300.0,
     links_collector: set[str] | None = None,
+    navigation_timeout: int = 30000,
+    captcha_timeout: float = 85.0,
+    max_consecutive_empty_scrolls: int = 4,
+    max_consecutive_out_of_range_scrolls: int = 3,
+    max_scroll_attempts_without_new_links: int = 5,
 ) -> set[str]:
     """Navigates the search feed and scrolls to collect place links.
 
@@ -699,10 +658,18 @@ async def get_place_urls(
             (https://support.google.com/business/answer/7091). Prominent places further away
             may be returned before closer ones, so results are not strictly monotonic by distance.
             range_limit filters out places exceeding this radius (early drop).
-            Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
+            Defaults to 10000.0m.
         proxy_rotator (ProxyRotator | None, optional): Rotator to renew proxy on CAPTCHA block. Defaults to None.
-        query_timeout (float): Maximum seconds allowed for this query. Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
+        query_timeout (float): Maximum seconds allowed for this query. Defaults to 300.0s.
         links_collector (set[str] | None, optional): Mutable set to collect links in-place for zero data loss on timeout.
+        navigation_timeout (int, optional): Navigation timeout in ms. Defaults to 30000.
+        captcha_timeout (float, optional): reCAPTCHA solving timeout in seconds. Defaults to 85.0.
+        max_consecutive_empty_scrolls (int, optional): Max consecutive scrolls without new links before stopping.
+            Defaults to 4.
+        max_consecutive_out_of_range_scrolls (int, optional): Max consecutive scrolls with only out-of-range links before stopping.
+            Defaults to 3.
+        max_scroll_attempts_without_new_links (int, optional): Max scroll attempts when height is unchanged before stopping.
+            Defaults to 5.
 
     Returns:
         set[str]: Collected place URLs.
@@ -721,18 +688,19 @@ async def get_place_urls(
         logger.info("Navigating to search URL: %s", search_url)
 
         await search_page.goto(
-            search_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT
+            search_url, wait_until="domcontentloaded", timeout=navigation_timeout
         )
         await asyncio.sleep(random.uniform(1.0, 2.5))
 
         if "consent" in search_page.url:
-            await pass_consent(search_page)
+            await _pass_consent(search_page)
 
         is_blocked = False
         try:
-            captcha_solved = await handle_captcha_if_present(
+            captcha_solved = await _handle_captcha_if_present(
                 search_page,
                 context_label="search_page",
+                timeout=captcha_timeout,
             )
         except RecaptchaBlockedError:
             captcha_solved = False
@@ -762,7 +730,7 @@ async def get_place_urls(
             place_links.add(search_page.url)
             return place_links
 
-        active_feed_selector = await find_feed_selector(search_page)
+        active_feed_selector = await _find_feed_selector(search_page)
         if not active_feed_selector:
             if "/maps/place/" in search_page.url:
                 coords = extract_coordinates_from_url(search_page.url)
@@ -778,7 +746,7 @@ async def get_place_urls(
                         return place_links
                 place_links.add(search_page.url)
                 return place_links
-            if await is_no_results_page(search_page):
+            if await _is_no_results_page(search_page):
                 logger.info("No results found for query '%s'.", query)
                 return place_links
             logger.error("Could not find results feed selector on search page.")
@@ -805,7 +773,7 @@ async def get_place_urls(
                 )
                 break
 
-            await scroll_feed(search_page, active_feed_selector)
+            await _scroll_feed(search_page, active_feed_selector)
 
             current_links_list = await search_page.locator(
                 f'{active_feed_selector} a[href*="/maps/place/"]'
@@ -865,7 +833,7 @@ async def get_place_urls(
                     consecutive_out_of_range_scrolls += 1
                     if (
                         consecutive_out_of_range_scrolls
-                        >= MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS
+                        >= max_consecutive_out_of_range_scrolls
                     ):
                         logger.debug(
                             "Stopping scroll in get_place_urls: %d consecutive scrolls with only out-of-range links.",
@@ -875,7 +843,7 @@ async def get_place_urls(
                 else:
                     consecutive_out_of_range_scrolls = 0
 
-                if consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS:
+                if consecutive_empty_scrolls >= max_consecutive_empty_scrolls:
                     logger.debug(
                         "Stopping scroll in get_place_urls: %d consecutive scrolls without new links.",
                         consecutive_empty_scrolls,
@@ -890,7 +858,7 @@ async def get_place_urls(
                 active_feed_selector,
             )
 
-            is_at_end = await is_feed_at_end(search_page)
+            is_at_end = await _is_feed_at_end(search_page)
             if is_at_end and new_links_count == 0:
                 logger.debug("Reached end of results list marker and no new links.")
                 break
@@ -900,10 +868,10 @@ async def get_place_urls(
                 logger.debug(
                     "Scroll height unchanged (%d/%d).",
                     scroll_attempts_no_new,
-                    MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS,
+                    max_scroll_attempts_without_new_links,
                 )
                 await asyncio.sleep(1.5)
-                if scroll_attempts_no_new >= MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS:
+                if scroll_attempts_no_new >= max_scroll_attempts_without_new_links:
                     break
             else:
                 last_height = new_height
@@ -912,12 +880,12 @@ async def get_place_urls(
     except Exception as e:  # noqa: BLE001
         logger.error("Error during get_place_urls: %s", e)
     finally:
-        await safe_close_page(search_page)
+        await _safe_close_page(search_page)
 
     return place_links
 
 
-async def scrape_query_spa(
+async def _scrape_query_spa(
     context: BrowserContext,
     query: str,
     geo_coordinates: Point,
@@ -925,12 +893,18 @@ async def scrape_query_spa(
     max_places: int = 120,
     lang: str = "en",
     fields: Sequence[str] | set[str] | None = None,
-    range_limit: float = DEFAULT_RANGE_LIMIT,
+    range_limit: float = 10000.0,
     proxy_rotator: ProxyRotator | None = None,
-    max_captcha_retries: int = DEFAULT_MAX_CAPTCHA_RETRIES,
-    query_timeout: float = DEFAULT_QUERY_TIMEOUT,
-    preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT,
+    max_captcha_retries: int = 2,
+    query_timeout: float = 300.0,
+    preview_timeout: float = 10000,
     results_collector: list[dict[str, Any]] | None = None,
+    navigation_timeout: int = 30000,
+    captcha_timeout: float = 85.0,
+    max_consecutive_empty_scrolls: int = 4,
+    max_consecutive_out_of_range_scrolls: int = 3,
+    max_scroll_attempts_without_new_links: int = 5,
+    static_cache_dir: Path = Path(".cache") / "static_assets",
 ) -> list[dict[str, Any]]:
     """Scrapes Google Maps places using client-side SPA navigation:
 
@@ -955,14 +929,24 @@ async def scrape_query_spa(
             (https://support.google.com/business/answer/7091). Prominent places further away
             may be returned before closer ones, so results are not strictly monotonic by distance.
             range_limit filters out places exceeding this radius (early drop).
-            Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
+            Defaults to 10000.0m.
         proxy_rotator (ProxyRotator | None, optional): Proxy rotator to renew proxy on CAPTCHA. Defaults to None.
         max_captcha_retries (int, optional): Max retries on CAPTCHA sorry page. Defaults to 2.
-        query_timeout (float): Maximum seconds allowed for this query. Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
+        query_timeout (float): Maximum seconds allowed for this query. Defaults to 300.0s.
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
-            waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT.
+            waiting for SPA place preview XHR response. Defaults to 10000.
         results_collector (list[dict[str, Any]] | None, optional): Mutable list to collect
             places in-place for zero data loss on timeout.
+        navigation_timeout (int, optional): Navigation timeout in ms. Defaults to 30000.
+        captcha_timeout (float, optional): reCAPTCHA solving timeout in seconds. Defaults to 85.0.
+        max_consecutive_empty_scrolls (int, optional): Max consecutive scrolls without new items before stopping.
+            Defaults to 4.
+        max_consecutive_out_of_range_scrolls (int, optional): Max consecutive scrolls with only out-of-range items before stopping.
+            Defaults to 3.
+        max_scroll_attempts_without_new_links (int, optional): Max scroll attempts when height is unchanged before stopping.
+            Defaults to 5.
+        static_cache_dir (Path, optional): Directory to store static assets cache when creating rotated contexts.
+            Defaults to Path(".cache") / "static_assets".
 
     Returns:
         list[dict[str, Any]]: List of place dictionaries.
@@ -992,18 +976,19 @@ async def scrape_query_spa(
             await search_page.goto(
                 search_url,
                 wait_until="domcontentloaded",
-                timeout=DEFAULT_TIMEOUT,
+                timeout=navigation_timeout,
             )
             await asyncio.sleep(random.uniform(1.0, 2.0))
 
             if "consent" in search_page.url:
-                await pass_consent(search_page)
+                await _pass_consent(search_page)
 
             is_blocked = False
             try:
-                captcha_solved = await handle_captcha_if_present(
+                captcha_solved = await _handle_captcha_if_present(
                     search_page,
                     context_label="spa_search",
+                    timeout=captcha_timeout,
                 )
             except RecaptchaBlockedError:
                 captcha_solved = False
@@ -1017,17 +1002,18 @@ async def scrape_query_spa(
                         captcha_attempt + 1,
                         max_captcha_retries,
                     )
-                    await safe_close_page(search_page)
+                    await _safe_close_page(search_page)
                     search_page = None
 
                     new_proxy = proxy_rotator.renew() if proxy_rotator else None
                     browser = active_context.browser
                     if browser is not None:
-                        new_context = await create_browser_context(
+                        new_context = await _create_browser_context(
                             browser=browser,
                             geo_coordinates=geo_coordinates,
                             lang=lang,
                             proxy=new_proxy,
+                            static_cache_dir=static_cache_dir,
                         )
                         created_contexts.append(new_context)
                         active_context = new_context
@@ -1064,9 +1050,9 @@ async def scrape_query_spa(
                 results.append(place_data)
             return results
 
-        active_feed_selector = await find_feed_selector(search_page)
+        active_feed_selector = await _find_feed_selector(search_page)
         if not active_feed_selector:
-            if await is_no_results_page(search_page):
+            if await _is_no_results_page(search_page):
                 logger.info("No results found for query '%s'.", query)
                 return results
             logger.error("Could not find results feed selector on search page.")
@@ -1319,11 +1305,11 @@ async def scrape_query_spa(
                 )
                 break
 
-            await scroll_feed(search_page, active_feed_selector)
+            await _scroll_feed(search_page, active_feed_selector)
             # Human-like post-scroll reading delay
             await asyncio.sleep(random.uniform(1.2, 2.2))
 
-            is_at_end = await is_feed_at_end(search_page)
+            is_at_end = await _is_feed_at_end(search_page)
             remaining_links = await search_page.locator(
                 f'{active_feed_selector} a[href*="/maps/place/"]'
             ).evaluate_all("els => els.map(a => a.href.split('?')[0])")
@@ -1342,7 +1328,7 @@ async def scrape_query_spa(
                     consecutive_out_of_range_scrolls += 1
                     if (
                         consecutive_out_of_range_scrolls
-                        >= MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS
+                        >= max_consecutive_out_of_range_scrolls
                     ):
                         logger.debug(
                             "Stopping SPA scroll: %d consecutive scrolls with only out-of-range items.",
@@ -1352,7 +1338,7 @@ async def scrape_query_spa(
                 else:
                     consecutive_out_of_range_scrolls = 0
 
-                if consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS:
+                if consecutive_empty_scrolls >= max_consecutive_empty_scrolls:
                     logger.debug(
                         "Stopping SPA scroll: %d consecutive scrolls without new items.",
                         consecutive_empty_scrolls,
@@ -1374,7 +1360,7 @@ async def scrape_query_spa(
             ):
                 scroll_attempts_no_new += 1
                 await asyncio.sleep(1.5)
-                if scroll_attempts_no_new >= MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS:
+                if scroll_attempts_no_new >= max_scroll_attempts_without_new_links:
                     logger.debug("Stopping SPA scroll due to lack of new items.")
                     break
             else:
@@ -1399,7 +1385,7 @@ async def scrape_query_spa(
                     if (query_timeout - (time.monotonic() - query_start)) <= 3.0:
                         break
                     try:
-                        f_data = await process_link(
+                        f_data = await _process_link(
                             context=context,
                             link=f_link,
                             count=len(results) + 1,
@@ -1408,6 +1394,8 @@ async def scrape_query_spa(
                             semaphore=rescue_sem,
                             fields=fields,
                             max_retries=1,
+                            navigation_timeout=navigation_timeout,
+                            captcha_timeout=captcha_timeout,
                         )
                         if f_data and (
                             fields is not None or "name" in f_data or len(f_data) >= 3
@@ -1428,14 +1416,14 @@ async def scrape_query_spa(
     except Exception as e:  # noqa: BLE001
         logger.error("Error during scrape_query_spa: %s", e)
     finally:
-        await safe_close_page(search_page)
+        await _safe_close_page(search_page)
         for extra_ctx in created_contexts:
-            await safe_close_context(extra_ctx)
+            await _safe_close_context(extra_ctx)
 
     return results
 
 
-async def process_link(
+async def _process_link(
     context: BrowserContext,
     link: str,
     semaphore: asyncio.Semaphore,
@@ -1444,12 +1432,28 @@ async def process_link(
     fields: Sequence[str] | set[str] | None = None,
     max_retries: int = 2,
     proxy_rotator: ProxyRotator | None = None,
+    navigation_timeout: int = 30000,
+    captcha_timeout: float = 85.0,
 ) -> dict[str, Any] | None:
-    """
-    Processes a single place link in multi-page fallback mode:
+    """Processes a single place link in multi-page fallback mode:
     - Pure I/O: intercepts rich network payload or collects HTML content
     - Pure extraction: delegates parsing to extractor.py
     - Includes automatic retry and resilient page lifecycle cleanup
+
+    Args:
+        context (BrowserContext): Isolated browser context.
+        link (str): URL of place to scrape.
+        semaphore (asyncio.Semaphore): Concurrency semaphore.
+        count (int): Current link index.
+        total (int): Total links to scrape.
+        fields (Sequence[str] | set[str] | None, optional): Specific fields to extract. Defaults to None.
+        max_retries (int, optional): Max attempts for this link. Defaults to 2.
+        proxy_rotator (ProxyRotator | None, optional): Proxy rotator. Defaults to None.
+        navigation_timeout (int, optional): Navigation timeout in ms. Defaults to 30000.
+        captcha_timeout (float, optional): CAPTCHA solving timeout in seconds. Defaults to 85.0.
+
+    Returns:
+        dict[str, Any] | None: Extracted place data dictionary, or None on failure.
     """
     async with semaphore:
         for attempt in range(1, max_retries + 1):
@@ -1465,7 +1469,7 @@ async def process_link(
                     link,
                 )
                 page = await context.new_page()
-                interceptor = PreviewInterceptor(page)
+                interceptor = _PreviewInterceptor(page)
 
                 await page.set_extra_http_headers(
                     {
@@ -1478,7 +1482,7 @@ async def process_link(
                     await page.goto(
                         link,
                         wait_until="domcontentloaded",
-                        timeout=DEFAULT_TIMEOUT,
+                        timeout=navigation_timeout,
                     )
                 except PlaywrightTimeoutError:
                     logger.warning("  ❌ Timeout navigating to: %s", link)
@@ -1526,8 +1530,10 @@ async def process_link(
                 # CAPTCHA verification
                 is_blocked = False
                 try:
-                    captcha_solved = await handle_captcha_if_present(
-                        page, context_label="process_link"
+                    captcha_solved = await _handle_captcha_if_present(
+                        page,
+                        context_label="process_link",
+                        timeout=captcha_timeout,
                     )
                 except RecaptchaBlockedError:
                     captcha_solved = False
@@ -1576,7 +1582,7 @@ async def process_link(
                 else:
                     return None
             finally:
-                await safe_close_page(page)
+                await _safe_close_page(page)
 
         return None
 
@@ -1600,12 +1606,20 @@ async def scrape_google_maps(
     fields: Sequence[str] | set[str] | None = None,
     flatten: bool = False,
     use_spa: bool = True,
-    cache_dir: Path | None = DEFAULT_CACHE_DIR,
-    range_limit: float = DEFAULT_RANGE_LIMIT,
-    query_timeout: float = DEFAULT_QUERY_TIMEOUT,
-    place_timeout: float = DEFAULT_PLACE_TIMEOUT,
-    preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT,
-    stagger_delay: tuple[float, float] | float = DEFAULT_STAGGER_DELAY,
+    cache_dir: Path | None = Path(".cache") / "chromium_cache",
+    range_limit: float = 10000.0,
+    query_timeout: float = 300.0,
+    place_timeout: float = 45.0,
+    preview_timeout: float = 10000,
+    stagger_delay: tuple[float, float] | float = (1.5, 3.5),
+    navigation_timeout: int = 30000,
+    captcha_timeout: float = 85.0,
+    max_captcha_retries: int = 2,
+    static_cache_dir: Path = Path(".cache") / "static_assets",
+    disk_cache_size: int = 1073741824,
+    max_consecutive_empty_scrolls: int = 4,
+    max_consecutive_out_of_range_scrolls: int = 3,
+    max_scroll_attempts_without_new_links: int = 5,
 ) -> pl.DataFrame:
     """Scrapes Google Maps for places based on queries.
 
@@ -1626,23 +1640,39 @@ async def scrape_google_maps(
             keeping 11 common columns at top-level. Defaults to False.
         use_spa (bool, optional): Whether to use high-speed SPA navigation. Defaults to True.
         cache_dir (Path | None, optional): Directory to store persistent Chromium disk cache.
-            Defaults to DEFAULT_CACHE_DIR (".cache/chromium_cache"). If None, disk caching
+            Defaults to Path(".cache") / "chromium_cache". If None, disk caching
             flags will not be passed.
         range_limit (float): Maximum radius distance in meters from geo_coordinates.
             Google Maps local ranking combines Relevance, Distance, and Prominence
             (https://support.google.com/business/answer/7091). Prominent places further away
             may be returned before closer ones, so results are not strictly monotonic by distance.
             range_limit filters out places exceeding this radius (early drop).
-            Defaults to DEFAULT_RANGE_LIMIT (10000.0m).
+            Defaults to 10000.0m.
         query_timeout (float): Maximum seconds allowed per query before early return.
-            Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
+            Defaults to 300.0s.
         place_timeout (float, optional): Maximum seconds allowed to scrape a place in fallback mode.
-            Defaults to DEFAULT_PLACE_TIMEOUT (45.0s).
+            Defaults to 45.0s.
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
-            waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT.
+            waiting for SPA place preview XHR response. Defaults to 10000.
         stagger_delay (tuple[float, float] | float, optional): Delay range (min, max) in
             seconds to stagger the initial launch of concurrent queries. Set to 0 to
             disable. Defaults to (1.5, 3.5).
+        navigation_timeout (int, optional): Maximum navigation timeout in ms for pages.
+            Defaults to 30000.
+        captcha_timeout (float, optional): Maximum timeout in seconds for reCAPTCHA solving.
+            Defaults to 85.0.
+        max_captcha_retries (int, optional): Maximum proxy rotation retries upon encountering CAPTCHA.
+            Defaults to 2.
+        static_cache_dir (Path, optional): Directory to store static assets cache.
+            Defaults to Path(".cache") / "static_assets".
+        disk_cache_size (int, optional): Maximum disk cache size in bytes.
+            Defaults to 1073741824.
+        max_consecutive_empty_scrolls (int, optional): Maximum consecutive empty scrolls before stopping search.
+            Defaults to 4.
+        max_consecutive_out_of_range_scrolls (int, optional): Maximum consecutive scrolls with only out-of-range places before stopping.
+            Defaults to 3.
+        max_scroll_attempts_without_new_links (int, optional): Maximum scroll attempts with unchanged height before stopping.
+            Defaults to 5.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.
@@ -1658,7 +1688,7 @@ async def scrape_google_maps(
         launch_args.extend(
             [
                 f"--disk-cache-dir={resolved_cache}",
-                f"--disk-cache-size={DEFAULT_DISK_CACHE_SIZE}",
+                f"--disk-cache-size={disk_cache_size}",
             ]
         )
 
@@ -1707,15 +1737,16 @@ async def scrape_google_maps(
 
                     async with query_semaphore:
                         allocated_proxy = proxy_rotator.get()
-                        context = await create_browser_context(
+                        context = await _create_browser_context(
                             browser=browser,
                             geo_coordinates=geo_coordinates,
                             lang=lang,
                             proxy=allocated_proxy,
+                            static_cache_dir=static_cache_dir,
                         )
                         collector: list[dict[str, Any]] = []
                         try:
-                            coro = scrape_query_spa(
+                            coro = _scrape_query_spa(
                                 context=context,
                                 query=q.replace("_", " "),
                                 geo_coordinates=geo_coordinates,
@@ -1725,9 +1756,16 @@ async def scrape_google_maps(
                                 fields=fields,
                                 range_limit=range_limit,
                                 proxy_rotator=proxy_rotator,
+                                max_captcha_retries=max_captcha_retries,
                                 query_timeout=query_timeout,
                                 preview_timeout=preview_timeout,
                                 results_collector=collector,
+                                navigation_timeout=navigation_timeout,
+                                captcha_timeout=captcha_timeout,
+                                max_consecutive_empty_scrolls=max_consecutive_empty_scrolls,
+                                max_consecutive_out_of_range_scrolls=max_consecutive_out_of_range_scrolls,
+                                max_scroll_attempts_without_new_links=max_scroll_attempts_without_new_links,
+                                static_cache_dir=static_cache_dir,
                             )
                             return await asyncio.wait_for(
                                 coro, timeout=query_timeout + 10.0
@@ -1751,7 +1789,7 @@ async def scrape_google_maps(
                             )
                             return collector
                         finally:
-                            await safe_close_context(context)
+                            await _safe_close_context(context)
 
                 spa_tasks = [
                     asyncio.create_task(run_spa_query(i, query))
@@ -1814,15 +1852,16 @@ async def scrape_google_maps(
 
                     async with query_semaphore:
                         allocated_proxy = proxy_rotator.get()
-                        context = await create_browser_context(
+                        context = await _create_browser_context(
                             browser=browser,
                             geo_coordinates=geo_coordinates,
                             lang=lang,
                             proxy=allocated_proxy,
+                            static_cache_dir=static_cache_dir,
                         )
                         links_collector: set[str] = set()
                         try:
-                            coro = get_place_urls(
+                            coro = _get_place_urls(
                                 context=context,
                                 max_places=max_places,
                                 query=q.replace("_", " "),
@@ -1833,6 +1872,11 @@ async def scrape_google_maps(
                                 proxy_rotator=proxy_rotator,
                                 query_timeout=query_timeout,
                                 links_collector=links_collector,
+                                navigation_timeout=navigation_timeout,
+                                captcha_timeout=captcha_timeout,
+                                max_consecutive_empty_scrolls=max_consecutive_empty_scrolls,
+                                max_consecutive_out_of_range_scrolls=max_consecutive_out_of_range_scrolls,
+                                max_scroll_attempts_without_new_links=max_scroll_attempts_without_new_links,
                             )
                             return await asyncio.wait_for(
                                 coro, timeout=query_timeout + 10.0
@@ -1856,7 +1900,7 @@ async def scrape_google_maps(
                             )
                             return links_collector
                         finally:
-                            await safe_close_context(context)
+                            await _safe_close_context(context)
 
                 tasks = [
                     asyncio.create_task(run_get_urls(i, query))
@@ -1897,14 +1941,15 @@ async def scrape_google_maps(
                 ) -> dict[str, Any] | None:
                     async with detail_semaphore:
                         allocated_proxy = proxy_rotator.get()
-                        context = await create_browser_context(
+                        context = await _create_browser_context(
                             browser=browser,
                             geo_coordinates=geo_coordinates,
                             lang=lang,
                             proxy=allocated_proxy,
+                            static_cache_dir=static_cache_dir,
                         )
                         try:
-                            coro = process_link(
+                            coro = _process_link(
                                 context,
                                 link,
                                 asyncio.Semaphore(1),
@@ -1912,6 +1957,8 @@ async def scrape_google_maps(
                                 total,
                                 fields=fields,
                                 proxy_rotator=proxy_rotator,
+                                navigation_timeout=navigation_timeout,
+                                captcha_timeout=captcha_timeout,
                             )
                             return await asyncio.wait_for(coro, timeout=place_timeout)
                         except TimeoutError:
@@ -1934,7 +1981,7 @@ async def scrape_google_maps(
                             )
                             return None
                         finally:
-                            await safe_close_context(context)
+                            await _safe_close_context(context)
 
                 detail_tasks = [
                     asyncio.create_task(run_process_link(i, link))
@@ -1961,6 +2008,6 @@ async def scrape_google_maps(
         except Exception as e:  # noqa: BLE001
             logger.error("Unexpected error during scraping: %s", e)
         finally:
-            await safe_close_browser(browser)
+            await _safe_close_browser(browser)
 
     return format_places_dataframe(results, flatten=flatten, fields=fields)

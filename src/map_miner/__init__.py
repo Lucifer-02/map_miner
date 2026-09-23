@@ -28,28 +28,14 @@ from .recaptcha_solver import (
     RecaptchaSolver,
 )
 from .scraper import (
-    DEFAULT_CAPTCHA_TIMEOUT,
-    DEFAULT_MAX_CAPTCHA_RETRIES,
-    DEFAULT_RANGE_LIMIT,
-    DEFAULT_SPA_PREVIEW_TIMEOUT,
-    DEFAULT_STAGGER_DELAY,
-    DEFAULT_STATIC_CACHE_DIR,
-    create_browser_context,
-    is_no_results_page,
     scrape_google_maps,
 )
 
 __version__ = "0.3.4"
 
 __all__ = [
-    "DEFAULT_CAPTCHA_TIMEOUT",
     "DEFAULT_FLATTEN_COLUMNS",
-    "DEFAULT_MAX_CAPTCHA_RETRIES",
     "DEFAULT_PROXY_BYPASS",
-    "DEFAULT_RANGE_LIMIT",
-    "DEFAULT_SPA_PREVIEW_TIMEOUT",
-    "DEFAULT_STAGGER_DELAY",
-    "DEFAULT_STATIC_CACHE_DIR",
     "DEFAULT_TOR_RENEW_COOLDOWN",
     "REQUIRED_COLUMNS",
     "ProxyRotator",
@@ -59,13 +45,11 @@ __all__ = [
     "RecaptchaSolver",
     "__version__",
     "calculate_distance",
-    "create_browser_context",
     "extract_coordinates_from_url",
     "extract_feed_item_dom",
     "extract_place_data",
     "format_places_dataframe",
     "get_tor_rotating_proxy",
-    "is_no_results_page",
     "is_preview_response_for_link",
     "is_within_range",
     "make_place_url",

@@ -2,7 +2,7 @@
 
 ## 1. Tổng Quan Dự Án (Project Overview)
 
-**`map_miner`** (phiên bản `0.3.1`) là thư viện Python và công cụ cào dữ liệu (web scraper) bất đồng bộ hiệu năng cao dành riêng cho Google Maps. Dự án được thiết kế để thu thập thông tin địa điểm (Points of Interest - POIs) chi tiết theo từ khóa và tọa độ địa lý chỉ định (vĩ độ, kinh độ, mức zoom), sau đó chuẩn hóa và xuất dữ liệu thành [Polars](https://pola.rs/) DataFrame (`pl.DataFrame`).
+**`map_miner`** (phiên bản `0.3.4`) là thư viện Python và công cụ cào dữ liệu (web scraper) bất đồng bộ hiệu năng cao dành riêng cho Google Maps. Dự án được thiết kế để thu thập thông tin địa điểm (Points of Interest - POIs) chi tiết theo từ khóa và tọa độ địa lý chỉ định (vĩ độ, kinh độ, mức zoom), sau đó chuẩn hóa và xuất dữ liệu thành [Polars](https://pola.rs/) DataFrame (`pl.DataFrame`).
 
 ### Mục tiêu thiết kế chính:
 
@@ -141,6 +141,14 @@ Tệp [`main.py`](file:///data/IMPORTANT/map_miner/main.py) đóng vai trò làm
   - `place_timeout: float = DEFAULT_PLACE_TIMEOUT`: Thời gian giới hạn cào mỗi place trong chế độ fallback (mặc định: `45.0s`).
   - `preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT`: Thời gian chờ gói tin XHR preview trong chế độ SPA (mặc định: `10000ms` / 10s).
   - `stagger_delay: tuple[float, float] | float = (1.5, 3.5)`: Khoảng nghỉ ngẫu nhiên khi khởi chạy các queries song song để triệt tiêu Concurrency Spike.
+  - `navigation_timeout: int = DEFAULT_TIMEOUT`: Thời gian chờ tối đa khi điều hướng trang Playwright (mặc định: `30000ms` / 30s).
+  - `captcha_timeout: float = DEFAULT_CAPTCHA_TIMEOUT`: Thời gian chờ tối đa khi giải reCAPTCHA v2 (mặc định: `85.0s`).
+  - `max_captcha_retries: int = DEFAULT_MAX_CAPTCHA_RETRIES`: Số lần tối đa thử xoay proxy và tạo context mới khi gặp Google sorry page (mặc định: `2`).
+  - `static_cache_dir: Path = DEFAULT_STATIC_CACHE_DIR`: Thư mục lưu trữ bộ nhớ đệm tài nguyên tĩnh (JS/CSS) ở tầng ứng dụng (mặc định: `.cache/static_assets`).
+  - `disk_cache_size: int = DEFAULT_DISK_CACHE_SIZE`: Giới hạn dung lượng tối đa cho Chromium disk cache (mặc định: `1073741824` bytes, tức 1 GB).
+  - `max_consecutive_empty_scrolls: int = MAX_CONSECUTIVE_EMPTY_SCROLLS`: Số lượt cuộn rỗng liên tiếp tối đa trước khi dừng cuộn feed (mặc định: `4`).
+  - `max_consecutive_out_of_range_scrolls: int = MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS`: Số lượt cuộn liên tiếp chỉ chứa địa điểm ngoài bán kính tối đa trước khi dừng cuộn feed (mặc định: `3`).
+  - `max_scroll_attempts_without_new_links: int = MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS`: Số lần thử cuộn tối đa khi chiều cao trang không đổi và không có link mới (mặc định: `5`).
 - **Xử lý đầu ra**:
   - Nhận về đối tượng `polars.DataFrame`.
   - Hỗ trợ xuất dữ liệu trực tiếp sang Excel (`pois.write_excel("out.xlsx")`), Parquet hoặc CSV.
@@ -151,25 +159,28 @@ Tệp [`main.py`](file:///data/IMPORTANT/map_miner/main.py) đóng vai trò làm
 
 Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua Playwright, tuyệt đối tuân thủ nguyên tắc **chỉ thu thập nội dung thô và bàn giao cho extractor**:
 
+> [!NOTE]
+> **Quy chuẩn Public API Surface**: Module `scraper.py` chỉ công khai duy nhất hàm entrypoint [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) và các hằng số cấu hình public (`DEFAULT_*`, `MAX_*`) trong `__all__`. Toàn bộ các hàm và class điều phối/phụ trợ nội bộ (`_create_browser_context`, `_scrape_query_spa`, `_get_place_urls`, `_process_link`, `_global_route_handler`, `_safe_close_page`, `_safe_close_context`, `_safe_close_browser`, `_pass_consent`, `_handle_captcha_if_present`, `_find_feed_selector`, `_scroll_feed`, `_is_feed_at_end`, `_is_no_results_page`, `_PreviewInterceptor`) đều là private internal helpers (tiền tố `_`) nhằm tối giản tối đa diện tích bề mặt API và bảo vệ tính đóng gói kiến trúc.
+
 #### 1. Kiến trúc Hai Chế Độ Vận Hành:
-- **Chế độ SPA Navigation ([`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L411-L605) - Mặc định `use_spa=True`)**:
+- **Chế độ SPA Navigation ([`_scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) - Mặc định `use_spa=True`)**:
   - Khởi tạo **duy nhất 1 tab trình duyệt** cho mỗi truy vấn tìm kiếm.
   - Sau khi trang feed hiển thị, duyệt qua các phần tử thẻ địa điểm (`a[href*="/maps/place/"]`).
   - Kích hoạt sự kiện click client-side: `await el.evaluate("e => e.click()")` (hoặc fallback `el.click(force=True)` nếu bị che khuất).
   - Lắng nghe response XHR tương ứng bằng `search_page.expect_response(is_matching_preview, timeout=preview_timeout_ms)` (cấu hình qua tham số `preview_timeout`, mặc định `DEFAULT_SPA_PREVIEW_TIMEOUT = 10000` ms).
   - Triệt tiêu 85-90% lượng request mạng thừa do không cần mở tab mới và không phải tải lại mã nguồn ứng dụng web nặng nề của Google Maps.
   - Cơ chế tự phục hồi: Thẻ địa điểm chỉ được đánh dấu là `processed_links` sau khi click thành công, đảm bảo các phần tử chưa click được sẽ được thử lại trong các lượt cuộn kế tiếp.
-- **Chế độ Multi-page Fallback ([`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L305-L409) -> [`process_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L608-L745) - Khi `use_spa=False`)**:
-  - `get_place_urls`: Cuộn feed tìm kiếm và thu thập toàn bộ danh sách URL `/maps/place/...`.
-  - `process_link`: Mở tab con riêng biệt cho từng URL dưới sự kiểm soát của `asyncio.Semaphore(n_semaphore)`, hỗ trợ cơ chế Early Exit khi nhận preview XHR, tự động thử lại 2 lần khi gặp lỗi mạng.
+- **Chế độ Multi-page Fallback ([`_get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) -> [`_process_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) - Khi `use_spa=False`)**:
+  - `_get_place_urls`: Cuộn feed tìm kiếm và thu thập toàn bộ danh sách URL `/maps/place/...`.
+  - `_process_link`: Mở tab con riêng biệt cho từng URL dưới sự kiểm soát của `asyncio.Semaphore(n_semaphore)`, hỗ trợ cơ chế Early Exit khi nhận preview XHR, tự động thử lại 2 lần khi gặp lỗi mạng.
 
 #### 2. Cơ Chế Chống Race Condition ([`is_preview_response_for_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L281-L302)):
 - Trong môi trường SPA hoặc mạng trễ, gói tin XHR của địa điểm click trước đó có thể phản hồi muộn khi tab đang xử lý địa điểm mới.
 - [`is_preview_response_for_link`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L281-L302) phân tích chuỗi định danh Hex ID đặc thù dạng `0x[0-9a-fA-F]+:0x[0-9a-fA-F]+` trong canonical link và kiểm tra sự hiện diện chính xác của Hex ID này trong URL của gói tin preview XHR `/maps/preview/place`.
 - Chuẩn hóa toàn bộ URL và xử lý triệt để ký tự phân cách mã hóa phần trăm (`%3a` hoặc `%3A`), loại bỏ hoàn toàn hiện tượng rò rỉ dữ liệu chéo (cross-place data leakage).
 
-#### 3. Quản Lý Tài Nguyên & Tối Ưu Băng Thông Toàn Cục ([`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L106-L133)):
-- Đăng ký bộ định tuyến mạng toàn ngữ cảnh (`context.route("**/*", global_route_handler)`):
+#### 3. Quản Lý Tài Nguyên & Tối Ưu Băng Thông Toàn Cục ([`_global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py)):
+- Đăng ký bộ định tuyến mạng toàn ngữ cảnh (`context.route("**/*", _global_route_handler)`):
   - **Chặn loại tài nguyên nặng (`BLOCKED_RESOURCE_TYPES`)**: `image`, `media`, `font`.
   - **Chặn các URL ngốn băng thông & tracking (`BLOCKED_URL_PATTERNS`)**: Gói gạch bản đồ vector và ảnh vệ tinh (`/maps/vt`, `/vt/pb=`, `/vt/data=`, `khms`, `/kh/v=`, `google.com/vt`), telemetry & logging (`google-analytics.com`, `play.google.com/log`, `stats.g.doubleclick.net`, `/gen_204`, `client_204`, `cspreport`, `/maps/photometa`), CDN hình ảnh (`googleusercontent.com`, `ggpht.com`, `streetviewpixels`).
   - **Bảo toàn lưu lượng xác thực**: Luôn cho phép mọi request chứa chuỗi `recaptcha` đi qua bình thường (`await route.continue_()`).
@@ -183,20 +194,20 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
 - **Định tuyến Direct cho Static Assets (Proxy Bypass) & Application-Level Route Cache**:
   - Khai báo hằng số tiện ích [`DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com,fonts.gstatic.com,apis.google.com,ssl.gstatic.com"`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py).
   - Khai báo hằng số [`DEFAULT_STATIC_CACHE_DIR = Path(".cache") / "static_assets"`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py).
-  - Cơ chế **Application-Level Route Cache** trong [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): Chặn bắt các request static JS/CSS (`/maps/_/js/`, `/maps/_/ss/`, `/maps/res/`, và static extensions trên `gstatic.com`), tính sha256 URL hash để tra cứu tệp đệm trên đĩa. Trả về ngay lập tức với `status=200`, `x-cache: HIT-ROUTE-CACHE` khi cache hit, hoặc tự động tải về qua `route.fetch()` và lưu đệm trên đĩa cho các lần gọi kế tiếp. Bỏ qua và bảo toàn 100% các endpoint động (`/maps/preview/`, `/maps/rpc/`, `/maps/search/`, `sorry/`, `recaptcha`).
+  - Cơ chế **Application-Level Route Cache** trong [`_global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): Chặn bắt các request static JS/CSS (`/maps/_/js/`, `/maps/_/ss/`, `/maps/res/`, và static extensions trên `gstatic.com`), tính sha256 URL hash để tra cứu tệp đệm trên đĩa. Trả về ngay lập tức với `status=200`, `x-cache: HIT-ROUTE-CACHE` khi cache hit, hoặc tự động tải về qua `route.fetch()` và lưu đệm trên đĩa cho các lần gọi kế tiếp. Bỏ qua và bảo toàn 100% các endpoint động (`/maps/preview/`, `/maps/rpc/`, `/maps/search/`, `sorry/`, `recaptcha`).
   - Hàm [`_normalize_proxy`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py) và [`ProxyRotator`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py) chuẩn hóa và bảo toàn nguyên vẹn trường `bypass` trong `ProxySettings`.
-  - [`create_browser_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) nhận `geo_coordinates: Point` bắt buộc để cấu hình `geolocation` (`latitude`, `longitude`) và quyền `permissions: ["geolocation"]`, đồng thời chuyển giao trực tiếp `proxy` (gồm `server`, `username`, `password`, `bypass`) vào `browser.new_context`, kích hoạt cơ chế bypass proxy của Playwright / Chromium cho các domain static assets, tiết kiệm băng thông proxy dân cư và giảm độ trễ tải trang.
+  - [`_create_browser_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) nhận `geo_coordinates: Point` bắt buộc để cấu hình `geolocation` (`latitude`, `longitude`) và quyền `permissions: ["geolocation"]`, đồng thời chuyển giao trực tiếp `proxy` (gồm `server`, `username`, `password`, `bypass`) vào `browser.new_context`, kích hoạt cơ chế bypass proxy của Playwright / Chromium cho các domain static assets, tiết kiệm băng thông proxy dân cư và giảm độ trễ tải trang.
 
 #### 4. Vượt Cookie Consent & Phát Hiện CAPTCHA:
-- [`pass_consent`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L139-L168): Sử dụng biểu thức chính quy đa ngôn ngữ `CONSENT_BUTTON_REGEX` nhận diện các nút từ chối/chấp nhận (Reject all, Từ chối tất cả, Alle ablehnen, Tout refuser, Rechazar todo, Rifiuta tutto...) cùng fallback form nút bấm.
-- [`handle_captcha_if_present`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L171-L193): Tự động phát hiện URL `sorry/index` hoặc văn bản thông báo *"Our systems have detected unusual traffic"*, kích hoạt [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388).
+- [`_pass_consent`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): Sử dụng biểu thức chính quy đa ngôn ngữ `CONSENT_BUTTON_REGEX` nhận diện các nút từ chối/chấp nhận (Reject all, Từ chối tất cả, Alle ablehnen, Tout refuser, Rechazar todo, Rifiuta tutto...) cùng fallback form nút bấm.
+- [`_handle_captcha_if_present`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): Tự động phát hiện URL `sorry/index` hoặc văn bản thông báo *"Our systems have detected unusual traffic"*, kích hoạt [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388).
 
 #### 5. Quản Lý Vòng Đời Trang An Toàn (Zero Leaks) & Graceful Shutdown:
-- **Bộ Tiện Ích Giải Phóng An Toàn (`safe_close_page`, `safe_close_context`, `safe_close_browser`)**:
+- **Bộ Tiện Ích Giải Phóng An Toàn (`_safe_close_page`, `_safe_close_context`, `_safe_close_browser`)**:
   - Hóa giải triệt để bẫy `asyncio.shield()` trong Python asyncio: Khi task cha bị huỷ (`CancelledError`), việc gọi `await asyncio.shield(coro)` thông thường sẽ ngay lập tức ném lại `CancelledError` mà không chờ `coro` hoàn thành, dẫn đến việc tài nguyên (`BrowserContext.close()`, `Page.close()`) bị bỏ rơi chạy ngầm và bị tiêu huỷ giữa chừng (`Task was destroyed but it is pending!`).
-  - Các hàm `safe_close_*` tạo task độc lập `close_task = asyncio.create_task(...)`, bọc trong `asyncio.shield(close_task)`, và khi bắt `asyncio.CancelledError` sẽ chủ động `await close_task` để đảm bảo tài nguyên Chromium được dọn dẹp triệt để trước khi lan truyền tín hiệu huỷ.
-  - Trong [`safe_close_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): Thực hiện `await context.unroute("**/*")` trước khi đóng context để ngắt hoàn toàn mọi listener của route handler.
-- **Quản Lý Vòng Đời Task Trong [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py)**:
+  - Các hàm `_safe_close_*` tạo task độc lập `close_task = asyncio.create_task(...)`, bọc trong `asyncio.shield(close_task)`, và khi bắt `asyncio.CancelledError` sẽ chủ động `await close_task` để đảm bảo tài nguyên Chromium được dọn dẹp triệt để trước khi lan truyền tín hiệu huỷ.
+  - Trong [`_safe_close_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py): Thực hiện `await context.unroute("**/*")` trước khi đóng context để ngắt hoàn toàn mọi listener của route handler.
+- **Quản Lý Vòng Đời Task Trong [`_global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py)**:
   - Quản lý toàn bộ task route handler đang chạy bằng tập hợp `_active_route_tasks: set[asyncio.Task[Any]] = set()`.
   - Bắt trọn vẹn `(PlaywrightError, asyncio.CancelledError)` và kết thúc sạch sẽ, tuyệt đối không gọi lại `await route.continue_()` khi context/target đã đóng, triệt tiêu 100% lỗi pending task và rò rỉ kết nối driver.
 - Ẩn dấu vết tự động hóa bằng cách xóa thuộc tính `navigator.webdriver` qua `context.add_init_script`, giả lập viewport ngẫu nhiên và cờ `--disable-blink-features=AutomationControlled`.
@@ -224,27 +235,29 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
     * `scrape_query_spa` và `get_place_urls` nhận collector dạng mutable list/set.
     * Trong `run_spa_query` và `run_get_urls`, nếu `asyncio.wait_for` chạm `TimeoutError` (310s), hệ thống **bảo toàn và trả về toàn bộ kết quả trong collector thay vì trả về rỗng**, cứu vãn 100% dữ liệu đã bóc tách được trước đó.
 
-#### 7. Hệ Thống Hằng Số Cấu Hình Truyền Thống Độc Lập Ở Cấp Module:
-- **Hệ Thống Constant Độc Lập Ở Cấp Module**: Không sử dụng dataclass trung gian, toàn bộ các tham số cấu hình mặc định (timeouts, guardrails, bộ nhớ đệm, retries, concurrency delays) được khai báo trực tiếp dưới dạng các hằng số độc lập ở cấp module [`scraper.py`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py):
-  * `DEFAULT_TIMEOUT: int = 30000` (ms / 30s - timeout điều hướng trang Playwright)
-  * `DEFAULT_QUERY_TIMEOUT: float = 300.0` (giây / 5 phút - timeout tối đa cho một query tìm kiếm)
-  * `DEFAULT_PLACE_TIMEOUT: float = 45.0` (giây - timeout bóc tách một địa điểm trong fallback mode)
-  * `DEFAULT_CAPTCHA_TIMEOUT: float = 85.0` (giây - timeout giải quyết reCAPTCHA)
-  * `DEFAULT_SPA_PREVIEW_TIMEOUT: float | int = 10000` (ms / 10s - timeout chờ phản hồi XHR preview)
-  * `DEFAULT_RANGE_LIMIT: float = 10000.0` (mét / 10 km - bán kính tìm kiếm tối đa từ tọa độ tâm)
-  * `DEFAULT_MAX_CAPTCHA_RETRIES: int = 2` (số lần thử lại tối đa khi gặp CAPTCHA sorry page)
-  * `DEFAULT_STAGGER_DELAY: tuple[float, float] | float = (1.5, 3.5)` (khoảng trễ ngẫu nhiên khởi động concurrent queries)
-  * `DEFAULT_CACHE_DIR: Path | None = Path(".cache") / "chromium_cache"` (thư mục bộ nhớ đệm Chromium disk cache)
-  * `DEFAULT_STATIC_CACHE_DIR: Path = Path(".cache") / "static_assets"` (thư mục cache tài nguyên tĩnh)
-  * `DEFAULT_DISK_CACHE_SIZE: int = 1073741824` (1 GB - dung lượng tối đa disk cache)
-- **Hằng Số Điều Khiển Vòng Lặp Cuộn Trang (Scroll Guardrails)**:
-  * `MAX_CONSECUTIVE_EMPTY_SCROLLS: int = 4` (dừng cuộn khi 4 lượt liên tiếp không tìm thấy địa điểm mới)
-  * `MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS: int = 3` (dừng cuộn khi 3 lượt liên tiếp toàn bộ địa điểm mới đều nằm ngoài bán kính `range_limit`)
-  * `MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS: int = 5` (dừng cuộn khi chiều cao trang không đổi và không có link mới)
+#### 7. Triết Lý Thiết Kế Tối Giản Cực Đại (Zero Module Constants - Pure Parameter Defaults):
+- **Không Còn Hằng Số Cấu Hình Cấp Module trong `scraper.py`**: Triệt tiêu hoàn toàn 14 hằng số cấu hình cấp module (`DEFAULT_*`, `MAX_*`) trong `scraper.py`. Toàn bộ giá trị cấu hình mặc định (30000, 300.0, 45.0, 85.0, 10000, 10000.0, 2, (1.5, 3.5), Path(".cache") / "chromium_cache", Path(".cache") / "static_assets", 1073741824, 4, 3, 5) được khai báo trực tiếp làm default value cho các tham số trong signature của `scrape_google_maps` và các private helpers (`_create_browser_context`, `_global_route_handler`, `_scrape_query_spa`, `_get_place_urls`, `_process_link`, `_handle_captcha_if_present`).
+- **Tuân Thủ Tuyệt Đối Không Dùng Magic Numbers trong Thân Hàm**: Toàn bộ logic bên trong thân hàm (`if`, `while`, timeout, so sánh, logging...) chỉ tham chiếu trực tiếp đến tên các biến tham số (`navigation_timeout`, `query_timeout`, `place_timeout`, `captcha_timeout`, `preview_timeout`, `range_limit`, `max_captcha_retries`, `stagger_delay`, `cache_dir`, `static_cache_dir`, `disk_cache_size`, `max_consecutive_empty_scrolls`, `max_consecutive_out_of_range_scrolls`, `max_scroll_attempts_without_new_links`). Tuyệt đối không hardcode magic numbers vào logic xử lý.
+- **Export Đơn Nhất & Trong Sạch**: File `src/map_miner/scraper.py` chỉ export duy nhất `scrape_google_maps` trong `__all__ = ["scrape_google_maps"]`. `src/map_miner/__init__.py` chỉ export `scrape_google_maps` từ `scraper`, không còn re-export bất kỳ hằng số cấu hình nào từ scraper.
+- **14 Tham Số Cấu Hình Tương Ứng**:
+  * `navigation_timeout: int = 30000` (ms / 30s - timeout điều hướng trang Playwright)
+  * `query_timeout: float = 300.0` (giây / 5 phút - timeout tối đa cho một query tìm kiếm)
+  * `place_timeout: float = 45.0` (giây - timeout bóc tách một địa điểm trong fallback mode)
+  * `captcha_timeout: float = 85.0` (giây - timeout giải quyết reCAPTCHA)
+  * `preview_timeout: float = 10000` (ms / 10s - timeout chờ phản hồi XHR preview)
+  * `range_limit: float = 10000.0` (mét / 10 km - bán kính tìm kiếm tối đa từ tọa độ tâm)
+  * `max_captcha_retries: int = 2` (số lần thử lại tối đa khi gặp CAPTCHA sorry page)
+  * `stagger_delay: tuple[float, float] | float = (1.5, 3.5)` (khoảng trễ ngẫu nhiên khởi động concurrent queries)
+  * `cache_dir: Path | None = Path(".cache") / "chromium_cache"` (thư mục bộ nhớ đệm Chromium disk cache)
+  * `static_cache_dir: Path = Path(".cache") / "static_assets"` (thư mục cache tài nguyên tĩnh)
+  * `disk_cache_size: int = 1073741824` (1 GB - dung lượng tối đa disk cache)
+  * `max_consecutive_empty_scrolls: int = 4` (dừng cuộn khi 4 lượt liên tiếp không tìm thấy địa điểm mới)
+  * `max_consecutive_out_of_range_scrolls: int = 3` (dừng cuộn khi 3 lượt liên tiếp toàn bộ địa điểm mới đều nằm ngoài bán kính `range_limit`)
+  * `max_scroll_attempts_without_new_links: int = 5` (dừng cuộn khi chiều cao trang không đổi và không có link mới)
 - **Kiến Trúc Rõ Ràng, Tối Giản & Truyền Tham Số Trực Tiếp**:
   * Loại bỏ hoàn toàn các lớp trung gian (như `ScraperConfig`), không còn các biến phân giải `eff_*`.
-  * Các hàm (`scrape_google_maps`, `scrape_query_spa`, `get_place_urls`) sử dụng trực tiếp các tham số truyền vào hàm với giá trị mặc định liên kết trực tiếp tới các hằng số `DEFAULT_*`.
-  * Export công khai các hằng số cấu hình chuẩn (`DEFAULT_*`, `MAX_*`) tại `map_miner` và `map_miner.scraper`.
+  * Hàm entrypoint `scrape_google_maps` nhận đầy đủ 14 tham số cấu hình nói trên.
+  * Toàn bộ 14 tham số cấu hình được truyền xuyên suốt và trực tiếp xuống các private helpers nội bộ (`_create_browser_context`, `_global_route_handler`, `_scrape_query_spa`, `_get_place_urls`, `_process_link`), cho phép tùy biến linh hoạt từ cấp độ cao nhất mà vẫn bảo vệ tính bao đóng kiến trúc.
 
 ---
 
@@ -518,13 +531,13 @@ uv run ty check .
    - `test_scrape_google_maps_context_cleanup_on_error`: Kiểm thử bảo toàn nguyên tắc Zero Leaks khi tác vụ cào gặp ngoại lệ.
    - `test_scrape_google_maps_with_cache_dir`: Kiểm thử gán đúng cờ `--disk-cache-dir` và `--disk-cache-size` khi truyền `cache_dir`, tự động tạo thư mục cache trên đĩa.
    - `test_scrape_google_maps_without_cache_dir`: Kiểm thử không gán cờ disk cache khi `cache_dir=None`.
-   - `test_scrape_google_maps_default_cache_dir`: Kiểm thử gán cache mặc định `DEFAULT_CACHE_DIR` (`.cache/chromium_cache`) và kích hoạt cờ disk cache.
+   - `test_scrape_google_maps_default_cache_dir`: Kiểm thử gán cache mặc định `.cache/chromium_cache` và kích hoạt cờ disk cache.
    - `test_blocked_url_patterns_includes_telemetry`: Kiểm thử các mẫu URL lọc telemetry và photometa mới (`client_204`, `cspreport`, `/maps/photometa`).
    - `test_extract_coordinates_from_url`: Kiểm thử trích xuất tọa độ từ Google Maps URL (định dạng protobuf `!3d!4d`, viewport `@lat,lon`, URL-encoded, và xử lý an toàn input rác/lỗi).
    - `test_spa_early_drop`: Kiểm thử cơ chế Early Drop trong SPA mode loại bỏ thẻ địa điểm ngoài bán kính trước khi click và không gọi XHR preview.
    - `test_spa_no_early_exit_on_consecutive_out_of_range`: Kiểm thử SPA mode không ngắt sớm khi gặp chuỗi địa điểm ngoài bán kính liên tiếp, thực hiện Early Drop không click thẻ và tiếp tục cuộn feed.
    - `test_get_place_urls_early_drop`: Kiểm thử chế độ Multi-page Fallback `get_place_urls` thực hiện Early Drop các link ngoài bán kính và tiếp tục cuộn feed mà không dừng do ngưỡng liên tiếp.
-   - `test_scrape_google_maps_range_limit_default_upper_bound`: Kiểm thử mặc định áp dụng Upper Bound Guardrail `DEFAULT_RANGE_LIMIT = 10000.0` (10 km) khi không truyền `range_limit`.
+   - `test_scrape_google_maps_range_limit_default_upper_bound`: Kiểm thử mặc định áp dụng Upper Bound Guardrail 10000.0m (10 km) khi không truyền `range_limit`.
    - `test_scrape_google_maps_forwards_range_limit`: Kiểm thử chuyển tiếp chính xác tham số `range_limit` sang cả SPA và Fallback modes.
    - `test_spa_retry_on_captcha_blocked`: Kiểm thử tự động xoay proxy và retry khi gặp CAPTCHA trong SPA mode.
    - `test_handle_captcha_if_present_timeout`: Kiểm thử timeout an toàn của bộ xử lý CAPTCHA.
@@ -538,7 +551,7 @@ uv run ty check .
    - `test_scrape_google_maps_watchdog_timeout_spa`: Kiểm thử hard watchdog timeout bảo vệ toàn bộ tiến trình SPA.
    - `test_launch_args_webgl_and_stealth`: Kiểm thử `LAUNCH_ARGS` loại bỏ `--disable-gpu`, bổ sung `--enable-webgl` và giữ vững cờ chống automation.
    - `test_create_browser_context_modern_stealth_and_client_hints`: Kiểm thử khởi tạo context với Chrome 131 UA, HTTP Client Hints (`sec-ch-ua`, `sec-ch-ua-mobile`, `sec-ch-ua-platform`, `Accept-Language`), và script giả lập WebGL NVIDIA/RTX 3060, plugins, hardwareConcurrency, deviceMemory.
-   - `test_handle_captcha_if_present_default_and_custom_timeout`: Kiểm thử `handle_captcha_if_present` sử dụng hằng số `DEFAULT_CAPTCHA_TIMEOUT = 85.0s` và hỗ trợ tùy biến timeout.
+   - `test_handle_captcha_if_present_default_and_custom_timeout`: Kiểm thử `handle_captcha_if_present` mặc định timeout 85.0s và hỗ trợ tùy biến timeout.
    - `test_staggered_query_dispatch_spa`: Kiểm thử cơ chế Staggered Query Dispatch trong `scrape_google_maps` phân bổ khoảng nghỉ khởi chạy giữa các queries song song để triệt tiêu Concurrency Spike.
    - `test_preview_timeout_forwarding_in_scrape_google_maps`: Kiểm thử chuyển tiếp tham số `preview_timeout` sang hàm `scrape_query_spa`.
    - `test_static_route_cache_hit`: Xác thực fulfill thành công từ cache đĩa với status 200 và header `x-cache: HIT-ROUTE-CACHE`.
@@ -559,7 +572,7 @@ uv run ty check .
 
 1. **[ĐÃ HOÀN TẤT] Đóng gói thư viện chuẩn Python Package (`0.3.1`) & Dynamic Versioning**:
    - Tái cấu trúc mã nguồn vào thư mục chuẩn `src/map_miner/` với [`pyproject.toml`](file:///data/IMPORTANT/map_miner/pyproject.toml) xây dựng bằng `hatchling`.
-   - Đồng bộ exports sạch tại [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) (`__version__ = "0.3.1"`, `scrape_google_maps`, `extract_place_data`, `RecaptchaSolver`, `ProxyRotator`, `create_browser_context`, `DEFAULT_PROXY_BYPASS`, `DEFAULT_RANGE_LIMIT`).
+   - Đồng bộ exports sạch tại [`src/map_miner/__init__.py`](file:///data/IMPORTANT/map_miner/src/map_miner/__init__.py) (`__version__ = "0.3.4"`, `scrape_google_maps`, `extract_place_data`, `RecaptchaSolver`, `ProxyRotator`, `DEFAULT_PROXY_BYPASS`).
    - Đổi tên tệp chuẩn hóa `recaptcha_solver.py` (chứa class [`RecaptchaSolver`](file:///data/IMPORTANT/map_miner/src/map_miner/recaptcha_solver.py#L32-L388)).
 2. **[ĐÃ HOÀN TẤT] Kiến trúc SPA Navigation Mode mặc định (`use_spa=True`)**:
    - Triển khai [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py#L411-L605) duyệt và click trực tiếp trên feed, giảm **85% – 90%** số lượng HTTP requests thừa và tăng tốc thu thập dữ liệu lên ~0.3s – 0.5s/địa điểm.
