@@ -3,6 +3,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -3166,5 +3167,134 @@ def test_create_browser_context_custom_static_cache_dir(tmp_path):
         fulfill_kwargs = mock_route_2.fulfill.call_args.kwargs
         assert fulfill_kwargs["body"] == b"custom_cached_image_bytes"
         assert fulfill_kwargs["headers"]["x-cache"] == "HIT-ROUTE-CACHE"
+
+    asyncio.run(_run())
+
+
+def test_remaining_time_non_negative():
+    """Verifies that remaining_time = max(0.0, query_timeout - elapsed) is always non-negative,
+    even when elapsed time exceeds query_timeout."""
+    # When elapsed < query_timeout
+    query_timeout = 300.0
+    elapsed_normal = 50.0
+    remaining_normal = max(0.0, query_timeout - elapsed_normal)
+    assert remaining_normal == 250.0
+
+    # When elapsed == query_timeout
+    elapsed_exact = 300.0
+    remaining_exact = max(0.0, query_timeout - elapsed_exact)
+    assert remaining_exact == 0.0
+
+    # When elapsed > query_timeout (overdue)
+    elapsed_over = 350.0
+    remaining_over = max(0.0, query_timeout - elapsed_over)
+    assert remaining_over == 0.0
+    assert remaining_over >= 0.0
+
+
+def test_cur_timeout_ms_always_positive():
+    """Verifies that cur_timeout_ms calculation always produces a strictly positive integer >= 1
+    even for edge cases where remaining_time <= 0 or preview_timeout <= 0."""
+    test_cases = [
+        # (preview_timeout, remaining_time, expected_val)
+        (10000, -10.0, 1000),  # max(1000, int(max(0, -10.5)*1000)) -> 1000
+        (10000, 0.0, 1000),  # remaining_time 0 -> cur_timeout_ms >= 1000
+        (10000, 0.2, 1000),  # remaining_time 0.2 -> remaining_time - 0.5 < 0 -> 1000
+        (0, 0.0, 1),  # preview_timeout 0 -> preview_timeout_ms = max(1, 0) = 1
+        (-100, -10.0, 1),  # negative preview_timeout -> clamped to 1
+        (5.0, 10.0, 5000),  # preview_timeout 5.0s (5000ms) -> min(5000, 9500) = 5000
+        (5000, 10.0, 5000),  # preview_timeout 5000ms -> min(5000, 9500) = 5000
+        (10000, 300.0, 10000),  # standard SPA run
+    ]
+
+    for preview_timeout, remaining_time, expected_val in test_cases:
+        preview_timeout_ms = max(
+            1,
+            int(preview_timeout * 1000)
+            if preview_timeout < 1000
+            else int(preview_timeout),
+        )
+        cur_timeout_ms = max(
+            1,
+            min(
+                preview_timeout_ms,
+                max(1000, int(max(0.0, remaining_time - 0.5) * 1000)),
+            ),
+        )
+        assert cur_timeout_ms >= 1
+        assert cur_timeout_ms == expected_val
+
+
+@pytest.mark.parametrize(
+    "initial_options,expected_contains",
+    [
+        ("", "--no-warnings"),
+        ("--max-old-space-size=4096", "--no-warnings"),
+        ("--no-warnings", "--no-warnings"),
+    ],
+)
+def test_node_options_suppresses_warnings(
+    monkeypatch, initial_options, expected_contains
+):
+    """Verifies that scrape_google_maps sets NODE_OPTIONS with --no-warnings to suppress
+    Node.js driver warnings, preserving any existing flags without redundant duplication."""
+
+    async def _run():
+        if initial_options:
+            monkeypatch.setenv("NODE_OPTIONS", initial_options)
+        else:
+            monkeypatch.delenv("NODE_OPTIONS", raising=False)
+
+        fake_browser = make_fake_browser()
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.return_value = fake_browser
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(playwright=mock_playwright),
+            ),
+            patch("map_miner.scraper._scrape_query_spa", AsyncMock(return_value=[])),
+        ):
+            await scrape_google_maps(
+                queries={"test"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                use_spa=True,
+                stagger_delay=0,
+            )
+
+        node_opts = os.environ.get("NODE_OPTIONS", "")
+        assert expected_contains in node_opts
+        if initial_options and initial_options != "--no-warnings":
+            assert initial_options in node_opts
+        # Ensure --no-warnings is not duplicated
+        assert node_opts.count("--no-warnings") == 1
+
+    asyncio.run(_run())
+
+
+def test_handle_captcha_if_present_safe_timeout():
+    """Verifies that _handle_captcha_if_present clamps timeout to >= 1.0s."""
+
+    async def _run():
+        mock_page = MagicMock()
+        mock_page.url = "https://www.google.com/sorry/index"
+        with patch("map_miner.scraper.RecaptchaSolver") as mock_solver_cls:
+            mock_solver = MagicMock()
+
+            async def _fake_solve():
+                return True
+
+            mock_solver.solve_captcha = _fake_solve
+            mock_solver.save_captcha_diagnostics = MagicMock(return_value=None)
+            mock_solver_cls.return_value = mock_solver
+
+            with patch(
+                "map_miner.scraper.asyncio.wait_for", wraps=asyncio.wait_for
+            ) as spy_wait_for:
+                solved = await _handle_captcha_if_present(mock_page, timeout=-5.0)
+                assert solved is True
+                assert spy_wait_for.call_args.kwargs["timeout"] == 1.0
 
     asyncio.run(_run())

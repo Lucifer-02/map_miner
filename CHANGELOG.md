@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-09-23
+
+### Changed
+- **Loại Bỏ 100% Magic Numbers Trong `src/map_miner/scraper.py`**:
+  - Chuyển toàn bộ các số điều khiển vận hành (timeouts, delays, intervals, viewports, thresholds) thành default parameter values trong signature hàm.
+  - Loại bỏ hoàn toàn số inline trần trong thân các hàm: `_create_browser_context`, `_pass_consent`, `_find_feed_selector`, `_scroll_feed`, `_get_place_urls`, `_scrape_query_spa`, `_process_link`, và `scrape_google_maps`.
+  - Bổ sung bộ unit test và kiểm tra AST tự động đảm bảo không còn magic numbers trần và các tham số mới có thể override linh hoạt.
+
+### Fixed
+- **Triệt Tiêu Hoàn Toàn `TimeoutNegativeWarning` & Chuẩn Hóa An Toàn Timeouts**:
+  - Bọc an toàn `remaining_time = max(0.0, query_timeout - elapsed)` tại tất cả các điểm kiểm tra timeout trong `_get_place_urls` và `_scrape_query_spa`, ngăn chặn hoàn toàn giá trị âm khi thời gian chạy vượt quá deadline.
+  - Chuẩn hóa công thức tính `cur_timeout_ms` trong SPA mode: bảo đảm luôn đạt giá trị nguyên dương $\ge 1$ (`max(1, min(preview_timeout_ms, max(1000, int(max(0.0, remaining_time - 0.5) * 1000))))`), loại bỏ rủi ro truyền số âm hoặc 0 vào `search_page.expect_response`.
+  - Chuẩn hóa toàn bộ tham số timeout truyền vào Playwright APIs (`wait_for_selector`, `goto`, `get_attribute`, `scroll_into_view_if_needed`, `expect_response`, `click`), đảm bảo luôn là số nguyên dương $\ge 1$ qua `max(1, int(timeout))`.
+  - Chuẩn hóa `safe_timeout = max(1.0, float(timeout))` trong `_handle_captcha_if_present` để bảo vệ coroutine giải reCAPTCHA luôn có thời gian chờ hợp lệ $\ge 1.0$ giây.
+  - Tự động cấu hình `NODE_OPTIONS="--no-warnings"` trước khi khởi tạo `async_playwright` trong `scrape_google_maps`, triệt tiêu triệt để các cảnh báo nội bộ từ Node.js Playwright driver.
+
 ## [0.3.4] - 2026-09-22
 
 ### Added

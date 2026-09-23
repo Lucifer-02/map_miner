@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import itertools
 import logging
+import os
 import random
 import re
 import time
@@ -318,6 +319,9 @@ async def _create_browser_context(
         | None
     ) = None,
     static_cache_dir: Path = Path(".cache") / "static_assets",
+    viewport_width: int = 1920,
+    viewport_height: int = 1080,
+    viewport_variance: int = 50,
 ) -> BrowserContext:
     """Creates and configures an isolated BrowserContext with proxy settings,
     stealth overrides, geolocation, and global resource blocking.
@@ -330,6 +334,9 @@ async def _create_browser_context(
             Proxy settings for this context. Defaults to None.
         static_cache_dir (Path, optional): Directory to store static assets cache.
             Defaults to Path(".cache") / "static_assets".
+        viewport_width (int, optional): Base viewport width. Defaults to 1920.
+        viewport_height (int, optional): Base viewport height. Defaults to 1080.
+        viewport_variance (int, optional): Random pixel variance added to viewport dimensions. Defaults to 50.
 
     Returns:
         BrowserContext: Configured isolated browser context.
@@ -352,8 +359,10 @@ async def _create_browser_context(
         "java_script_enabled": True,
         "accept_downloads": False,
         "viewport": {
-            "width": 1920 + random.randint(-50, 50),
-            "height": 1080 + random.randint(-50, 50),
+            "width": viewport_width
+            + random.randint(-viewport_variance, viewport_variance),
+            "height": viewport_height
+            + random.randint(-viewport_variance, viewport_variance),
         },
         "permissions": ["geolocation"],
         "timezone_id": "Asia/Ho_Chi_Minh",
@@ -437,17 +446,24 @@ async def _create_browser_context(
     return context
 
 
-async def _pass_consent(page: Page) -> bool:
-    """
-    Attempts to dismiss Google's cookie/privacy consent banner
+async def _pass_consent(page: Page, dismiss_delay: float = 1.0) -> bool:
+    """Attempts to dismiss Google's cookie/privacy consent banner
     across multiple languages safely.
+
+    Args:
+        page (Page): Target browser page.
+        dismiss_delay (float, optional): Delay in seconds after clicking consent button.
+            Defaults to 1.0.
+
+    Returns:
+        bool: True if consent banner was dismissed, False otherwise.
     """
     logger.debug("Checking for consent dialog...")
     try:
         button = page.get_by_role("button", name=CONSENT_BUTTON_REGEX)
         if await button.count() > 0 and await button.first.is_visible():
             await button.first.click()
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(dismiss_delay)
             logger.debug("Consent dismissed via button.")
             return True
     except PlaywrightError as e:
@@ -460,7 +476,7 @@ async def _pass_consent(page: Page) -> bool:
             btn = forms.locator("button")
             if await btn.count() > 0 and await btn.first.is_visible():
                 await btn.first.click()
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(dismiss_delay)
                 logger.debug("Consent dismissed via form button.")
                 return True
     except PlaywrightError as e:
@@ -497,9 +513,12 @@ async def _handle_captcha_if_present(
             except Exception as e:  # noqa: BLE001
                 logger.debug("Failed to save captcha diagnostics: %s", e)
         try:
-            return await asyncio.wait_for(solver.solve_captcha(), timeout=timeout)
+            safe_timeout = max(1.0, float(timeout))
+            return await asyncio.wait_for(solver.solve_captcha(), timeout=safe_timeout)
         except TimeoutError:
-            logger.warning("🚨 reCAPTCHA solving timed out after %.1fs%s", timeout, tag)
+            logger.warning(
+                "🚨 reCAPTCHA solving timed out after %.1fs%s", safe_timeout, tag
+            )
             return False
         except RecaptchaBlockedError as e:
             logger.warning(
@@ -514,9 +533,19 @@ async def _handle_captcha_if_present(
 
 
 async def _find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
-    """Locates the results feed container selector on a Google Maps search page."""
+    """Locates the results feed container selector on a Google Maps search page.
+
+    Args:
+        page (Page): Target browser page.
+        timeout (int, optional): Timeout in ms to wait for the feed container. Defaults to 15000.
+
+    Returns:
+        str | None: Active feed selector if found, None otherwise.
+    """
     try:
-        await page.wait_for_selector('[role="feed"]', state="visible", timeout=timeout)
+        await page.wait_for_selector(
+            '[role="feed"]', state="visible", timeout=max(1, int(timeout))
+        )
         return '[role="feed"]'
     except PlaywrightTimeoutError:
         for selector in FEED_FALLBACK_SELECTORS[1:]:
@@ -525,12 +554,25 @@ async def _find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
     return None
 
 
-async def _scroll_feed(page: Page, feed_selector: str) -> None:
-    """Scrolls down the search results feed container."""
+async def _scroll_feed(
+    page: Page,
+    feed_selector: str,
+    scroll_delta_y: int = 5000,
+    scroll_delay_range: tuple[float, float] = (1.0, 1.6),
+) -> None:
+    """Scrolls down the search results feed container.
+
+    Args:
+        page (Page): Target browser page.
+        feed_selector (str): CSS or XPath selector of feed container.
+        scroll_delta_y (int, optional): Vertical scroll delta in pixels. Defaults to 5000.
+        scroll_delay_range (tuple[float, float], optional): Range of random sleep delay
+            after scrolling. Defaults to (1.0, 1.6).
+    """
     try:
         feed_locator = page.locator(feed_selector).first
         await feed_locator.hover()
-        await page.mouse.wheel(0, 5000)
+        await page.mouse.wheel(0, scroll_delta_y)
     except PlaywrightError as e:
         logger.debug("Wheel scroll error: %s", e)
 
@@ -545,7 +587,7 @@ async def _scroll_feed(page: Page, feed_selector: str) -> None:
     except PlaywrightError as e:
         logger.debug("Scroll evaluation error: %s", e)
 
-    await asyncio.sleep(random.uniform(1.0, 1.6))
+    await asyncio.sleep(random.uniform(scroll_delay_range[0], scroll_delay_range[1]))
 
 
 async def _is_feed_at_end(page: Page) -> bool:
@@ -639,6 +681,9 @@ async def _get_place_urls(
     max_consecutive_empty_scrolls: int = 4,
     max_consecutive_out_of_range_scrolls: int = 3,
     max_scroll_attempts_without_new_links: int = 5,
+    initial_delay_range: tuple[float, float] = (1.0, 2.5),
+    min_remaining_time: float = 2.0,
+    scroll_retry_delay: float = 1.5,
 ) -> set[str]:
     """Navigates the search feed and scrolls to collect place links.
 
@@ -670,6 +715,12 @@ async def _get_place_urls(
             Defaults to 3.
         max_scroll_attempts_without_new_links (int, optional): Max scroll attempts when height is unchanged before stopping.
             Defaults to 5.
+        initial_delay_range (tuple[float, float], optional): Range of random sleep delay after initial navigation.
+            Defaults to (1.0, 2.5).
+        min_remaining_time (float, optional): Minimum remaining time threshold in seconds before early exit.
+            Defaults to 2.0.
+        scroll_retry_delay (float, optional): Sleep delay in seconds when scroll height is unchanged.
+            Defaults to 1.5.
 
     Returns:
         set[str]: Collected place URLs.
@@ -688,9 +739,13 @@ async def _get_place_urls(
         logger.info("Navigating to search URL: %s", search_url)
 
         await search_page.goto(
-            search_url, wait_until="domcontentloaded", timeout=navigation_timeout
+            search_url,
+            wait_until="domcontentloaded",
+            timeout=max(1, int(navigation_timeout)),
         )
-        await asyncio.sleep(random.uniform(1.0, 2.5))
+        await asyncio.sleep(
+            random.uniform(initial_delay_range[0], initial_delay_range[1])
+        )
 
         if "consent" in search_page.url:
             await _pass_consent(search_page)
@@ -763,8 +818,8 @@ async def _get_place_urls(
 
         while True:
             elapsed = time.monotonic() - query_start
-            remaining_time = query_timeout - elapsed
-            if remaining_time <= 2.0:
+            remaining_time = max(0.0, query_timeout - elapsed)
+            if remaining_time <= min_remaining_time:
                 logger.warning(
                     "⚠️ Query '%s' reached timeout limit (%.1fs) in get_place_urls. Returning %d collected links.",
                     query,
@@ -870,7 +925,7 @@ async def _get_place_urls(
                     scroll_attempts_no_new,
                     max_scroll_attempts_without_new_links,
                 )
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(scroll_retry_delay)
                 if scroll_attempts_no_new >= max_scroll_attempts_without_new_links:
                     break
             else:
@@ -905,6 +960,19 @@ async def _scrape_query_spa(
     max_consecutive_out_of_range_scrolls: int = 3,
     max_scroll_attempts_without_new_links: int = 5,
     static_cache_dir: Path = Path(".cache") / "static_assets",
+    initial_delay_range: tuple[float, float] = (1.0, 2.0),
+    min_remaining_time: float = 2.0,
+    element_timeout: int = 1000,
+    pre_click_delay_range: tuple[float, float] = (0.3, 0.8),
+    min_preview_timeout_ms: int = 1000,
+    timeout_safety_margin: float = 0.5,
+    post_item_delay_range: tuple[float, float] = (0.15, 0.35),
+    post_scroll_delay_range: tuple[float, float] = (1.2, 2.2),
+    scroll_retry_delay: float = 1.5,
+    secondary_rescue_min_time: float = 5.0,
+    secondary_rescue_concurrency: int = 4,
+    secondary_rescue_cutoff: float = 3.0,
+    min_valid_fields: int = 3,
 ) -> list[dict[str, Any]]:
     """Scrapes Google Maps places using client-side SPA navigation:
 
@@ -947,6 +1015,29 @@ async def _scrape_query_spa(
             Defaults to 5.
         static_cache_dir (Path, optional): Directory to store static assets cache when creating rotated contexts.
             Defaults to Path(".cache") / "static_assets".
+        initial_delay_range (tuple[float, float], optional): Range of random sleep delay after initial navigation.
+            Defaults to (1.0, 2.0).
+        min_remaining_time (float, optional): Minimum remaining time threshold in seconds before early exit.
+            Defaults to 2.0.
+        element_timeout (int, optional): Element operation timeout in ms. Defaults to 1000.
+        pre_click_delay_range (tuple[float, float], optional): Random jitter delay range before clicking an item.
+            Defaults to (0.3, 0.8).
+        min_preview_timeout_ms (int, optional): Floor for preview response timeout in ms. Defaults to 1000.
+        timeout_safety_margin (float, optional): Safety margin in seconds subtracted from remaining time.
+            Defaults to 0.5.
+        post_item_delay_range (tuple[float, float], optional): Delay range after processing each item.
+            Defaults to (0.15, 0.35).
+        post_scroll_delay_range (tuple[float, float], optional): Delay range after scrolling feed.
+            Defaults to (1.2, 2.2).
+        scroll_retry_delay (float, optional): Sleep delay in seconds when scroll height is unchanged.
+            Defaults to 1.5.
+        secondary_rescue_min_time (float, optional): Minimum query remaining time to attempt secondary rescue.
+            Defaults to 5.0.
+        secondary_rescue_concurrency (int, optional): Maximum concurrency for secondary rescue. Defaults to 4.
+        secondary_rescue_cutoff (float, optional): Remaining time cutoff below which secondary rescue aborts.
+            Defaults to 3.0.
+        min_valid_fields (int, optional): Minimum fields required for a place dictionary to be valid.
+            Defaults to 3.
 
     Returns:
         list[dict[str, Any]]: List of place dictionaries.
@@ -976,9 +1067,11 @@ async def _scrape_query_spa(
             await search_page.goto(
                 search_url,
                 wait_until="domcontentloaded",
-                timeout=navigation_timeout,
+                timeout=max(1, int(navigation_timeout)),
             )
-            await asyncio.sleep(random.uniform(1.0, 2.0))
+            await asyncio.sleep(
+                random.uniform(initial_delay_range[0], initial_delay_range[1])
+            )
 
             if "consent" in search_page.url:
                 await _pass_consent(search_page)
@@ -1068,8 +1161,8 @@ async def _scrape_query_spa(
 
         while max_places is None or len(results) < max_places:
             elapsed = time.monotonic() - query_start
-            remaining_time = query_timeout - elapsed
-            if remaining_time <= 2.0:
+            remaining_time = max(0.0, query_timeout - elapsed)
+            if remaining_time <= min_remaining_time:
                 logger.warning(
                     "⚠️ Query '%s' reached timeout limit (%.1fs). Returning %d collected places.",
                     query,
@@ -1090,18 +1183,18 @@ async def _scrape_query_spa(
                     break
 
                 elapsed = time.monotonic() - query_start
-                remaining_time = query_timeout - elapsed
-                if remaining_time <= 2.0:
+                remaining_time = max(0.0, query_timeout - elapsed)
+                if remaining_time <= min_remaining_time:
                     logger.warning(
                         "⚠️ Query '%s' approaching timeout limit (%.1fs remaining). Returning %d collected places.",
                         query,
-                        remaining_time,
+                        max(0.0, remaining_time),
                         len(results),
                     )
                     break
 
                 try:
-                    link = await el.get_attribute("href", timeout=1000)
+                    link = await el.get_attribute("href", timeout=element_timeout)
                 except (PlaywrightError, TypeError):
                     link = None
                 if not link:
@@ -1136,21 +1229,32 @@ async def _scrape_query_spa(
                     return is_preview_response_for_link(resp, target)
 
                 # Human-like pre-click jitter delay
-                await asyncio.sleep(random.uniform(0.3, 0.8))
+                await asyncio.sleep(
+                    random.uniform(pre_click_delay_range[0], pre_click_delay_range[1])
+                )
 
-                preview_timeout_ms = (
+                preview_timeout_ms = max(
+                    1,
                     int(preview_timeout * 1000)
                     if preview_timeout < 1000
-                    else int(preview_timeout)
+                    else int(preview_timeout),
                 )
-                cur_timeout_ms = min(
-                    preview_timeout_ms,
-                    max(1000, int((remaining_time - 0.5) * 1000)),
+                cur_timeout_ms = max(
+                    1,
+                    min(
+                        preview_timeout_ms,
+                        max(
+                            min_preview_timeout_ms,
+                            int(
+                                max(0.0, remaining_time - timeout_safety_margin) * 1000
+                            ),
+                        ),
+                    ),
                 )
 
                 # Ensure element is scrolled into view before clicking
                 try:
-                    await el.scroll_into_view_if_needed(timeout=1000)
+                    await el.scroll_into_view_if_needed(timeout=element_timeout)
                 except PlaywrightError:
                     pass
 
@@ -1158,13 +1262,13 @@ async def _scrape_query_spa(
                 try:
                     async with search_page.expect_response(
                         is_matching_preview,
-                        timeout=cur_timeout_ms,
+                        timeout=max(1, int(cur_timeout_ms)),
                     ) as response_info:
                         try:
                             await el.evaluate("e => e.click()")
                         except PlaywrightError:
-                            await el.scroll_into_view_if_needed(timeout=1000)
-                            await el.click(force=True, timeout=1000)
+                            await el.scroll_into_view_if_needed(timeout=element_timeout)
+                            await el.click(force=True, timeout=element_timeout)
 
                     response = await response_info.value
                     preview_json = await response.text()
@@ -1215,7 +1319,7 @@ async def _scrape_query_spa(
                     if place_data and (
                         fields is not None
                         or "name" in place_data
-                        or len(place_data) >= 3
+                        or len(place_data) >= min_valid_fields
                     ):
                         if fields is None or "link" in fields:
                             place_data["link"] = link
@@ -1291,12 +1395,17 @@ async def _scrape_query_spa(
                         )
                         fallback_rescue_links.append(link)
 
-                await asyncio.sleep(random.uniform(0.15, 0.35))
+                await asyncio.sleep(
+                    random.uniform(post_item_delay_range[0], post_item_delay_range[1])
+                )
 
             if max_places is not None and len(results) >= max_places:
                 break
 
-            if (query_timeout - (time.monotonic() - query_start)) <= 2.0:
+            if (
+                max(0.0, query_timeout - (time.monotonic() - query_start))
+                <= min_remaining_time
+            ):
                 logger.warning(
                     "⚠️ Query '%s' reached timeout limit (%.1fs). Returning %d collected places.",
                     query,
@@ -1307,7 +1416,9 @@ async def _scrape_query_spa(
 
             await _scroll_feed(search_page, active_feed_selector)
             # Human-like post-scroll reading delay
-            await asyncio.sleep(random.uniform(1.2, 2.2))
+            await asyncio.sleep(
+                random.uniform(post_scroll_delay_range[0], post_scroll_delay_range[1])
+            )
 
             is_at_end = await _is_feed_at_end(search_page)
             remaining_links = await search_page.locator(
@@ -1359,7 +1470,7 @@ async def _scrape_query_spa(
                 and not has_unprocessed
             ):
                 scroll_attempts_no_new += 1
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(scroll_retry_delay)
                 if scroll_attempts_no_new >= max_scroll_attempts_without_new_links:
                     logger.debug("Stopping SPA scroll due to lack of new items.")
                     break
@@ -1369,20 +1480,28 @@ async def _scrape_query_spa(
 
         # Secondary fallback rescue for unresolved links via process_link if time permits
         if fallback_rescue_links and (max_places is None or len(results) < max_places):
-            remaining_time = query_timeout - (time.monotonic() - query_start)
-            if remaining_time > 5.0:
+            remaining_time = max(0.0, query_timeout - (time.monotonic() - query_start))
+            if remaining_time > secondary_rescue_min_time:
                 logger.info(
                     "Attempting secondary fallback rescue for %d unresolved links...",
                     len(fallback_rescue_links),
                 )
-                rescue_sem = asyncio.Semaphore(min(4, len(fallback_rescue_links)))
+                rescue_sem = asyncio.Semaphore(
+                    min(secondary_rescue_concurrency, len(fallback_rescue_links))
+                )
                 for f_link in fallback_rescue_links:
                     f_canon = f_link.split("?")[0]
                     if f_canon in processed_links:
                         continue
                     if max_places is not None and len(results) >= max_places:
                         break
-                    if (query_timeout - (time.monotonic() - query_start)) <= 3.0:
+                    if (
+                        max(
+                            0.0,
+                            query_timeout - (time.monotonic() - query_start),
+                        )
+                        <= secondary_rescue_cutoff
+                    ):
                         break
                     try:
                         f_data = await _process_link(
@@ -1398,7 +1517,9 @@ async def _scrape_query_spa(
                             captcha_timeout=captcha_timeout,
                         )
                         if f_data and (
-                            fields is not None or "name" in f_data or len(f_data) >= 3
+                            fields is not None
+                            or "name" in f_data
+                            or len(f_data) >= min_valid_fields
                         ):
                             processed_links.add(f_canon)
                             results.append(f_data)
@@ -1434,6 +1555,11 @@ async def _process_link(
     proxy_rotator: ProxyRotator | None = None,
     navigation_timeout: int = 30000,
     captcha_timeout: float = 85.0,
+    preview_wait_timeout: float = 4.5,
+    main_selector_timeout: int = 2000,
+    retry_delay_range: tuple[float, float] = (0.8, 1.5),
+    captcha_retry_delay_range: tuple[float, float] = (1.0, 2.0),
+    min_valid_fields: int = 3,
 ) -> dict[str, Any] | None:
     """Processes a single place link in multi-page fallback mode:
     - Pure I/O: intercepts rich network payload or collects HTML content
@@ -1451,6 +1577,13 @@ async def _process_link(
         proxy_rotator (ProxyRotator | None, optional): Proxy rotator. Defaults to None.
         navigation_timeout (int, optional): Navigation timeout in ms. Defaults to 30000.
         captcha_timeout (float, optional): CAPTCHA solving timeout in seconds. Defaults to 85.0.
+        preview_wait_timeout (float, optional): Timeout waiting for preview payload in seconds. Defaults to 4.5.
+        main_selector_timeout (int, optional): Timeout waiting for main content selector in ms. Defaults to 2000.
+        retry_delay_range (tuple[float, float], optional): Delay range in seconds before retry attempt.
+            Defaults to (0.8, 1.5).
+        captcha_retry_delay_range (tuple[float, float], optional): Delay range in seconds before CAPTCHA retry.
+            Defaults to (1.0, 2.0).
+        min_valid_fields (int, optional): Minimum fields required for valid place data. Defaults to 3.
 
     Returns:
         dict[str, Any] | None: Extracted place data dictionary, or None on failure.
@@ -1482,26 +1615,34 @@ async def _process_link(
                     await page.goto(
                         link,
                         wait_until="domcontentloaded",
-                        timeout=navigation_timeout,
+                        timeout=max(1, int(navigation_timeout)),
                     )
                 except PlaywrightTimeoutError:
                     logger.warning("  ❌ Timeout navigating to: %s", link)
                     if attempt < max_retries:
-                        await asyncio.sleep(random.uniform(0.8, 1.5))
+                        await asyncio.sleep(
+                            random.uniform(retry_delay_range[0], retry_delay_range[1])
+                        )
                         continue
                     return None
                 except PlaywrightError as e:
                     logger.error("  ❌ Navigation error for %s: %s", link, e)
                     if attempt < max_retries:
-                        await asyncio.sleep(random.uniform(0.8, 1.5))
+                        await asyncio.sleep(
+                            random.uniform(retry_delay_range[0], retry_delay_range[1])
+                        )
                         continue
                     return None
 
                 # Wait for preview API response
-                preview_json = await interceptor.wait_for_preview(timeout=4.5)
+                preview_json = await interceptor.wait_for_preview(
+                    timeout=preview_wait_timeout
+                )
                 if not preview_json:
                     try:
-                        await page.wait_for_selector("h1, [role='main']", timeout=2000)
+                        await page.wait_for_selector(
+                            "h1, [role='main']", timeout=main_selector_timeout
+                        )
                     except PlaywrightError:
                         pass
 
@@ -1515,7 +1656,7 @@ async def _process_link(
                     if place_data is not None and (
                         fields is not None
                         or "name" in place_data
-                        or len(place_data) >= 3
+                        or len(place_data) >= min_valid_fields
                     ):
                         if fields is None or "link" in fields:
                             place_data["link"] = link
@@ -1547,7 +1688,12 @@ async def _process_link(
                             "CAPTCHA blocked/unsolved in process_link, renewing proxy/circuit..."
                         )
                         proxy_rotator.renew()
-                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                    await asyncio.sleep(
+                        random.uniform(
+                            captcha_retry_delay_range[0],
+                            captcha_retry_delay_range[1],
+                        )
+                    )
                     continue
 
                 html_content = await page.content()
@@ -1566,7 +1712,9 @@ async def _process_link(
 
                 logger.warning("  ⚠️ Extraction returned None: %s", link)
                 if attempt < max_retries:
-                    await asyncio.sleep(random.uniform(0.8, 1.5))
+                    await asyncio.sleep(
+                        random.uniform(retry_delay_range[0], retry_delay_range[1])
+                    )
                     continue
                 return None
 
@@ -1578,7 +1726,9 @@ async def _process_link(
                     e,
                 )
                 if attempt < max_retries:
-                    await asyncio.sleep(random.uniform(0.8, 1.5))
+                    await asyncio.sleep(
+                        random.uniform(retry_delay_range[0], retry_delay_range[1])
+                    )
                 else:
                     return None
             finally:
@@ -1620,6 +1770,7 @@ async def scrape_google_maps(
     max_consecutive_empty_scrolls: int = 4,
     max_consecutive_out_of_range_scrolls: int = 3,
     max_scroll_attempts_without_new_links: int = 5,
+    watchdog_grace_period: float = 10.0,
 ) -> pl.DataFrame:
     """Scrapes Google Maps for places based on queries.
 
@@ -1673,6 +1824,8 @@ async def scrape_google_maps(
             Defaults to 3.
         max_scroll_attempts_without_new_links (int, optional): Maximum scroll attempts with unchanged height before stopping.
             Defaults to 5.
+        watchdog_grace_period (float, optional): Extra grace period in seconds added to query_timeout
+            for the hard watchdog timer. Defaults to 10.0.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.
@@ -1691,6 +1844,10 @@ async def scrape_google_maps(
                 f"--disk-cache-size={disk_cache_size}",
             ]
         )
+
+    node_options = os.environ.get("NODE_OPTIONS", "")
+    if "--no-warnings" not in node_options:
+        os.environ["NODE_OPTIONS"] = f"{node_options} --no-warnings".strip()
 
     async with async_playwright() as p:
         try:
@@ -1768,13 +1925,14 @@ async def scrape_google_maps(
                                 static_cache_dir=static_cache_dir,
                             )
                             return await asyncio.wait_for(
-                                coro, timeout=query_timeout + 10.0
+                                coro,
+                                timeout=query_timeout + watchdog_grace_period,
                             )
                         except TimeoutError:
                             logger.warning(
                                 "🚨 Hard watchdog timeout for query '%s' after %.1fs. Returning %d rescued places.",
                                 q,
-                                query_timeout + 10.0,
+                                query_timeout + watchdog_grace_period,
                                 len(collector),
                             )
                             return collector
@@ -1879,13 +2037,14 @@ async def scrape_google_maps(
                                 max_scroll_attempts_without_new_links=max_scroll_attempts_without_new_links,
                             )
                             return await asyncio.wait_for(
-                                coro, timeout=query_timeout + 10.0
+                                coro,
+                                timeout=query_timeout + watchdog_grace_period,
                             )
                         except TimeoutError:
                             logger.warning(
                                 "🚨 Hard watchdog timeout for get_place_urls on query '%s' after %.1fs. Returning %d rescued links.",
                                 q,
-                                query_timeout + 10.0,
+                                query_timeout + watchdog_grace_period,
                                 len(links_collector),
                             )
                             return links_collector

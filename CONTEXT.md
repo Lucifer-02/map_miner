@@ -227,10 +227,27 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
 - **Cơ Chế Dừng Cuộn Sớm Cải Tiến (Early-Stop Optimization)**:
   - **Cuộn rỗng liên tiếp (`MAX_CONSECUTIVE_EMPTY_SCROLLS = 4`)**: Khi 4 lượt cuộn liên tiếp không tìm thấy bất kỳ địa điểm hợp lệ mới nào, hệ thống dừng cuộn sớm.
   - **Cuộn ngoài bán kính liên tiếp (`MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS = 3`)**: Khi 3 lượt cuộn liên tiếp toàn bộ kết quả tìm thấy đều nằm ngoài `range_limit` (đặc biệt hiệu quả trong các query mật độ thấp như `courthouse`), hệ thống ngắt cuộn ngay lập tức vì Google Maps đã bắt đầu mở rộng tìm kiếm sang các địa phương xa xôi.
-- **Cơ Chế Cứu Vãn Dữ Liệu 2 Tầng (Two-tier Zero Data Loss Rescue)**:
-  - **Tầng 1 - Kiểm tra Deadline Chủ Động & Dynamic Preview Timeout**:
-    * Trong [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), tính `remaining_time = query_timeout - (time.monotonic() - query_start)`. Kiểm tra `remaining_time <= 2.0s` ngay trong vòng lặp duyệt từng thẻ địa điểm và trước khi cuộn feed để trả về dữ liệu an toàn trước khi watchdog bên ngoài kích hoạt.
-    * Tự động điều chỉnh động thời gian chờ preview XHR: `cur_timeout_ms = min(preview_timeout_ms, max(1000, int((remaining_time - 0.5) * 1000)))`.
+- **Cơ Chế Cứu Vãn Dữ Liệu 2 Tầng (Two-tier Zero Data Loss Rescue) & Chuẩn Hóa An Toàn Timeouts**:
+  - **Tầng 1 - Kiểm tra Deadline Chủ Động, Dynamic Preview Timeout & Triệt Tiêu `TimeoutNegativeWarning`**:
+    * Trong [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) và [`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), luôn bọc an toàn tính toán thời gian còn lại: `remaining_time = max(0.0, query_timeout - (time.monotonic() - query_start))` để triệt tiêu hoàn toàn khả năng phát sinh giá trị âm khi quá hạn.
+    * Kiểm tra deadline chủ động: `remaining_time <= 2.0s` ngay trong vòng lặp duyệt từng thẻ địa điểm và trước khi cuộn feed để trả về dữ liệu an toàn trước khi watchdog bên ngoài kích hoạt.
+    * Tự động điều chỉnh động thời gian chờ preview XHR:
+      ```python
+      preview_timeout_ms = max(
+          1,
+          int(preview_timeout * 1000) if preview_timeout < 1000 else int(preview_timeout),
+      )
+      cur_timeout_ms = max(
+          1,
+          min(
+              preview_timeout_ms,
+              max(1000, int(max(0.0, remaining_time - 0.5) * 1000)),
+          ),
+      )
+      ```
+    * **Bảo Vệ Timeout Playwright APIs $\ge 1$**: Chuẩn hóa toàn bộ tham số timeout truyền vào Playwright APIs (`wait_for_selector`, `goto`, `get_attribute`, `scroll_into_view_if_needed`, `expect_response`, `click`) luôn là số nguyên dương $\ge 1$ qua `max(1, int(timeout))`.
+    * **Chuẩn Hóa Timeout CAPTCHA**: Đảm bảo `safe_timeout = max(1.0, float(timeout))` trong `_handle_captcha_if_present` để thời gian giải reCAPTCHA không bao giờ âm hoặc bằng 0.
+    * **Ngăn Chặn Node.js Driver Warning**: Tự động cấu hình biến môi trường `NODE_OPTIONS="--no-warnings"` trước khi khởi tạo `async_playwright` trong `scrape_google_maps`, loại bỏ hoàn toàn các cảnh báo `TimeoutNegativeWarning` từ runtime Node.js ngầm định của Playwright.
   - **Tầng 2 - Cứu Dữ Liệu Khi Chạm Watchdog Timeout (`results_collector` / `links_collector`)**:
     * `scrape_query_spa` và `get_place_urls` nhận collector dạng mutable list/set.
     * Trong `run_spa_query` và `run_get_urls`, nếu `asyncio.wait_for` chạm `TimeoutError` (310s), hệ thống **bảo toàn và trả về toàn bộ kết quả trong collector thay vì trả về rỗng**, cứu vãn 100% dữ liệu đã bóc tách được trước đó.
