@@ -13,10 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Khi XHR preview `/maps/preview/place` bị timeout hoặc preview JSON không hợp lệ, hệ thống tự động kích hoạt Feed Card DOM Rescue cứu vớt 100% dữ liệu địa điểm mà không tốn thêm bất kỳ network request nào.
   - Tầng 2: Nếu không bóc tách được từ DOM, các link lỗi được thu thập vào `fallback_rescue_links` để xử lý bằng `scrape_place_multipage` nếu thời gian cho phép.
   - Cải tiến [`is_preview_response_for_link`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py): Mở rộng đối chiếu cả Place ID (`ChIJ...`) bên cạnh Hex ID (`0x...:0x...`).
-- **Phát Hiện Bước Nhảy Địa Lý Ngoại Tỉnh (Cross-city Jump Detection - Đề Xuất 5)**:
-  - Bổ sung cấu hình `cross_city_distance_threshold: float = 50000.0` (50 km) và `max_consecutive_cross_city_jumps: int = 2` vào [`ScraperConfig`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py).
-  - Tự động phát hiện khi Google Maps chuyển sang trả về các địa điểm ngoại tỉnh (>50km như Hà Nội khi tìm ở TP.HCM) và kích hoạt dừng cuộn an toàn sau 2 lần liên tiếp, ngăn chặn 33 query bị treo đến 300s timeout.
-  - Cơ chế tự động reset bộ đếm ngay khi có địa điểm trong bán kính, bảo đảm tuyệt đối không dừng sớm nếu vẫn còn POI địa phương xen kẽ.
 - **Chuẩn Hóa Type Safety Cột `reviews_count` Trong Polars (Đề Xuất 7)**:
   - Sanitize trường `reviews_count` trong [`format_places_dataframe`](file:///data/IMPORTANT/map_miner/src/map_miner/extractor.py): chuyển đổi các giá trị float/string/NaN/inf thành `int` hoặc `None`.
   - Cung cấp `schema_overrides` và ép kiểu an toàn `pl.Int64` cho cả `flatten=True` và `flatten=False`, khắc phục triệt để lỗi cột bị suy luận thành `Float64` khi có `None`/`null`.
@@ -24,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Chuẩn Hóa Thao Tác Click Trong SPA Mode**:
   - Gọi `await el.scroll_into_view_if_needed(timeout=1000)` trước khi click, sử dụng `el.evaluate("e => e.click()")` kết hợp fallback Playwright native click `el.click(force=True)`.
+
+### Removed
+- **Loại Bỏ Dataclass `ScraperConfig` và `DEFAULT_CONFIG`**:
+  - Loại bỏ hoàn toàn dataclass `ScraperConfig` và thể hiện `DEFAULT_CONFIG`, khôi phục hệ thống hằng số cấu hình truyền thống độc lập ở cấp module (`DEFAULT_*`, `MAX_*`).
+  - Đơn giản hóa API của [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), và [`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), loại bỏ tham số `config` và toàn bộ các biến phân giải trung gian `eff_*`.
 
 ---
 
@@ -41,8 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bộ Tiện Ích Giải Phóng An Toàn (Graceful Shutdown & Safe Closure)**:
   - Bổ sung các hàm [`safe_close_page`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`safe_close_context`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), và [`safe_close_browser`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) hóa giải triệt để bẫy `asyncio.shield()` khi task bị huỷ (cancellation).
   - Quản lý vòng đời task trong [`global_route_handler`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) qua `_active_route_tasks`, unroute sạch sẽ trước khi đóng context, triệt tiêu hoàn toàn 479 lỗi `Task was destroyed but it is pending!`.
-- **Tái Cấu Trúc Constants thành Dataclass `ScraperConfig`**:
-  - Định nghĩa dataclass [`ScraperConfig`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) tập trung hóa toàn bộ các thông số timeouts, guardrails, bộ nhớ đệm, retries và concurrency delays.
+- **Tái Cấu Trúc Constants thành Dataclass `ScraperConfig`** *(Đã loại bỏ ở 0.3.4)*:
+  - Định nghĩa dataclass `ScraperConfig` tập trung hóa toàn bộ các thông số timeouts, guardrails, bộ nhớ đệm, retries và concurrency delays.
   - Tích hợp tham số `config: ScraperConfig | None = None` vào [`scrape_google_maps`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`scrape_query_spa`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py), [`get_place_urls`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) với cơ chế phân giải độ ưu tiên (precedence) linh hoạt.
   - Duy trì 100% tương thích ngược với các hằng số `DEFAULT_*` và `MAX_*` module-level từ `DEFAULT_CONFIG = ScraperConfig()`.
   - Export `ScraperConfig` và `DEFAULT_CONFIG` tại `map_miner` và `map_miner.scraper`.

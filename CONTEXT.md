@@ -224,28 +224,27 @@ Module đảm nhận toàn bộ tác vụ giao tiếp I/O bất đồng bộ qua
     * `scrape_query_spa` và `get_place_urls` nhận collector dạng mutable list/set.
     * Trong `run_spa_query` và `run_get_urls`, nếu `asyncio.wait_for` chạm `TimeoutError` (310s), hệ thống **bảo toàn và trả về toàn bộ kết quả trong collector thay vì trả về rỗng**, cứu vãn 100% dữ liệu đã bóc tách được trước đó.
 
-#### 7. Tái Cấu Trúc Cấu Hình Tập Trung Với Dataclass `ScraperConfig` ([`ScraperConfig`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py)):
-- **Dataclass `ScraperConfig`**: Gom nhóm toàn bộ các tham số cấu hình rời rạc (timeouts, guardrails, bộ nhớ đệm, retries, concurrency delays):
-  * `navigation_timeout: int = 30000` (ms)
-  * `query_timeout: float = 300.0` (giây)
-  * `place_timeout: float = 45.0` (giây)
-  * `captcha_timeout: float = 85.0` (giây)
-  * `spa_preview_timeout: float | int = 10000` (ms)
-  * `range_limit: float = 10000.0` (mét)
-  * `max_consecutive_empty_scrolls: int = 4`
-  * `max_consecutive_out_of_range_scrolls: int = 3`
-  * `max_scroll_attempts_without_new_links: int = 5`
-  * `cache_dir: Path | None = Path(".cache") / "chromium_cache"`
-  * `static_cache_dir: Path = Path(".cache") / "static_assets"`
-  * `disk_cache_size: int = 1073741824` (1 GB)
-  * `max_captcha_retries: int = 2`
-  * `stagger_delay: tuple[float, float] | float = (1.5, 3.5)`
-- **Bảo Toàn Tương Thích Ngược 100%**:
-  * Duy trì toàn bộ hằng số module-level `DEFAULT_*`, `MAX_*` liên kết trực tiếp từ `DEFAULT_CONFIG = ScraperConfig()`.
-  * Export `ScraperConfig` và `DEFAULT_CONFIG` tại cả `map_miner.scraper` và `map_miner`.
-- **Quy Tắc Ưu Tiên Linh Hoạt (Precedence Resolution)**:
-  * Khi truyền `config`: các hàm (`scrape_google_maps`, `scrape_query_spa`, `get_place_urls`) đọc giá trị cấu hình từ `config`. Nếu người dùng đồng thời truyền tham số riêng lẻ khác giá trị mặc định của module (ví dụ `query_timeout=60.0`), tham số riêng lẻ sẽ ghi đè thuộc tính tương ứng của `config`.
-  * Khi `config is None`: sử dụng các tham số riêng lẻ truyền vào hàm (giữ nguyên trọn vẹn hành vi trước đó).
+#### 7. Hệ Thống Hằng Số Cấu Hình Truyền Thống Độc Lập Ở Cấp Module:
+- **Hệ Thống Constant Độc Lập Ở Cấp Module**: Không sử dụng dataclass trung gian, toàn bộ các tham số cấu hình mặc định (timeouts, guardrails, bộ nhớ đệm, retries, concurrency delays) được khai báo trực tiếp dưới dạng các hằng số độc lập ở cấp module [`scraper.py`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py):
+  * `DEFAULT_TIMEOUT: int = 30000` (ms / 30s - timeout điều hướng trang Playwright)
+  * `DEFAULT_QUERY_TIMEOUT: float = 300.0` (giây / 5 phút - timeout tối đa cho một query tìm kiếm)
+  * `DEFAULT_PLACE_TIMEOUT: float = 45.0` (giây - timeout bóc tách một địa điểm trong fallback mode)
+  * `DEFAULT_CAPTCHA_TIMEOUT: float = 85.0` (giây - timeout giải quyết reCAPTCHA)
+  * `DEFAULT_SPA_PREVIEW_TIMEOUT: float | int = 10000` (ms / 10s - timeout chờ phản hồi XHR preview)
+  * `DEFAULT_RANGE_LIMIT: float = 10000.0` (mét / 10 km - bán kính tìm kiếm tối đa từ tọa độ tâm)
+  * `DEFAULT_MAX_CAPTCHA_RETRIES: int = 2` (số lần thử lại tối đa khi gặp CAPTCHA sorry page)
+  * `DEFAULT_STAGGER_DELAY: tuple[float, float] | float = (1.5, 3.5)` (khoảng trễ ngẫu nhiên khởi động concurrent queries)
+  * `DEFAULT_CACHE_DIR: Path | None = Path(".cache") / "chromium_cache"` (thư mục bộ nhớ đệm Chromium disk cache)
+  * `DEFAULT_STATIC_CACHE_DIR: Path = Path(".cache") / "static_assets"` (thư mục cache tài nguyên tĩnh)
+  * `DEFAULT_DISK_CACHE_SIZE: int = 1073741824` (1 GB - dung lượng tối đa disk cache)
+- **Hằng Số Điều Khiển Vòng Lặp Cuộn Trang (Scroll Guardrails)**:
+  * `MAX_CONSECUTIVE_EMPTY_SCROLLS: int = 4` (dừng cuộn khi 4 lượt liên tiếp không tìm thấy địa điểm mới)
+  * `MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS: int = 3` (dừng cuộn khi 3 lượt liên tiếp toàn bộ địa điểm mới đều nằm ngoài bán kính `range_limit`)
+  * `MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS: int = 5` (dừng cuộn khi chiều cao trang không đổi và không có link mới)
+- **Kiến Trúc Rõ Ràng, Tối Giản & Truyền Tham Số Trực Tiếp**:
+  * Loại bỏ hoàn toàn các lớp trung gian (như `ScraperConfig`), không còn các biến phân giải `eff_*`.
+  * Các hàm (`scrape_google_maps`, `scrape_query_spa`, `get_place_urls`) sử dụng trực tiếp các tham số truyền vào hàm với giá trị mặc định liên kết trực tiếp tới các hằng số `DEFAULT_*`.
+  * Export công khai các hằng số cấu hình chuẩn (`DEFAULT_*`, `MAX_*`) tại `map_miner` và `map_miner.scraper`.
 
 ---
 

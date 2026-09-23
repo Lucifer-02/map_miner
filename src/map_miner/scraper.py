@@ -6,7 +6,6 @@ import random
 import re
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -54,43 +53,17 @@ from .recaptcha_solver import (
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ScraperConfig:
-    """Centralized configuration for MapMiner scrapers."""
-
-    navigation_timeout: int = 30000  # ms (30s)
-    query_timeout: float = 300.0  # seconds (5 min)
-    place_timeout: float = 45.0  # seconds
-    captcha_timeout: float = 85.0  # seconds
-    spa_preview_timeout: float | int = 10000  # ms (10s)
-    range_limit: float = 10000.0  # meters (10 km)
-    cross_city_distance_threshold: float = 50000.0  # meters (50 km)
-    max_consecutive_cross_city_jumps: int = 2
-    max_consecutive_empty_scrolls: int = 4
-    max_consecutive_out_of_range_scrolls: int = 3
-    max_scroll_attempts_without_new_links: int = 5
-    cache_dir: Path | None = Path(".cache") / "chromium_cache"
-    static_cache_dir: Path = Path(".cache") / "static_assets"
-    disk_cache_size: int = 1073741824  # 1 GB
-    max_captcha_retries: int = 2
-    stagger_delay: tuple[float, float] | float = (1.5, 3.5)
-
-
-DEFAULT_CONFIG = ScraperConfig()
-
 __all__ = [
     "DEFAULT_CAPTCHA_TIMEOUT",
-    "DEFAULT_CONFIG",
-    "DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD",
     "DEFAULT_DISK_CACHE_SIZE",
     "DEFAULT_FLATTEN_COLUMNS",
-    "DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS",
+    "DEFAULT_MAX_CAPTCHA_RETRIES",
     "DEFAULT_PLACE_TIMEOUT",
     "DEFAULT_PROXY_BYPASS",
     "DEFAULT_QUERY_TIMEOUT",
     "DEFAULT_RANGE_LIMIT",
     "DEFAULT_SPA_PREVIEW_TIMEOUT",
+    "DEFAULT_STAGGER_DELAY",
     "DEFAULT_STATIC_CACHE_DIR",
     "DEFAULT_TIMEOUT",
     "MAX_CONSECUTIVE_EMPTY_SCROLLS",
@@ -98,7 +71,6 @@ __all__ = [
     "MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS",
     "REQUIRED_COLUMNS",
     "ProxyRotator",
-    "ScraperConfig",
     "calculate_distance",
     "create_browser_context",
     "extract_coordinates_from_url",
@@ -126,26 +98,20 @@ __all__ = [
 ]
 
 # --- Constants ---
-DEFAULT_TIMEOUT = DEFAULT_CONFIG.navigation_timeout
-DEFAULT_QUERY_TIMEOUT = DEFAULT_CONFIG.query_timeout
-DEFAULT_PLACE_TIMEOUT = DEFAULT_CONFIG.place_timeout
-DEFAULT_CAPTCHA_TIMEOUT = DEFAULT_CONFIG.captcha_timeout
-DEFAULT_SPA_PREVIEW_TIMEOUT = DEFAULT_CONFIG.spa_preview_timeout
-DEFAULT_RANGE_LIMIT = DEFAULT_CONFIG.range_limit
-DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD = DEFAULT_CONFIG.cross_city_distance_threshold
-DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS = (
-    DEFAULT_CONFIG.max_consecutive_cross_city_jumps
-)
-MAX_CONSECUTIVE_EMPTY_SCROLLS = DEFAULT_CONFIG.max_consecutive_empty_scrolls
-MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS = (
-    DEFAULT_CONFIG.max_consecutive_out_of_range_scrolls
-)
-MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS = (
-    DEFAULT_CONFIG.max_scroll_attempts_without_new_links
-)
-DEFAULT_CACHE_DIR = DEFAULT_CONFIG.cache_dir
-DEFAULT_STATIC_CACHE_DIR = DEFAULT_CONFIG.static_cache_dir
-DEFAULT_DISK_CACHE_SIZE = DEFAULT_CONFIG.disk_cache_size
+DEFAULT_TIMEOUT: int = 30000  # ms (30s)
+DEFAULT_QUERY_TIMEOUT: float = 300.0  # seconds (5 min)
+DEFAULT_PLACE_TIMEOUT: float = 45.0  # seconds
+DEFAULT_CAPTCHA_TIMEOUT: float = 85.0  # seconds
+DEFAULT_SPA_PREVIEW_TIMEOUT: float | int = 10000  # ms (10s)
+DEFAULT_RANGE_LIMIT: float = 10000.0  # meters (10 km)
+DEFAULT_MAX_CAPTCHA_RETRIES: int = 2
+DEFAULT_STAGGER_DELAY: tuple[float, float] | float = (1.5, 3.5)
+DEFAULT_CACHE_DIR: Path | None = Path(".cache") / "chromium_cache"
+DEFAULT_STATIC_CACHE_DIR: Path = Path(".cache") / "static_assets"
+DEFAULT_DISK_CACHE_SIZE: int = 1073741824  # 1 GB
+MAX_CONSECUTIVE_EMPTY_SCROLLS: int = 4
+MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS: int = 3
+MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS: int = 5
 
 DYNAMIC_ROUTE_PATTERNS: tuple[str, ...] = (
     "/maps/preview/",
@@ -714,7 +680,6 @@ async def get_place_urls(
     proxy_rotator: ProxyRotator | None = None,
     query_timeout: float = DEFAULT_QUERY_TIMEOUT,
     links_collector: set[str] | None = None,
-    config: ScraperConfig | None = None,
 ) -> set[str]:
     """Navigates the search feed and scrolls to collect place links.
 
@@ -738,7 +703,6 @@ async def get_place_urls(
         proxy_rotator (ProxyRotator | None, optional): Rotator to renew proxy on CAPTCHA block. Defaults to None.
         query_timeout (float): Maximum seconds allowed for this query. Defaults to DEFAULT_QUERY_TIMEOUT (300.0s).
         links_collector (set[str] | None, optional): Mutable set to collect links in-place for zero data loss on timeout.
-        config (ScraperConfig | None, optional): Centralized scraper configuration dataclass. Defaults to None.
 
     Returns:
         set[str]: Collected place URLs.
@@ -746,24 +710,6 @@ async def get_place_urls(
     search_page = await context.new_page()
     if not search_page:
         raise RuntimeError("Failed to create search browser page.")
-
-    cfg = config or DEFAULT_CONFIG
-    eff_range_limit = (
-        range_limit if range_limit != DEFAULT_RANGE_LIMIT else cfg.range_limit
-    )
-    eff_cross_city_threshold = max(
-        cfg.cross_city_distance_threshold, eff_range_limit * 2.0
-    )
-    eff_max_consecutive_cross_city_jumps = cfg.max_consecutive_cross_city_jumps
-    consecutive_cross_city_jumps = 0
-    eff_query_timeout = (
-        query_timeout if query_timeout != DEFAULT_QUERY_TIMEOUT else cfg.query_timeout
-    )
-    eff_navigation_timeout = cfg.navigation_timeout
-    eff_captcha_timeout = cfg.captcha_timeout
-    eff_max_consecutive_empty_scrolls = cfg.max_consecutive_empty_scrolls
-    eff_max_consecutive_out_of_range_scrolls = cfg.max_consecutive_out_of_range_scrolls
-    eff_max_scroll_attempts_no_new = cfg.max_scroll_attempts_without_new_links
 
     place_links: set[str] = links_collector if links_collector is not None else set()
 
@@ -775,7 +721,7 @@ async def get_place_urls(
         logger.info("Navigating to search URL: %s", search_url)
 
         await search_page.goto(
-            search_url, wait_until="domcontentloaded", timeout=eff_navigation_timeout
+            search_url, wait_until="domcontentloaded", timeout=DEFAULT_TIMEOUT
         )
         await asyncio.sleep(random.uniform(1.0, 2.5))
 
@@ -784,17 +730,10 @@ async def get_place_urls(
 
         is_blocked = False
         try:
-            if eff_captcha_timeout != DEFAULT_CAPTCHA_TIMEOUT:
-                captcha_solved = await handle_captcha_if_present(
-                    search_page,
-                    context_label="search_page",
-                    timeout=eff_captcha_timeout,
-                )
-            else:
-                captcha_solved = await handle_captcha_if_present(
-                    search_page,
-                    context_label="search_page",
-                )
+            captcha_solved = await handle_captcha_if_present(
+                search_page,
+                context_label="search_page",
+            )
         except RecaptchaBlockedError:
             captcha_solved = False
             is_blocked = True
@@ -812,12 +751,12 @@ async def get_place_urls(
             coords = extract_coordinates_from_url(search_page.url)
             if coords is not None:
                 dist = calculate_distance(geo_coordinates, coords)
-                if dist > eff_range_limit:
+                if dist > range_limit:
                     logger.debug(
                         "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                         search_page.url,
                         dist,
-                        eff_range_limit,
+                        range_limit,
                     )
                     return place_links
             place_links.add(search_page.url)
@@ -829,12 +768,12 @@ async def get_place_urls(
                 coords = extract_coordinates_from_url(search_page.url)
                 if coords is not None:
                     dist = calculate_distance(geo_coordinates, coords)
-                    if dist > eff_range_limit:
+                    if dist > range_limit:
                         logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             search_page.url,
                             dist,
-                            eff_range_limit,
+                            range_limit,
                         )
                         return place_links
                 place_links.add(search_page.url)
@@ -856,12 +795,12 @@ async def get_place_urls(
 
         while True:
             elapsed = time.monotonic() - query_start
-            remaining_time = eff_query_timeout - elapsed
+            remaining_time = query_timeout - elapsed
             if remaining_time <= 2.0:
                 logger.warning(
                     "⚠️ Query '%s' reached timeout limit (%.1fs) in get_place_urls. Returning %d collected links.",
                     query,
-                    eff_query_timeout,
+                    query_timeout,
                     len(place_links),
                 )
                 break
@@ -874,8 +813,6 @@ async def get_place_urls(
 
             new_links_count = 0
             batch_had_out_of_range = False
-            batch_had_in_range = False
-            batch_had_cross_city = False
 
             for link in current_links_list:
                 if not link:
@@ -893,32 +830,20 @@ async def get_place_urls(
                 coords = extract_coordinates_from_url(link)
                 if coords is not None:
                     dist = calculate_distance(geo_coordinates, coords)
-                    if dist <= eff_range_limit:
-                        batch_had_in_range = True
-                        consecutive_cross_city_jumps = 0
-                    else:
+                    if dist > range_limit:
                         processed_links.add(canonical_link)
                         batch_had_out_of_range = True
-                        if dist >= eff_cross_city_threshold:
-                            batch_had_cross_city = True
-                            logger.info(
-                                "Cross-city jump detected: %s is %.1fkm away",
-                                canonical_link,
-                                dist / 1000,
-                            )
                         logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             canonical_link,
                             dist,
-                            eff_range_limit,
+                            range_limit,
                         )
                         continue
 
                 processed_links.add(canonical_link)
                 place_links.add(link)
                 new_links_count += 1
-                batch_had_in_range = True
-                consecutive_cross_city_jumps = 0
 
                 if max_places is not None and len(place_links) >= max_places:
                     logger.debug("Reached max_places limit (%d).", max_places)
@@ -933,22 +858,6 @@ async def get_place_urls(
 
             logger.debug("Found %d unique place links so far...", len(place_links))
 
-            # Stopping condition (cross_city_jumps):
-            if batch_had_in_range:
-                consecutive_cross_city_jumps = 0
-            elif batch_had_cross_city and new_links_count == 0:
-                consecutive_cross_city_jumps += 1
-                logger.info(
-                    "Cross-city consecutive count: %d/%d",
-                    consecutive_cross_city_jumps,
-                    eff_max_consecutive_cross_city_jumps,
-                )
-                if consecutive_cross_city_jumps >= eff_max_consecutive_cross_city_jumps:
-                    logger.info(
-                        "Stopping scroll in get_place_urls safely due to persistent cross-city jump."
-                    )
-                    break
-
             # Stopping condition (consecutive_empty_scrolls):
             if new_links_count == 0:
                 consecutive_empty_scrolls += 1
@@ -956,7 +865,7 @@ async def get_place_urls(
                     consecutive_out_of_range_scrolls += 1
                     if (
                         consecutive_out_of_range_scrolls
-                        >= eff_max_consecutive_out_of_range_scrolls
+                        >= MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS
                     ):
                         logger.debug(
                             "Stopping scroll in get_place_urls: %d consecutive scrolls with only out-of-range links.",
@@ -966,7 +875,7 @@ async def get_place_urls(
                 else:
                     consecutive_out_of_range_scrolls = 0
 
-                if consecutive_empty_scrolls >= eff_max_consecutive_empty_scrolls:
+                if consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS:
                     logger.debug(
                         "Stopping scroll in get_place_urls: %d consecutive scrolls without new links.",
                         consecutive_empty_scrolls,
@@ -991,10 +900,10 @@ async def get_place_urls(
                 logger.debug(
                     "Scroll height unchanged (%d/%d).",
                     scroll_attempts_no_new,
-                    eff_max_scroll_attempts_no_new,
+                    MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS,
                 )
                 await asyncio.sleep(1.5)
-                if scroll_attempts_no_new >= eff_max_scroll_attempts_no_new:
+                if scroll_attempts_no_new >= MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS:
                     break
             else:
                 last_height = new_height
@@ -1018,11 +927,10 @@ async def scrape_query_spa(
     fields: Sequence[str] | set[str] | None = None,
     range_limit: float = DEFAULT_RANGE_LIMIT,
     proxy_rotator: ProxyRotator | None = None,
-    max_captcha_retries: int = 2,
+    max_captcha_retries: int = DEFAULT_MAX_CAPTCHA_RETRIES,
     query_timeout: float = DEFAULT_QUERY_TIMEOUT,
     preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT,
     results_collector: list[dict[str, Any]] | None = None,
-    config: ScraperConfig | None = None,
 ) -> list[dict[str, Any]]:
     """Scrapes Google Maps places using client-side SPA navigation:
 
@@ -1055,7 +963,6 @@ async def scrape_query_spa(
             waiting for SPA place preview XHR response. Defaults to DEFAULT_SPA_PREVIEW_TIMEOUT.
         results_collector (list[dict[str, Any]] | None, optional): Mutable list to collect
             places in-place for zero data loss on timeout.
-        config (ScraperConfig | None, optional): Centralized scraper configuration dataclass. Defaults to None.
 
     Returns:
         list[dict[str, Any]]: List of place dictionaries.
@@ -1067,35 +974,7 @@ async def scrape_query_spa(
     )
     processed_links: set[str] = set()
     search_page: Page | None = None
-
-    cfg = config or DEFAULT_CONFIG
-    eff_range_limit = (
-        range_limit if range_limit != DEFAULT_RANGE_LIMIT else cfg.range_limit
-    )
-    eff_cross_city_threshold = max(
-        cfg.cross_city_distance_threshold, eff_range_limit * 2.0
-    )
-    eff_max_consecutive_cross_city_jumps = cfg.max_consecutive_cross_city_jumps
-    consecutive_cross_city_jumps = 0
     fallback_rescue_links: list[str] = []
-    eff_query_timeout = (
-        query_timeout if query_timeout != DEFAULT_QUERY_TIMEOUT else cfg.query_timeout
-    )
-    eff_preview_timeout = (
-        preview_timeout
-        if preview_timeout != DEFAULT_SPA_PREVIEW_TIMEOUT
-        else cfg.spa_preview_timeout
-    )
-    eff_max_captcha_retries = (
-        max_captcha_retries
-        if max_captcha_retries != DEFAULT_CONFIG.max_captcha_retries
-        else cfg.max_captcha_retries
-    )
-    eff_navigation_timeout = cfg.navigation_timeout
-    eff_captcha_timeout = cfg.captcha_timeout
-    eff_max_consecutive_empty_scrolls = cfg.max_consecutive_empty_scrolls
-    eff_max_consecutive_out_of_range_scrolls = cfg.max_consecutive_out_of_range_scrolls
-    eff_max_scroll_attempts_no_new = cfg.max_scroll_attempts_without_new_links
 
     try:
         query_start = time.monotonic()
@@ -1103,7 +982,7 @@ async def scrape_query_spa(
             query=query, geo_coordinates=geo_coordinates, zoom=zoom, lang=lang
         )
 
-        for captcha_attempt in range(eff_max_captcha_retries + 1):
+        for captcha_attempt in range(max_captcha_retries + 1):
             search_page = await active_context.new_page()
             if not search_page:
                 raise RuntimeError("Failed to create search browser page.")
@@ -1113,7 +992,7 @@ async def scrape_query_spa(
             await search_page.goto(
                 search_url,
                 wait_until="domcontentloaded",
-                timeout=eff_navigation_timeout,
+                timeout=DEFAULT_TIMEOUT,
             )
             await asyncio.sleep(random.uniform(1.0, 2.0))
 
@@ -1122,23 +1001,16 @@ async def scrape_query_spa(
 
             is_blocked = False
             try:
-                if eff_captcha_timeout != DEFAULT_CAPTCHA_TIMEOUT:
-                    captcha_solved = await handle_captcha_if_present(
-                        search_page,
-                        context_label="spa_search",
-                        timeout=eff_captcha_timeout,
-                    )
-                else:
-                    captcha_solved = await handle_captcha_if_present(
-                        search_page,
-                        context_label="spa_search",
-                    )
+                captcha_solved = await handle_captcha_if_present(
+                    search_page,
+                    context_label="spa_search",
+                )
             except RecaptchaBlockedError:
                 captcha_solved = False
                 is_blocked = True
 
             if ("sorry/index" in search_page.url or is_blocked) and not captcha_solved:
-                if captcha_attempt < eff_max_captcha_retries:
+                if captcha_attempt < max_captcha_retries:
                     logger.warning(
                         "CAPTCHA blocked/unsolved on sorry page (attempt %d/%d). "
                         "Rotating proxy and retrying with fresh context...",
@@ -1176,12 +1048,12 @@ async def scrape_query_spa(
             coords = extract_coordinates_from_url(search_page.url)
             if coords is not None:
                 dist = calculate_distance(geo_coordinates, coords)
-                if dist > eff_range_limit:
+                if dist > range_limit:
                     logger.debug(
                         "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                         search_page.url,
                         dist,
-                        eff_range_limit,
+                        range_limit,
                     )
                     return results
             html_content = await search_page.content()
@@ -1226,15 +1098,13 @@ async def scrape_query_spa(
 
             found_new_in_batch = False
             batch_had_out_of_range = False
-            batch_had_in_range = False
-            batch_had_cross_city = False
 
             for el in link_elements:
                 if max_places is not None and len(results) >= max_places:
                     break
 
                 elapsed = time.monotonic() - query_start
-                remaining_time = eff_query_timeout - elapsed
+                remaining_time = query_timeout - elapsed
                 if remaining_time <= 2.0:
                     logger.warning(
                         "⚠️ Query '%s' approaching timeout limit (%.1fs remaining). Returning %d collected places.",
@@ -1263,24 +1133,14 @@ async def scrape_query_spa(
                 coords = extract_coordinates_from_url(link)
                 if coords is not None:
                     dist = calculate_distance(geo_coordinates, coords)
-                    if dist <= eff_range_limit:
-                        batch_had_in_range = True
-                        consecutive_cross_city_jumps = 0
-                    else:
+                    if dist > range_limit:
                         processed_links.add(canonical_link)
                         batch_had_out_of_range = True
-                        if dist >= eff_cross_city_threshold:
-                            batch_had_cross_city = True
-                            logger.info(
-                                "Cross-city jump detected: %s is %.1fkm away",
-                                canonical_link,
-                                dist / 1000,
-                            )
                         logger.debug(
                             "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                             canonical_link,
                             dist,
-                            eff_range_limit,
+                            range_limit,
                         )
                         continue
 
@@ -1293,9 +1153,9 @@ async def scrape_query_spa(
                 await asyncio.sleep(random.uniform(0.3, 0.8))
 
                 preview_timeout_ms = (
-                    int(eff_preview_timeout * 1000)
-                    if eff_preview_timeout < 1000
-                    else int(eff_preview_timeout)
+                    int(preview_timeout * 1000)
+                    if preview_timeout < 1000
+                    else int(preview_timeout)
                 )
                 cur_timeout_ms = min(
                     preview_timeout_ms,
@@ -1354,23 +1214,13 @@ async def scrape_query_spa(
                                     geo_coordinates,
                                     (float(p_lat), float(p_lng)),
                                 )
-                                if post_dist <= eff_range_limit:
-                                    batch_had_in_range = True
-                                    consecutive_cross_city_jumps = 0
-                                else:
+                                if post_dist > range_limit:
                                     batch_had_out_of_range = True
-                                    if post_dist >= eff_cross_city_threshold:
-                                        batch_had_cross_city = True
-                                        logger.info(
-                                            "Cross-city jump detected: %s is %.1fkm away",
-                                            canonical_link,
-                                            post_dist / 1000,
-                                        )
                                     logger.debug(
                                         "Post-extraction drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
                                         canonical_link,
                                         post_dist,
-                                        eff_range_limit,
+                                        range_limit,
                                     )
                                     continue
                             except (ValueError, TypeError):
@@ -1385,8 +1235,6 @@ async def scrape_query_spa(
                             place_data["link"] = link
                         results.append(place_data)
                         found_new_in_batch = True
-                        batch_had_in_range = True
-                        consecutive_cross_city_jumps = 0
                         logger.info(
                             "  ✅ [SPA %d/%s] Extracted: %s",
                             len(results),
@@ -1429,25 +1277,15 @@ async def scrape_query_spa(
                         is_in_range = True
                         if r_coords is not None:
                             post_dist = calculate_distance(geo_coordinates, r_coords)
-                            if post_dist <= eff_range_limit:
-                                batch_had_in_range = True
-                                consecutive_cross_city_jumps = 0
-                            else:
+                            if post_dist > range_limit:
                                 is_in_range = False
                                 processed_links.add(canonical_link)
                                 batch_had_out_of_range = True
-                                if post_dist >= eff_cross_city_threshold:
-                                    batch_had_cross_city = True
-                                    logger.info(
-                                        "Cross-city jump detected (rescued DOM): %s is %.1fkm away",
-                                        canonical_link,
-                                        post_dist / 1000,
-                                    )
                                 logger.debug(
                                     "Rescued place out of range: %s (%.1fm > %.1fm)",
                                     canonical_link,
                                     post_dist,
-                                    eff_range_limit,
+                                    range_limit,
                                 )
 
                         if is_in_range:
@@ -1455,8 +1293,6 @@ async def scrape_query_spa(
                                 rescued_place["link"] = link
                             results.append(rescued_place)
                             found_new_in_batch = True
-                            batch_had_in_range = True
-                            consecutive_cross_city_jumps = 0
                             processed_links.add(canonical_link)
                             logger.info(
                                 "  🆘 [Fallback Rescue] Rescued place data from feed DOM for: %s",
@@ -1474,11 +1310,11 @@ async def scrape_query_spa(
             if max_places is not None and len(results) >= max_places:
                 break
 
-            if (eff_query_timeout - (time.monotonic() - query_start)) <= 2.0:
+            if (query_timeout - (time.monotonic() - query_start)) <= 2.0:
                 logger.warning(
                     "⚠️ Query '%s' reached timeout limit (%.1fs). Returning %d collected places.",
                     query,
-                    eff_query_timeout,
+                    query_timeout,
                     len(results),
                 )
                 break
@@ -1499,22 +1335,6 @@ async def scrape_query_spa(
                 )
                 break
 
-            # Stopping condition (cross_city_jumps):
-            if batch_had_in_range:
-                consecutive_cross_city_jumps = 0
-            elif batch_had_cross_city and not found_new_in_batch:
-                consecutive_cross_city_jumps += 1
-                logger.info(
-                    "Cross-city consecutive count: %d/%d",
-                    consecutive_cross_city_jumps,
-                    eff_max_consecutive_cross_city_jumps,
-                )
-                if consecutive_cross_city_jumps >= eff_max_consecutive_cross_city_jumps:
-                    logger.info(
-                        "Stopping SPA scroll safely due to persistent cross-city jump."
-                    )
-                    break
-
             # Stopping condition (consecutive_empty_scrolls & out of range scrolls):
             if not found_new_in_batch:
                 consecutive_empty_scrolls += 1
@@ -1522,7 +1342,7 @@ async def scrape_query_spa(
                     consecutive_out_of_range_scrolls += 1
                     if (
                         consecutive_out_of_range_scrolls
-                        >= eff_max_consecutive_out_of_range_scrolls
+                        >= MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS
                     ):
                         logger.debug(
                             "Stopping SPA scroll: %d consecutive scrolls with only out-of-range items.",
@@ -1532,7 +1352,7 @@ async def scrape_query_spa(
                 else:
                     consecutive_out_of_range_scrolls = 0
 
-                if consecutive_empty_scrolls >= eff_max_consecutive_empty_scrolls:
+                if consecutive_empty_scrolls >= MAX_CONSECUTIVE_EMPTY_SCROLLS:
                     logger.debug(
                         "Stopping SPA scroll: %d consecutive scrolls without new items.",
                         consecutive_empty_scrolls,
@@ -1554,7 +1374,7 @@ async def scrape_query_spa(
             ):
                 scroll_attempts_no_new += 1
                 await asyncio.sleep(1.5)
-                if scroll_attempts_no_new >= eff_max_scroll_attempts_no_new:
+                if scroll_attempts_no_new >= MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS:
                     logger.debug("Stopping SPA scroll due to lack of new items.")
                     break
             else:
@@ -1563,7 +1383,7 @@ async def scrape_query_spa(
 
         # Secondary fallback rescue for unresolved links via process_link if time permits
         if fallback_rescue_links and (max_places is None or len(results) < max_places):
-            remaining_time = eff_query_timeout - (time.monotonic() - query_start)
+            remaining_time = query_timeout - (time.monotonic() - query_start)
             if remaining_time > 5.0:
                 logger.info(
                     "Attempting secondary fallback rescue for %d unresolved links...",
@@ -1576,7 +1396,7 @@ async def scrape_query_spa(
                         continue
                     if max_places is not None and len(results) >= max_places:
                         break
-                    if (eff_query_timeout - (time.monotonic() - query_start)) <= 3.0:
+                    if (query_timeout - (time.monotonic() - query_start)) <= 3.0:
                         break
                     try:
                         f_data = await process_link(
@@ -1785,8 +1605,7 @@ async def scrape_google_maps(
     query_timeout: float = DEFAULT_QUERY_TIMEOUT,
     place_timeout: float = DEFAULT_PLACE_TIMEOUT,
     preview_timeout: float = DEFAULT_SPA_PREVIEW_TIMEOUT,
-    stagger_delay: tuple[float, float] | float = (1.5, 3.5),
-    config: ScraperConfig | None = None,
+    stagger_delay: tuple[float, float] | float = DEFAULT_STAGGER_DELAY,
 ) -> pl.DataFrame:
     """Scrapes Google Maps for places based on queries.
 
@@ -1824,7 +1643,6 @@ async def scrape_google_maps(
         stagger_delay (tuple[float, float] | float, optional): Delay range (min, max) in
             seconds to stagger the initial launch of concurrent queries. Set to 0 to
             disable. Defaults to (1.5, 3.5).
-        config (ScraperConfig | None, optional): Centralized scraper configuration dataclass. Defaults to None.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.
@@ -1833,35 +1651,14 @@ async def scrape_google_maps(
     browser = None
     proxy_rotator = ProxyRotator(proxy)
 
-    cfg = config or DEFAULT_CONFIG
-    eff_cache_dir = cache_dir if cache_dir != DEFAULT_CACHE_DIR else cfg.cache_dir
-    eff_range_limit = (
-        range_limit if range_limit != DEFAULT_RANGE_LIMIT else cfg.range_limit
-    )
-    eff_query_timeout = (
-        query_timeout if query_timeout != DEFAULT_QUERY_TIMEOUT else cfg.query_timeout
-    )
-    eff_place_timeout = (
-        place_timeout if place_timeout != DEFAULT_PLACE_TIMEOUT else cfg.place_timeout
-    )
-    eff_preview_timeout = (
-        preview_timeout
-        if preview_timeout != DEFAULT_SPA_PREVIEW_TIMEOUT
-        else cfg.spa_preview_timeout
-    )
-    eff_stagger_delay = (
-        stagger_delay if stagger_delay != (1.5, 3.5) else cfg.stagger_delay
-    )
-    eff_disk_cache_size = cfg.disk_cache_size
-
     launch_args = list(LAUNCH_ARGS)
-    if eff_cache_dir is not None:
-        resolved_cache = eff_cache_dir.resolve()
+    if cache_dir is not None:
+        resolved_cache = cache_dir.resolve()
         resolved_cache.mkdir(parents=True, exist_ok=True)
         launch_args.extend(
             [
                 f"--disk-cache-dir={resolved_cache}",
-                f"--disk-cache-size={eff_disk_cache_size}",
+                f"--disk-cache-size={DEFAULT_DISK_CACHE_SIZE}",
             ]
         )
 
@@ -1882,10 +1679,10 @@ async def scrape_google_maps(
                 )
 
                 async def run_spa_query(idx: int, q: str) -> list[dict[str, Any]]:
-                    if eff_stagger_delay is not None and idx > 0:
-                        if isinstance(eff_stagger_delay, (tuple, list)):
-                            s_min = float(eff_stagger_delay[0])
-                            s_max = float(eff_stagger_delay[1])
+                    if stagger_delay is not None and idx > 0:
+                        if isinstance(stagger_delay, (tuple, list)):
+                            s_min = float(stagger_delay[0])
+                            s_max = float(stagger_delay[1])
                             if s_max > 0:
                                 delay = idx * random.uniform(s_min, s_max)
                                 logger.info(
@@ -1896,10 +1693,10 @@ async def scrape_google_maps(
                                 )
                                 await asyncio.sleep(delay)
                         elif (
-                            isinstance(eff_stagger_delay, (int, float))
-                            and eff_stagger_delay > 0
+                            isinstance(stagger_delay, (int, float))
+                            and stagger_delay > 0
                         ):
-                            delay = idx * float(eff_stagger_delay)
+                            delay = idx * float(stagger_delay)
                             logger.info(
                                 "Staggered query %d ('%s') delay %.2fs...",
                                 idx,
@@ -1926,21 +1723,20 @@ async def scrape_google_maps(
                                 max_places=max_places,
                                 lang=lang,
                                 fields=fields,
-                                range_limit=eff_range_limit,
+                                range_limit=range_limit,
                                 proxy_rotator=proxy_rotator,
-                                query_timeout=eff_query_timeout,
-                                preview_timeout=eff_preview_timeout,
+                                query_timeout=query_timeout,
+                                preview_timeout=preview_timeout,
                                 results_collector=collector,
-                                config=config,
                             )
                             return await asyncio.wait_for(
-                                coro, timeout=eff_query_timeout + 10.0
+                                coro, timeout=query_timeout + 10.0
                             )
                         except TimeoutError:
                             logger.warning(
                                 "🚨 Hard watchdog timeout for query '%s' after %.1fs. Returning %d rescued places.",
                                 q,
-                                eff_query_timeout + 10.0,
+                                query_timeout + 10.0,
                                 len(collector),
                             )
                             return collector
@@ -1988,11 +1784,11 @@ async def scrape_google_maps(
             else:
                 # Multi-page fallback mode
                 async def run_get_urls(idx: int, q: str) -> set[str]:
-                    if eff_stagger_delay is not None and idx > 0:
-                        if isinstance(eff_stagger_delay, (tuple, list)):
+                    if stagger_delay is not None and idx > 0:
+                        if isinstance(stagger_delay, (tuple, list)):
                             s_min, s_max = (
-                                float(eff_stagger_delay[0]),
-                                float(eff_stagger_delay[1]),
+                                float(stagger_delay[0]),
+                                float(stagger_delay[1]),
                             )
                             if s_max > 0:
                                 delay = idx * random.uniform(s_min, s_max)
@@ -2004,10 +1800,10 @@ async def scrape_google_maps(
                                 )
                                 await asyncio.sleep(delay)
                         elif (
-                            isinstance(eff_stagger_delay, (int, float))
-                            and eff_stagger_delay > 0
+                            isinstance(stagger_delay, (int, float))
+                            and stagger_delay > 0
                         ):
-                            delay = idx * float(eff_stagger_delay)
+                            delay = idx * float(stagger_delay)
                             logger.info(
                                 "Staggered startup: query %d ('%s') sleeping for %.2fs before launch...",
                                 idx,
@@ -2033,19 +1829,19 @@ async def scrape_google_maps(
                                 geo_coordinates=geo_coordinates,
                                 zoom=zoom,
                                 lang=lang,
-                                range_limit=eff_range_limit,
+                                range_limit=range_limit,
                                 proxy_rotator=proxy_rotator,
-                                query_timeout=eff_query_timeout,
+                                query_timeout=query_timeout,
                                 links_collector=links_collector,
-                                config=config,
                             )
                             return await asyncio.wait_for(
-                                coro, timeout=eff_query_timeout + 10.0
+                                coro, timeout=query_timeout + 10.0
                             )
                         except TimeoutError:
                             logger.warning(
-                                "🚨 Hard watchdog timeout for get_place_urls on query '%s'. Returning %d rescued links.",
+                                "🚨 Hard watchdog timeout for get_place_urls on query '%s' after %.1fs. Returning %d rescued links.",
                                 q,
+                                query_timeout + 10.0,
                                 len(links_collector),
                             )
                             return links_collector
@@ -2117,13 +1913,11 @@ async def scrape_google_maps(
                                 fields=fields,
                                 proxy_rotator=proxy_rotator,
                             )
-                            return await asyncio.wait_for(
-                                coro, timeout=eff_place_timeout
-                            )
+                            return await asyncio.wait_for(coro, timeout=place_timeout)
                         except TimeoutError:
                             logger.warning(
                                 "🚨 Timeout processing place link after %.1fs: %s",
-                                eff_place_timeout,
+                                place_timeout,
                                 link,
                             )
                             return None

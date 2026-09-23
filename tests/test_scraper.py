@@ -17,15 +17,14 @@ from map_miner.scraper import (
     CONSENT_BUTTON_REGEX,
     DEFAULT_CACHE_DIR,
     DEFAULT_CAPTCHA_TIMEOUT,
-    DEFAULT_CONFIG,
-    DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD,
     DEFAULT_DISK_CACHE_SIZE,
-    DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS,
+    DEFAULT_MAX_CAPTCHA_RETRIES,
     DEFAULT_PLACE_TIMEOUT,
     DEFAULT_PROXY_BYPASS,
     DEFAULT_QUERY_TIMEOUT,
     DEFAULT_RANGE_LIMIT,
     DEFAULT_SPA_PREVIEW_TIMEOUT,
+    DEFAULT_STAGGER_DELAY,
     DEFAULT_STATIC_CACHE_DIR,
     DEFAULT_TIMEOUT,
     FEED_FALLBACK_SELECTORS,
@@ -35,7 +34,6 @@ from map_miner.scraper import (
     MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS,
     PreviewInterceptor,
     ProxyRotator,
-    ScraperConfig,
     create_browser_context,
     extract_coordinates_from_url,
     get_place_urls,
@@ -2610,340 +2608,24 @@ def test_safe_close_page_cancellation():
     asyncio.run(_run())
 
 
-def test_scraper_config_defaults():
-    """Kiểm tra các thuộc tính mặc định của ScraperConfig khớp với các hằng số DEFAULT_*."""
-    cfg = ScraperConfig()
-    assert cfg.navigation_timeout == DEFAULT_TIMEOUT
-    assert cfg.query_timeout == DEFAULT_QUERY_TIMEOUT
-    assert cfg.place_timeout == DEFAULT_PLACE_TIMEOUT
-    assert cfg.captcha_timeout == DEFAULT_CAPTCHA_TIMEOUT
-    assert cfg.spa_preview_timeout == DEFAULT_SPA_PREVIEW_TIMEOUT
-    assert cfg.range_limit == DEFAULT_RANGE_LIMIT
-    assert cfg.max_consecutive_empty_scrolls == MAX_CONSECUTIVE_EMPTY_SCROLLS
-    assert (
-        cfg.max_consecutive_out_of_range_scrolls == MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS
-    )
-    assert (
-        cfg.max_scroll_attempts_without_new_links
-        == MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS
-    )
-    assert cfg.cache_dir == DEFAULT_CACHE_DIR
-    assert cfg.static_cache_dir == DEFAULT_STATIC_CACHE_DIR
-    assert cfg.disk_cache_size == DEFAULT_DISK_CACHE_SIZE
-    assert cfg.max_captcha_retries == 2
-    assert cfg.stagger_delay == (1.5, 3.5)
-    assert cfg == DEFAULT_CONFIG
-
-
-def test_scraper_config_custom():
-    """Kiểm tra khởi tạo ScraperConfig với các giá trị tùy biến."""
+def test_scraper_default_constants():
+    """Kiểm tra các hằng số mặc định ở cấp module."""
     from pathlib import Path
 
-    custom_cfg = ScraperConfig(
-        navigation_timeout=15000,
-        query_timeout=60.0,
-        place_timeout=20.0,
-        captcha_timeout=45.0,
-        spa_preview_timeout=5000,
-        range_limit=5000.0,
-        max_consecutive_empty_scrolls=2,
-        max_consecutive_out_of_range_scrolls=1,
-        max_scroll_attempts_without_new_links=3,
-        cache_dir=Path("/tmp/custom_cache"),
-        static_cache_dir=Path("/tmp/static"),
-        disk_cache_size=524288,
-        max_captcha_retries=1,
-        stagger_delay=0.5,
-    )
-    assert custom_cfg.navigation_timeout == 15000
-    assert custom_cfg.query_timeout == 60.0
-    assert custom_cfg.place_timeout == 20.0
-    assert custom_cfg.captcha_timeout == 45.0
-    assert custom_cfg.spa_preview_timeout == 5000
-    assert custom_cfg.range_limit == 5000.0
-    assert custom_cfg.max_consecutive_empty_scrolls == 2
-    assert custom_cfg.max_consecutive_out_of_range_scrolls == 1
-    assert custom_cfg.max_scroll_attempts_without_new_links == 3
-    assert custom_cfg.cache_dir == Path("/tmp/custom_cache")
-    assert custom_cfg.static_cache_dir == Path("/tmp/static")
-    assert custom_cfg.disk_cache_size == 524288
-    assert custom_cfg.max_captcha_retries == 1
-    assert custom_cfg.stagger_delay == 0.5
-
-
-def test_scrape_google_maps_with_config():
-    """Kiểm tra scrape_google_maps nhận config=ScraperConfig(...) và truyền đúng cấu hình xuống các hàm con,
-    cũng như kiểm tra quy tắc ưu tiên (precedence)."""
-
-    async def _run():
-        fake_browser = make_fake_browser()
-        mock_playwright = AsyncMock()
-        mock_playwright.chromium.launch.return_value = fake_browser
-
-        custom_cfg = ScraperConfig(
-            query_timeout=120.0,
-            range_limit=7500.0,
-            spa_preview_timeout=6000,
-            stagger_delay=0.0,
-        )
-
-        # Case 1: Config is forwarded to scrape_query_spa in SPA mode
-        with (
-            patch(
-                "map_miner.scraper.async_playwright",
-                return_value=MockPlaywrightContext(playwright=mock_playwright),
-            ),
-            patch(
-                "map_miner.scraper.scrape_query_spa", AsyncMock(return_value=[])
-            ) as mock_spa,
-        ):
-            await scrape_google_maps(
-                queries={"cafe"},
-                geo_coordinates=Point(21.0, 105.8),
-                zoom=16,
-                use_spa=True,
-                config=custom_cfg,
-            )
-            mock_spa.assert_awaited_once()
-            spa_kwargs = mock_spa.call_args.kwargs
-            assert spa_kwargs.get("config") == custom_cfg
-            assert spa_kwargs.get("range_limit") == 7500.0
-            assert spa_kwargs.get("query_timeout") == 120.0
-            assert spa_kwargs.get("preview_timeout") == 6000
-
-        # Case 2: Precedence - explicit parameter overrides config attribute
-        with (
-            patch(
-                "map_miner.scraper.async_playwright",
-                return_value=MockPlaywrightContext(playwright=mock_playwright),
-            ),
-            patch(
-                "map_miner.scraper.scrape_query_spa", AsyncMock(return_value=[])
-            ) as mock_spa,
-        ):
-            await scrape_google_maps(
-                queries={"cafe"},
-                geo_coordinates=Point(21.0, 105.8),
-                zoom=16,
-                use_spa=True,
-                range_limit=3000.0,  # Explicit param differs from default
-                query_timeout=45.0,  # Explicit param differs from default
-                config=custom_cfg,
-            )
-            mock_spa.assert_awaited_once()
-            spa_kwargs = mock_spa.call_args.kwargs
-            assert spa_kwargs.get("range_limit") == 3000.0
-            assert spa_kwargs.get("query_timeout") == 45.0
-            assert (
-                spa_kwargs.get("preview_timeout") == 6000
-            )  # Inherited from custom_cfg
-
-        # Case 3: Fallback mode - config forwarded to get_place_urls
-        with (
-            patch(
-                "map_miner.scraper.async_playwright",
-                return_value=MockPlaywrightContext(playwright=mock_playwright),
-            ),
-            patch(
-                "map_miner.scraper.get_place_urls", AsyncMock(return_value=set())
-            ) as mock_get_urls,
-        ):
-            await scrape_google_maps(
-                queries={"cafe"},
-                geo_coordinates=Point(21.0, 105.8),
-                zoom=16,
-                use_spa=False,
-                config=custom_cfg,
-            )
-            mock_get_urls.assert_awaited_once()
-            urls_kwargs = mock_get_urls.call_args.kwargs
-            assert urls_kwargs.get("config") == custom_cfg
-            assert urls_kwargs.get("range_limit") == 7500.0
-            assert urls_kwargs.get("query_timeout") == 120.0
-
-    asyncio.run(_run())
-
-
-def test_scrape_query_spa_with_config():
-    """Kiểm tra scrape_query_spa nhận config và áp dụng max_consecutive_empty_scrolls."""
-
-    async def _run():
-        mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
-        mock_context = make_mock_context(page=mock_page)
-
-        def mock_feed_locator(selector):
-            loc = AsyncMock()
-            loc.count.return_value = 0
-            loc.first.is_visible.return_value = False
-            if 'a[href*="/maps/place/"]' in selector:
-                loc.all.return_value = []
-                loc.evaluate_all.return_value = []
-            return loc
-
-        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
-        mock_page.evaluate = AsyncMock(return_value=1000)
-
-        # Custom config with max_consecutive_empty_scrolls=2 (default is 4)
-        custom_cfg = ScraperConfig(
-            max_consecutive_empty_scrolls=2,
-            query_timeout=100.0,
-        )
-
-        with (
-            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
-            patch("map_miner.scraper.scroll_feed", AsyncMock()) as mock_scroll,
-            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=False)),
-        ):
-            results = await scrape_query_spa(
-                context=mock_context,
-                query="cafe",
-                geo_coordinates=Point(21.0, 105.8),
-                zoom=16,
-                config=custom_cfg,
-            )
-            assert results == []
-            # With max_consecutive_empty_scrolls=2, scroll_feed should be called exactly 2 times
-            assert mock_scroll.await_count == 2
-
-    asyncio.run(_run())
-
-
-def test_scraper_config_cross_city_defaults():
-    """Kiểm tra giá trị mặc định của cấu hình Cross-City jump trong ScraperConfig."""
-    cfg = ScraperConfig()
-    assert cfg.cross_city_distance_threshold == 50000.0
-    assert cfg.max_consecutive_cross_city_jumps == 2
-    assert DEFAULT_CROSS_CITY_DISTANCE_THRESHOLD == 50000.0
-    assert DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS == 2
-
-
-def test_scrape_query_spa_cross_city_jump_early_stop():
-    """Kiểm tra scrape_query_spa dừng sớm an toàn khi gặp liên tiếp 2 lần POI cách xa > 50km."""
-
-    async def _run():
-        mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
-        mock_context = make_mock_context(page=mock_page)
-
-        scroll_idx = 0
-
-        def mock_feed_locator(selector):
-            nonlocal scroll_idx
-            loc = AsyncMock()
-            loc.count.return_value = 0
-            loc.first.is_visible.return_value = False
-            if 'a[href*="/maps/place/"]' in selector:
-                el = AsyncMock()
-                # 10.8, 106.6 is HCMC, ~1140 km away from Hanoi (21.0, 105.8)
-                url = f"https://www.google.com/maps/place/FarCityCafe{scroll_idx}/data=!1s0x{scroll_idx}:0x{scroll_idx}!8m2!3d10.8!4d106.6"
-                el.get_attribute.return_value = url
-                el.evaluate.return_value = None
-                loc.all.return_value = [el]
-                loc.evaluate_all.return_value = [url]
-            return loc
-
-        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
-
-        height_counter = 0
-
-        async def mock_eval(script, *args):
-            nonlocal height_counter
-            height_counter += 200
-            return height_counter
-
-        mock_page.evaluate = AsyncMock(side_effect=mock_eval)
-
-        scroll_count = 0
-
-        async def mock_scroll(page, selector):
-            nonlocal scroll_count, scroll_idx
-            scroll_count += 1
-            scroll_idx += 1
-
-        with (
-            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
-            patch("map_miner.scraper.scroll_feed", side_effect=mock_scroll),
-            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=False)),
-        ):
-            results = await scrape_query_spa(
-                context=mock_context,
-                query="cafe",
-                geo_coordinates=Point(21.0, 105.8),
-                zoom=16,
-                max_places=10,
-                range_limit=5000.0,
-            )
-
-        assert len(results) == 0
-        # Stops after DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS (2), NOT waiting for 3 or 4 scrolls!
-        assert scroll_count == DEFAULT_MAX_CONSECUTIVE_CROSS_CITY_JUMPS
-
-    asyncio.run(_run())
-
-
-def test_scrape_query_spa_cross_city_jump_reset_on_local():
-    """Kiểm tra cross-city jump counter bị reset về 0 ngay khi xuất hiện POI hợp lệ trong bán kính."""
-
-    async def _run():
-        mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
-        mock_context = make_mock_context(page=mock_page)
-
-        # Batch 1: 1 cross-city place (> 50km) AND 1 local place (< 5km)
-        el_far = AsyncMock()
-        url_far = "https://www.google.com/maps/place/FarCafe/data=!1s0x1:0x1!8m2!3d10.8!4d106.6"
-        el_far.get_attribute.return_value = url_far
-
-        el_near = AsyncMock()
-        url_near = "https://www.google.com/maps/place/NearCafe/data=!1s0x2:0x2!8m2!3d21.01!4d105.81"
-        el_near.get_attribute.return_value = url_near
-        el_near.evaluate.return_value = None
-
-        def mock_feed_locator(selector):
-            loc = AsyncMock()
-            loc.count.return_value = 0
-            loc.first.is_visible.return_value = False
-            if 'a[href*="/maps/place/"]' in selector:
-                loc.all.return_value = [el_far, el_near]
-                loc.evaluate_all.return_value = [url_far, url_near]
-            return loc
-
-        mock_page.locator = MagicMock(side_effect=mock_feed_locator)
-        mock_page.evaluate = AsyncMock(return_value=1000)
-
-        # Mock expect_response to return mock preview for NearCafe
-        mock_response = AsyncMock()
-        mock_response.text.return_value = ')]}\'\n[null,null,null,null,null,null,[null,null,null,null,null,null,null,null,null,null,null,"NearCafe"]]'
-        fut = asyncio.get_running_loop().create_future()
-        fut.set_result(mock_response)
-        mock_resp_info = MagicMock()
-        mock_resp_info.value = fut
-
-        class MockExpectResponse:
-            async def __aenter__(self):
-                return mock_resp_info
-
-            async def __aexit__(self, *args):
-                return None
-
-        mock_page.expect_response = MagicMock(return_value=MockExpectResponse())
-
-        with (
-            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
-            patch("map_miner.scraper.scroll_feed", AsyncMock()),
-            patch("map_miner.scraper.is_feed_at_end", AsyncMock(return_value=True)),
-        ):
-            results = await scrape_query_spa(
-                context=mock_context,
-                query="cafe",
-                geo_coordinates=Point(21.0, 105.8),
-                zoom=16,
-                max_places=1,
-                range_limit=5000.0,
-            )
-
-        assert len(results) == 1
-        assert results[0].get("name") == "NearCafe"
-
-    asyncio.run(_run())
+    assert DEFAULT_TIMEOUT == 30000
+    assert DEFAULT_QUERY_TIMEOUT == 300.0
+    assert DEFAULT_PLACE_TIMEOUT == 45.0
+    assert DEFAULT_CAPTCHA_TIMEOUT == 85.0
+    assert DEFAULT_SPA_PREVIEW_TIMEOUT == 10000
+    assert DEFAULT_RANGE_LIMIT == 10000.0
+    assert DEFAULT_MAX_CAPTCHA_RETRIES == 2
+    assert DEFAULT_STAGGER_DELAY == (1.5, 3.5)
+    assert DEFAULT_CACHE_DIR == Path(".cache") / "chromium_cache"
+    assert DEFAULT_STATIC_CACHE_DIR == Path(".cache") / "static_assets"
+    assert DEFAULT_DISK_CACHE_SIZE == 1073741824
+    assert MAX_CONSECUTIVE_EMPTY_SCROLLS == 4
+    assert MAX_CONSECUTIVE_OUT_OF_RANGE_SCROLLS == 3
+    assert MAX_SCROLL_ATTEMPTS_WITHOUT_NEW_LINKS == 5
 
 
 def test_scrape_query_spa_fallback_rescue_from_dom():

@@ -600,30 +600,35 @@ def parse_dom_from_html(html_content: str) -> dict[str, Any]:
             return " ".join(val)
         return str(val) if val is not None else ""
 
+    def _extract_labeled(selector: str, prefix: str) -> str | None:
+        el = soup.select_one(selector)
+        if not el:
+            return None
+        label = _attr(el, "aria-label")
+        val = re.sub(rf"^{prefix}:\s*", "", label, flags=re.IGNORECASE).strip()
+        return val or el.get_text(strip=True) or None
+
     h1 = soup.find("h1")
     if h1 and h1.get_text(strip=True):
         dom_data["name"] = h1.get_text(strip=True)
 
     # Plus code
-    pc_el = soup.select_one("[data-item-id='oloc'], [aria-label*='Plus code:']")
-    if pc_el:
-        label = _attr(pc_el, "aria-label")
-        m = re.sub(r"^Plus code:\s*", "", label, flags=re.IGNORECASE).strip()
-        dom_data["plus_code"] = m or pc_el.get_text(strip=True)
+    if pc := _extract_labeled(
+        "[data-item-id='oloc'], [aria-label*='Plus code:']", "Plus code"
+    ):
+        dom_data["plus_code"] = pc
 
     # Address
-    addr_el = soup.select_one("[data-item-id='address'], [aria-label^='Address:']")
-    if addr_el:
-        label = _attr(addr_el, "aria-label")
-        m = re.sub(r"^Address:\s*", "", label, flags=re.IGNORECASE).strip()
-        dom_data["address"] = m or addr_el.get_text(strip=True)
+    if addr := _extract_labeled(
+        "[data-item-id='address'], [aria-label^='Address:']", "Address"
+    ):
+        dom_data["address"] = addr
 
     # Phone
-    phone_el = soup.select_one("[data-item-id^='phone:'], [aria-label^='Phone:']")
-    if phone_el:
-        label = _attr(phone_el, "aria-label")
-        m = re.sub(r"^Phone:\s*", "", label, flags=re.IGNORECASE).strip()
-        dom_data["phone"] = m or phone_el.get_text(strip=True)
+    if phone := _extract_labeled(
+        "[data-item-id^='phone:'], [aria-label^='Phone:']", "Phone"
+    ):
+        dom_data["phone"] = phone
 
     # Website
     web_el = soup.select_one("[data-item-id='authority'], [aria-label^='Website:']")
@@ -1246,11 +1251,7 @@ def format_places_dataframe(
                 infer_schema_length=None,
                 schema_overrides=schema_overrides or None,
             )
-        if "reviews_count" in df.columns and df["reviews_count"].dtype != pl.Int64:
-            df = df.with_columns(pl.col("reviews_count").cast(pl.Int64))
-        return df
-
-    if fields is None:
+    elif fields is None:
         if not results:
             schema: dict[str, Any] = {
                 c: _get_flatten_column_type(c) for c in DEFAULT_FLATTEN_COLUMNS
@@ -1280,40 +1281,42 @@ def format_places_dataframe(
             infer_schema_length=None,
             schema_overrides=schema_overrides,
         )
-        if "reviews_count" in df.columns and df["reviews_count"].dtype != pl.Int64:
-            df = df.with_columns(pl.col("reviews_count").cast(pl.Int64))
-        return df
-
-    # fields is not None and flatten is False
-    top_cols = [f for f in fields if f in DEFAULT_FLATTEN_COLUMNS]
-    other_cols = [f for f in fields if f not in DEFAULT_FLATTEN_COLUMNS]
-    if not results:
-        schema_dict: dict[str, Any] = {c: _get_flatten_column_type(c) for c in top_cols}
-        if other_cols:
-            schema_dict["details"] = pl.String
-        return pl.DataFrame(schema=schema_dict)
-
-    formatted_rows = []
-    for item in results:
-        row = {c: item.get(c) for c in top_cols}
-        if other_cols:
-            details_dict = {
-                k: item[k] for k in other_cols if k in item and item[k] is not None
+    else:
+        # fields is not None and flatten is False
+        top_cols = [f for f in fields if f in DEFAULT_FLATTEN_COLUMNS]
+        other_cols = [f for f in fields if f not in DEFAULT_FLATTEN_COLUMNS]
+        if not results:
+            schema_dict: dict[str, Any] = {
+                c: _get_flatten_column_type(c) for c in top_cols
             }
-            row["details"] = json.dumps(details_dict, ensure_ascii=False, default=str)
-        formatted_rows.append(row)
+            if other_cols:
+                schema_dict["details"] = pl.String
+            return pl.DataFrame(schema=schema_dict)
 
-    overrides: dict[str, Any] = {
-        c: _get_flatten_column_type(c)
-        for c in top_cols
-        if c in ("latitude", "longitude", "rating", "reviews_count", "categories")
-    }
+        formatted_rows = []
+        for item in results:
+            row = {c: item.get(c) for c in top_cols}
+            if other_cols:
+                details_dict = {
+                    k: item[k] for k in other_cols if k in item and item[k] is not None
+                }
+                row["details"] = json.dumps(
+                    details_dict, ensure_ascii=False, default=str
+                )
+            formatted_rows.append(row)
 
-    df = pl.from_dicts(
-        formatted_rows,
-        infer_schema_length=None,
-        schema_overrides=overrides or None,
-    )
+        overrides: dict[str, Any] = {
+            c: _get_flatten_column_type(c)
+            for c in top_cols
+            if c in ("latitude", "longitude", "rating", "reviews_count", "categories")
+        }
+
+        df = pl.from_dicts(
+            formatted_rows,
+            infer_schema_length=None,
+            schema_overrides=overrides or None,
+        )
+
     if "reviews_count" in df.columns and df["reviews_count"].dtype != pl.Int64:
         df = df.with_columns(pl.col("reviews_count").cast(pl.Int64))
     return df
