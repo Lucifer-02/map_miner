@@ -1199,9 +1199,7 @@ def format_places_dataframe(
     Args:
         results (list[dict[str, Any]]): List of scraped place dictionaries.
         flatten (bool, optional): Whether to flatten all fields into individual columns.
-            Defaults to False.
         fields (Sequence[str] | set[str] | None, optional): Specific fields to include.
-            Defaults to None.
 
     Returns:
         pl.DataFrame: Formatted Polars DataFrame.

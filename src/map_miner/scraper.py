@@ -167,7 +167,6 @@ async def _global_route_handler(
     Args:
         route (Route): Playwright route object.
         static_cache_dir (Path, optional): Directory to store static assets cache.
-            Defaults to Path(".cache") / "static_assets".
     """
     curr_task = asyncio.current_task()
     if curr_task is not None:
@@ -329,14 +328,13 @@ async def _create_browser_context(
     Args:
         browser (Browser): Playwright browser instance.
         geo_coordinates (Point): Geographic center coordinates for geolocation mocking.
-        lang (str, optional): Language code. Defaults to "en".
+        lang (str, optional): Language code.
         proxy (ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None, optional):
-            Proxy settings for this context. Defaults to None.
+            Proxy settings for this context.
         static_cache_dir (Path, optional): Directory to store static assets cache.
-            Defaults to Path(".cache") / "static_assets".
-        viewport_width (int, optional): Base viewport width. Defaults to 1920.
-        viewport_height (int, optional): Base viewport height. Defaults to 1080.
-        viewport_variance (int, optional): Random pixel variance added to viewport dimensions. Defaults to 50.
+        viewport_width (int, optional): Base viewport width.
+        viewport_height (int, optional): Base viewport height.
+        viewport_variance (int, optional): Random pixel variance added to viewport dimensions.
 
     Returns:
         BrowserContext: Configured isolated browser context.
@@ -453,7 +451,6 @@ async def _pass_consent(page: Page, dismiss_delay: float = 1.0) -> bool:
     Args:
         page (Page): Target browser page.
         dismiss_delay (float, optional): Delay in seconds after clicking consent button.
-            Defaults to 1.0.
 
     Returns:
         bool: True if consent banner was dismissed, False otherwise.
@@ -537,7 +534,7 @@ async def _find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
 
     Args:
         page (Page): Target browser page.
-        timeout (int, optional): Timeout in ms to wait for the feed container. Defaults to 15000.
+        timeout (int, optional): Timeout in ms to wait for the feed container.
 
     Returns:
         str | None: Active feed selector if found, None otherwise.
@@ -565,9 +562,9 @@ async def _scroll_feed(
     Args:
         page (Page): Target browser page.
         feed_selector (str): CSS or XPath selector of feed container.
-        scroll_delta_y (int, optional): Vertical scroll delta in pixels. Defaults to 5000.
+        scroll_delta_y (int, optional): Vertical scroll delta in pixels.
         scroll_delay_range (tuple[float, float], optional): Range of random sleep delay
-            after scrolling. Defaults to (1.0, 1.6).
+            after scrolling.
     """
     try:
         feed_locator = page.locator(feed_selector).first
@@ -697,30 +694,23 @@ async def _get_place_urls(
         query (str): Search query string.
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
-        lang (str, optional): Language code. Defaults to "en".
+        lang (str, optional): Language code.
         range_limit (float): Maximum radius distance in meters from geo_coordinates.
             Google Maps local ranking combines Relevance, Distance, and Prominence
             (https://support.google.com/business/answer/7091). Prominent places further away
             may be returned before closer ones, so results are not strictly monotonic by distance.
             range_limit filters out places exceeding this radius (early drop).
-            Defaults to 10000.0m.
-        proxy_rotator (ProxyRotator | None, optional): Rotator to renew proxy on CAPTCHA block. Defaults to None.
-        query_timeout (float): Maximum seconds allowed for this query. Defaults to 300.0s.
+        proxy_rotator (ProxyRotator | None, optional): Rotator to renew proxy on CAPTCHA block.
+        query_timeout (float): Maximum seconds allowed for this query.
         links_collector (set[str] | None, optional): Mutable set to collect links in-place for zero data loss on timeout.
-        navigation_timeout (int, optional): Navigation timeout in ms. Defaults to 30000.
-        captcha_timeout (float, optional): reCAPTCHA solving timeout in seconds. Defaults to 85.0.
+        navigation_timeout (int, optional): Navigation timeout in ms.
+        captcha_timeout (float, optional): reCAPTCHA solving timeout in seconds.
         max_consecutive_empty_scrolls (int, optional): Max consecutive scrolls without new links before stopping.
-            Defaults to 4.
         max_consecutive_out_of_range_scrolls (int, optional): Max consecutive scrolls with only out-of-range links before stopping.
-            Defaults to 3.
         max_scroll_attempts_without_new_links (int, optional): Max scroll attempts when height is unchanged before stopping.
-            Defaults to 5.
         initial_delay_range (tuple[float, float], optional): Range of random sleep delay after initial navigation.
-            Defaults to (1.0, 2.5).
         min_remaining_time (float, optional): Minimum remaining time threshold in seconds before early exit.
-            Defaults to 2.0.
         scroll_retry_delay (float, optional): Sleep delay in seconds when scroll height is unchanged.
-            Defaults to 1.5.
 
     Returns:
         set[str]: Collected place URLs.
@@ -989,55 +979,40 @@ async def _scrape_query_spa(
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
         max_places (int, optional): Maximum valid places to collect. Places dropped
-            via range_limit (early drop) do not count toward this limit. Defaults to 120.
-        lang (str, optional): Language code. Defaults to "en".
-        fields (Sequence[str] | set[str] | None, optional): Selected fields. Defaults to None.
+            via range_limit (early drop) do not count toward this limit.
+        lang (str, optional): Language code.
+        fields (Sequence[str] | set[str] | None, optional): Selected fields.
         range_limit (float): Maximum radius distance in meters from geo_coordinates.
             Google Maps local ranking combines Relevance, Distance, and Prominence
             (https://support.google.com/business/answer/7091). Prominent places further away
             may be returned before closer ones, so results are not strictly monotonic by distance.
             range_limit filters out places exceeding this radius (early drop).
-            Defaults to 10000.0m.
-        proxy_rotator (ProxyRotator | None, optional): Proxy rotator to renew proxy on CAPTCHA. Defaults to None.
-        max_captcha_retries (int, optional): Max retries on CAPTCHA sorry page. Defaults to 2.
-        query_timeout (float): Maximum seconds allowed for this query. Defaults to 300.0s.
+        proxy_rotator (ProxyRotator | None, optional): Proxy rotator to renew proxy on CAPTCHA.
+        max_captcha_retries (int, optional): Max retries on CAPTCHA sorry page.
+        query_timeout (float): Maximum seconds allowed for this query.
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
-            waiting for SPA place preview XHR response. Defaults to 10000.
+            waiting for SPA place preview XHR response.
         results_collector (list[dict[str, Any]] | None, optional): Mutable list to collect
             places in-place for zero data loss on timeout.
-        navigation_timeout (int, optional): Navigation timeout in ms. Defaults to 30000.
-        captcha_timeout (float, optional): reCAPTCHA solving timeout in seconds. Defaults to 85.0.
+        navigation_timeout (int, optional): Navigation timeout in ms.
+        captcha_timeout (float, optional): reCAPTCHA solving timeout in seconds.
         max_consecutive_empty_scrolls (int, optional): Max consecutive scrolls without new items before stopping.
-            Defaults to 4.
         max_consecutive_out_of_range_scrolls (int, optional): Max consecutive scrolls with only out-of-range items before stopping.
-            Defaults to 3.
         max_scroll_attempts_without_new_links (int, optional): Max scroll attempts when height is unchanged before stopping.
-            Defaults to 5.
         static_cache_dir (Path, optional): Directory to store static assets cache when creating rotated contexts.
-            Defaults to Path(".cache") / "static_assets".
         initial_delay_range (tuple[float, float], optional): Range of random sleep delay after initial navigation.
-            Defaults to (1.0, 2.0).
         min_remaining_time (float, optional): Minimum remaining time threshold in seconds before early exit.
-            Defaults to 2.0.
-        element_timeout (int, optional): Element operation timeout in ms. Defaults to 1000.
+        element_timeout (int, optional): Element operation timeout in ms.
         pre_click_delay_range (tuple[float, float], optional): Random jitter delay range before clicking an item.
-            Defaults to (0.3, 0.8).
-        min_preview_timeout_ms (int, optional): Floor for preview response timeout in ms. Defaults to 1000.
+        min_preview_timeout_ms (int, optional): Floor for preview response timeout in ms.
         timeout_safety_margin (float, optional): Safety margin in seconds subtracted from remaining time.
-            Defaults to 0.5.
         post_item_delay_range (tuple[float, float], optional): Delay range after processing each item.
-            Defaults to (0.15, 0.35).
         post_scroll_delay_range (tuple[float, float], optional): Delay range after scrolling feed.
-            Defaults to (1.2, 2.2).
         scroll_retry_delay (float, optional): Sleep delay in seconds when scroll height is unchanged.
-            Defaults to 1.5.
         secondary_rescue_min_time (float, optional): Minimum query remaining time to attempt secondary rescue.
-            Defaults to 5.0.
-        secondary_rescue_concurrency (int, optional): Maximum concurrency for secondary rescue. Defaults to 4.
+        secondary_rescue_concurrency (int, optional): Maximum concurrency for secondary rescue.
         secondary_rescue_cutoff (float, optional): Remaining time cutoff below which secondary rescue aborts.
-            Defaults to 3.0.
         min_valid_fields (int, optional): Minimum fields required for a place dictionary to be valid.
-            Defaults to 3.
 
     Returns:
         list[dict[str, Any]]: List of place dictionaries.
@@ -1572,18 +1547,16 @@ async def _process_link(
         semaphore (asyncio.Semaphore): Concurrency semaphore.
         count (int): Current link index.
         total (int): Total links to scrape.
-        fields (Sequence[str] | set[str] | None, optional): Specific fields to extract. Defaults to None.
-        max_retries (int, optional): Max attempts for this link. Defaults to 2.
-        proxy_rotator (ProxyRotator | None, optional): Proxy rotator. Defaults to None.
-        navigation_timeout (int, optional): Navigation timeout in ms. Defaults to 30000.
-        captcha_timeout (float, optional): CAPTCHA solving timeout in seconds. Defaults to 85.0.
-        preview_wait_timeout (float, optional): Timeout waiting for preview payload in seconds. Defaults to 4.5.
-        main_selector_timeout (int, optional): Timeout waiting for main content selector in ms. Defaults to 2000.
+        fields (Sequence[str] | set[str] | None, optional): Specific fields to extract.
+        max_retries (int, optional): Max attempts for this link.
+        proxy_rotator (ProxyRotator | None, optional): Proxy rotator.
+        navigation_timeout (int, optional): Navigation timeout in ms.
+        captcha_timeout (float, optional): CAPTCHA solving timeout in seconds.
+        preview_wait_timeout (float, optional): Timeout waiting for preview payload in seconds.
+        main_selector_timeout (int, optional): Timeout waiting for main content selector in ms.
         retry_delay_range (tuple[float, float], optional): Delay range in seconds before retry attempt.
-            Defaults to (0.8, 1.5).
         captcha_retry_delay_range (tuple[float, float], optional): Delay range in seconds before CAPTCHA retry.
-            Defaults to (1.0, 2.0).
-        min_valid_fields (int, optional): Minimum fields required for valid place data. Defaults to 3.
+        min_valid_fields (int, optional): Minimum fields required for valid place data.
 
     Returns:
         dict[str, Any] | None: Extracted place data dictionary, or None on failure.
@@ -1757,7 +1730,7 @@ async def scrape_google_maps(
     flatten: bool = False,
     use_spa: bool = True,
     cache_dir: Path | None = Path(".cache") / "chromium_cache",
-    range_limit: float = 10000.0,
+    range_limit: float = 25000.0,
     query_timeout: float = 300.0,
     place_timeout: float = 45.0,
     preview_timeout: float = 10000,
@@ -1779,53 +1752,40 @@ async def scrape_google_maps(
         geo_coordinates (Point): Center coordinates for search.
         zoom (float): Map zoom level.
         proxy (ProxySettings | Sequence[ProxySettings] | str | Sequence[str] | None, optional): Single proxy
-            or sequence of proxies for round-robin rotation. Defaults to None.
+            or sequence of proxies for round-robin rotation.
         max_places (int, optional): Maximum valid places to collect per query. Places
-            dropped via range_limit (early drop) do not count toward this limit. Defaults to 120.
-        lang (str, optional): Language code for Google Maps. Defaults to "en".
-        headless (bool, optional): Whether to run headless browser. Defaults to False.
-        n_semaphore (int, optional): Maximum concurrent browser tabs/queries. Defaults to 8.
-        fields (Sequence[str] | set[str], optional): Selected fields to extract. Defaults to None (all fields).
+            dropped via range_limit (early drop) do not count toward this limit.
+        lang (str, optional): Language code for Google Maps.
+        headless (bool, optional): Whether to run headless browser.
+        n_semaphore (int, optional): Maximum concurrent browser tabs/queries.
+        fields (Sequence[str] | set[str], optional): Selected fields to extract.
         flatten (bool, optional): Whether to flatten all fields into individual columns.
             If False (default), bundles non-default fields into a 'details' JSON string column,
-            keeping 11 common columns at top-level. Defaults to False.
-        use_spa (bool, optional): Whether to use high-speed SPA navigation. Defaults to True.
+            keeping 11 common columns at top-level.
+        use_spa (bool, optional): Whether to use high-speed SPA navigation.
         cache_dir (Path | None, optional): Directory to store persistent Chromium disk cache.
-            Defaults to Path(".cache") / "chromium_cache". If None, disk caching
             flags will not be passed.
         range_limit (float): Maximum radius distance in meters from geo_coordinates.
             Google Maps local ranking combines Relevance, Distance, and Prominence
             (https://support.google.com/business/answer/7091). Prominent places further away
             may be returned before closer ones, so results are not strictly monotonic by distance.
             range_limit filters out places exceeding this radius (early drop).
-            Defaults to 10000.0m.
         query_timeout (float): Maximum seconds allowed per query before early return.
-            Defaults to 300.0s.
         place_timeout (float, optional): Maximum seconds allowed to scrape a place in fallback mode.
-            Defaults to 45.0s.
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
-            waiting for SPA place preview XHR response. Defaults to 10000.
+            waiting for SPA place preview XHR response.
         stagger_delay (tuple[float, float] | float, optional): Delay range (min, max) in
-            seconds to stagger the initial launch of concurrent queries. Set to 0 to
-            disable. Defaults to (1.5, 3.5).
+            seconds to stagger the initial launch of concurrent queries. Set to 0 to disable.
         navigation_timeout (int, optional): Maximum navigation timeout in ms for pages.
-            Defaults to 30000.
         captcha_timeout (float, optional): Maximum timeout in seconds for reCAPTCHA solving.
-            Defaults to 85.0.
         max_captcha_retries (int, optional): Maximum proxy rotation retries upon encountering CAPTCHA.
-            Defaults to 2.
         static_cache_dir (Path, optional): Directory to store static assets cache.
-            Defaults to Path(".cache") / "static_assets".
         disk_cache_size (int, optional): Maximum disk cache size in bytes.
-            Defaults to 1073741824.
         max_consecutive_empty_scrolls (int, optional): Maximum consecutive empty scrolls before stopping search.
-            Defaults to 4.
         max_consecutive_out_of_range_scrolls (int, optional): Maximum consecutive scrolls with only out-of-range places before stopping.
-            Defaults to 3.
         max_scroll_attempts_without_new_links (int, optional): Maximum scroll attempts with unchanged height before stopping.
-            Defaults to 5.
         watchdog_grace_period (float, optional): Extra grace period in seconds added to query_timeout
-            for the hard watchdog timer. Defaults to 10.0.
+            for the hard watchdog timer.
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data.

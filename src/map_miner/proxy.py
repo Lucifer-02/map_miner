@@ -33,10 +33,10 @@ def renew_tor_circuit_control(
     spamming Tor daemon and circuit renewal storms.
 
     Args:
-        host (str): Tor ControlPort host. Defaults to "127.0.0.1".
-        port (int): Tor ControlPort port. Defaults to 9051.
-        password (str): ControlPort authentication password. Defaults to "".
-        min_cooldown (float): Minimum seconds required between renewals. Defaults to 15.0.
+        host (str): Tor ControlPort host.
+        port (int): Tor ControlPort port.
+        password (str): ControlPort authentication password.
+        min_cooldown (float): Minimum seconds required between renewals.
 
     Returns:
         bool: True if authenticated and SIGNAL NEWNYM accepted (250 OK) or within cooldown, False otherwise.
@@ -112,8 +112,8 @@ def get_tor_rotating_proxy(
     SOCKS auth stream isolation.
 
     Args:
-        server (str): SOCKS5 proxy URL. Defaults to "socks5://127.0.0.1:9050".
-        bypass (str): Hosts to bypass proxy. Defaults to DEFAULT_PROXY_BYPASS.
+        server (str): SOCKS5 proxy URL.
+        bypass (str): Hosts to bypass proxy.
 
     Returns:
         ProxySettings: Configured proxy settings dictionary without credentials.
@@ -213,7 +213,6 @@ class ProxyRotator:
         Args:
             current_proxy (ProxySettings | None): Currently active proxy.
             min_cooldown (float): Minimum seconds required between Tor circuit renewals.
-                Defaults to DEFAULT_TOR_RENEW_COOLDOWN (15.0s).
 
         Returns:
             ProxySettings | None: The renewed or next proxy configuration.
