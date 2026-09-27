@@ -1054,7 +1054,7 @@ def test_get_place_urls_early_drop():
 
 
 def test_scrape_google_maps_range_limit_default_upper_bound():
-    """Verifies that range_limit defaults to 10000.0 and is passed through transparently."""
+    """Verifies that the 25 km default is passed through transparently."""
 
     async def _run():
         fake_browser = make_fake_browser()
@@ -1079,7 +1079,7 @@ def test_scrape_google_maps_range_limit_default_upper_bound():
         assert len(df) == 1
         assert df["name"][0] == "Standard Cafe"
         mock_spa.assert_awaited_once()
-        assert mock_spa.call_args.kwargs.get("range_limit") == 10000.0
+        assert mock_spa.call_args.kwargs.get("range_limit") == 25000.0
 
     asyncio.run(_run())
 
@@ -2609,7 +2609,14 @@ def test_scraper_default_constants():
     assert params["place_timeout"].default == 45.0
     assert params["captcha_timeout"].default == 85.0
     assert params["preview_timeout"].default == 10000
-    assert params["range_limit"].default == 10000.0
+    assert params["range_limit"].default == 25000.0
+    assert (
+        inspect.signature(_scrape_query_spa).parameters["range_limit"].default
+        == 25000.0
+    )
+    assert (
+        inspect.signature(_get_place_urls).parameters["range_limit"].default == 25000.0
+    )
     assert params["max_captcha_retries"].default == 2
     assert params["stagger_delay"].default == (1.5, 3.5)
     assert params["cache_dir"].default == Path(".cache") / "chromium_cache"

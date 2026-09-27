@@ -34,6 +34,8 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+By default, results are limited to 25 km from `geo_coordinates`. Set `range_limit` (in meters) to use a different radius.
+
 ## Features
 
 - **Blazing Fast**: Asynchronous I/O powered by Playwright and Polars.

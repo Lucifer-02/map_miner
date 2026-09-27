@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Đồng bộ bán kính tìm kiếm mặc định `range_limit` từ 10 km lên 25 km (`25000.0` mét) trên public API và cả hai chế độ SPA/fallback. Có thể truyền `range_limit` để dùng bán kính khác.
+
 ## [0.3.5] - 2026-09-23
 
 ### Changed
@@ -134,7 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Mở Rộng Proxy Bypass**: Mở rộng [`DEFAULT_PROXY_BYPASS`](file:///data/IMPORTANT/map_miner/src/map_miner/proxy.py) bổ sung các Google static CDN domains (`fonts.gstatic.com`, `apis.google.com`, `ssl.gstatic.com`), định tuyến trực tiếp static assets không tiêu tốn lưu lượng proxy dân cư.
   - **Mở Rộng Bộ Lọc URL Rác**: Bổ sung `"feedback-pa.clients6.google.com"`, `"ogads-pa.clients6.google.com"`, `"/maps/preview/entity"` vào `BLOCKED_URL_PATTERNS`, triệt tiêu hoàn toàn các request telemetry, quảng cáo và entity dư thừa.
 - **Upper Bound Guardrails**:
-  - Thiết lập hằng số [`DEFAULT_RANGE_LIMIT = 10000.0`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) (10 km ceiling radius) làm giới hạn bán kính tìm kiếm mặc định, bảo vệ hệ thống không cào lan man ra ngoài phạm vi địa lý dự kiến.
+  - Tại thời điểm phiên bản này, thiết lập hằng số `DEFAULT_RANGE_LIMIT = 10000.0` (10 km) làm giới hạn bán kính tìm kiếm mặc định. Giá trị này đã được thay bằng mặc định 25 km trong mục Unreleased ở trên.
   - Đồng bộ hằng số [`DEFAULT_QUERY_TIMEOUT = 300.0`](file:///data/IMPORTANT/map_miner/src/map_miner/scraper.py) (5 phút) áp dụng trực tiếp xuyên suốt `scrape_google_maps`, `scrape_query_spa`, và `get_place_urls`.
 
 ### Changed
