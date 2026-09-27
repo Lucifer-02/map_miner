@@ -1,6 +1,6 @@
 # Bối cảnh kỹ thuật: map_miner
 
-`map_miner` 0.3.5 là thư viện Python 3.12+ thu thập địa điểm từ Google Maps bằng Playwright bất đồng bộ và trả về `polars.DataFrame`. Tài liệu này mô tả hành vi hiện hành; lịch sử thay đổi nằm trong [CHANGELOG.md](CHANGELOG.md).
+`map_miner` 0.3.6 là thư viện Python 3.12+ thu thập địa điểm từ Google Maps bằng Playwright bất đồng bộ và trả về `polars.DataFrame`. Tài liệu này mô tả hành vi hiện hành; lịch sử thay đổi nằm trong [CHANGELOG.md](CHANGELOG.md).
 
 ## Điểm vào và luồng dữ liệu
 
@@ -11,6 +11,7 @@ import asyncio
 from geopy.point import Point
 from map_miner import scrape_google_maps
 
+
 async def main():
     places = await scrape_google_maps(
         queries={"cafe"},
@@ -19,6 +20,7 @@ async def main():
         max_places=3,
     )
     print(places)
+
 
 asyncio.run(main())
 ```
@@ -75,11 +77,11 @@ Các timeout tính theo giây trừ `navigation_timeout` và `preview_timeout` t
 
 ## Kết quả và chọn trường
 
-Mặc định (`fields=None`, `flatten=False`), kết quả có 11 cột top-level theo [`DEFAULT_FLATTEN_COLUMNS`](src/map_miner/extractor.py): `name`, `place_id`, `latitude`, `longitude`, `address`, `link`, `categories`, `rating`, `reviews_count`, `plus_code`, `city`; metadata khác được mã hóa JSON vào cột `details`. Giá trị thiếu có thể là `null`. `reviews_count` có kiểu `Int64` khi cột này tồn tại.
+Mặc định (`fields=None`, `flatten=False`), kết quả có 11 cột top-level theo [`DEFAULT_FLATTEN_COLUMNS`](src/map_miner/extractor.py): `name`, `place_id`, `latitude`, `longitude`, `address`, `link`, `categories`, `rating`, `reviews_count`, `plus_code`, `city`; thêm cột top-level `query` là chuỗi gốc trong `queries`; metadata khác được mã hóa JSON vào cột `details`. Giá trị thiếu có thể là `null`. `reviews_count` có kiểu `Int64` khi cột này tồn tại.
 
-Khi không có kết quả ở chế độ mặc định, DataFrame rỗng vẫn giữ schema 12 cột trên. Với `flatten=True`, các trường thực sự trích được nằm ở top-level; số cột thay đổi theo dữ liệu, và khi không có kết quả cùng `fields=None`, DataFrame có thể không có cột.
+Khi không có kết quả ở chế độ mặc định, DataFrame rỗng vẫn giữ schema 13 cột trên. Với `flatten=True`, các trường thực sự trích được nằm ở top-level; số cột thay đổi theo dữ liệu, và khi không có kết quả cùng `fields=None`, DataFrame vẫn có cột `query` kiểu chuỗi.
 
-`fields` giới hạn trường được trích xuất và cột đầu ra. Với `flatten=False`, các trường trong 11 cột mặc định được giữ ở top-level, các trường yêu cầu khác nằm trong `details`. Với `flatten=True`, các trường yêu cầu có sẵn được bung thành cột. Chỉ yêu cầu `fields=["link"]` hiện có thể làm mất địa điểm vì link được gắn sau khi trích xuất; xem đây là giới hạn cần sửa.
+`fields` giới hạn trường được trích xuất và cột đầu ra, nhưng luôn giữ `query` ở top-level. Với `flatten=False`, các trường trong 11 cột mặc định được giữ ở top-level, các trường yêu cầu khác nằm trong `details`. Với `flatten=True`, các trường yêu cầu có sẵn được bung thành cột. Một địa điểm xuất hiện trong nhiều truy vấn có một hàng cho mỗi truy vấn; fallback chỉ lấy chi tiết mỗi URL duy nhất một lần. Chỉ yêu cầu `fields=["link"]` hiện có thể làm mất địa điểm vì link được gắn sau khi trích xuất; xem đây là giới hạn cần sửa.
 
 ## Giới hạn vận hành
 

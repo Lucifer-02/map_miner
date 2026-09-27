@@ -261,6 +261,27 @@ def test_format_places_dataframe_with_fields_flatten_true(sample_places_data):
     assert df_empty.columns == ["name", "rating"]
 
 
+@pytest.mark.parametrize("flatten", [False, True])
+@pytest.mark.parametrize("fields", [None, ["name"], ["phone"], ["query"]])
+def test_format_places_dataframe_keeps_query_top_level(
+    sample_places_data, flatten, fields
+):
+    place = {**sample_places_data[0], "query": "cafe_hanoi"}
+    df = format_places_dataframe(
+        [place], flatten=flatten, fields=fields, include_query=True
+    )
+    empty = format_places_dataframe(
+        [], flatten=flatten, fields=fields, include_query=True
+    )
+
+    assert "query" in df.columns
+    assert df["query"].to_list() == ["cafe_hanoi"]
+    assert "query" in empty.columns
+    assert empty.schema["query"] == pl.String
+    if "details" in df.columns:
+        assert "query" not in json.loads(df["details"][0])
+
+
 def test_scrape_google_maps_forwards_flatten_parameter():
     """Verifies that scrape_google_maps forwards the flatten parameter to format_places_dataframe."""
 

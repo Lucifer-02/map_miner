@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-27
+
+### Added
+- Thêm cột `query` vào kết quả để xác định truy vấn gốc của từng địa điểm, kể cả khi dùng `fields`, `flatten` hoặc kết quả rỗng.
+- Giữ một bản ghi cho mỗi truy vấn khi cùng địa điểm xuất hiện trong nhiều truy vấn; ở chế độ fallback, mỗi URL duy nhất vẫn chỉ được lấy chi tiết một lần.
+
 ### Changed
 - Đồng bộ bán kính tìm kiếm mặc định `range_limit` từ 10 km lên 25 km (`25000.0` mét) trên public API và cả hai chế độ SPA/fallback. Có thể truyền `range_limit` để dùng bán kính khác.
 

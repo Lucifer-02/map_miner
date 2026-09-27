@@ -36,6 +36,13 @@ if __name__ == "__main__":
 
 By default, results are limited to 25 km from `geo_coordinates`. Set `range_limit` (in meters) to use a different radius.
 
+Each result has a top-level `query` column containing the original string from
+`queries` (for example, `"cafe_hanoi"`). If a place appears in two searches, it
+appears in two rows, one for each query. This applies to both `use_spa` modes;
+the fallback mode fetches each unique place URL only once. The `query` column
+remains present when `fields` selects other columns, when `flatten=True`, and
+when the result is empty.
+
 ## Features
 
 - **Blazing Fast**: Asynchronous I/O powered by Playwright and Polars.

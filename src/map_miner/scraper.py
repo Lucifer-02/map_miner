@@ -1758,7 +1758,8 @@ async def scrape_google_maps(
         lang (str, optional): Language code for Google Maps.
         headless (bool, optional): Whether to run headless browser.
         n_semaphore (int, optional): Maximum concurrent browser tabs/queries.
-        fields (Sequence[str] | set[str], optional): Selected fields to extract.
+        fields (Sequence[str] | set[str], optional): Selected place fields to extract.
+            The original query is always included as a top-level column.
         flatten (bool, optional): Whether to flatten all fields into individual columns.
             If False (default), bundles non-default fields into a 'details' JSON string column,
             keeping 11 common columns at top-level.
@@ -1788,9 +1789,14 @@ async def scrape_google_maps(
             for the hard watchdog timer.
 
     Returns:
-        pl.DataFrame: DataFrame containing scraped places data.
+        pl.DataFrame: DataFrame containing scraped places data. Places found by
+            multiple queries have one row per query, with its original string.
     """
     results: list[dict[str, Any]] = []
+    extraction_fields = fields
+    if fields is not None and "query" in fields:
+        requested_place_fields = [field for field in fields if field != "query"]
+        extraction_fields = requested_place_fields or None
     browser = None
     proxy_rotator = ProxyRotator(proxy)
 
@@ -1818,6 +1824,7 @@ async def scrape_google_maps(
 
             query_semaphore = asyncio.Semaphore(n_semaphore)
 
+            query_list = list(queries)
             if use_spa:
                 logger.info(
                     "Scraping in SPA Navigation mode (max concurrency: %d, proxies: %d)...",
@@ -1870,7 +1877,7 @@ async def scrape_google_maps(
                                 zoom=zoom,
                                 max_places=max_places,
                                 lang=lang,
-                                fields=fields,
+                                fields=extraction_fields,
                                 range_limit=range_limit,
                                 proxy_rotator=proxy_rotator,
                                 max_captcha_retries=max_captcha_retries,
@@ -1911,7 +1918,7 @@ async def scrape_google_maps(
 
                 spa_tasks = [
                     asyncio.create_task(run_spa_query(i, query))
-                    for i, query in enumerate(queries)
+                    for i, query in enumerate(query_list)
                 ]
                 try:
                     list_of_results = await asyncio.gather(
@@ -1924,14 +1931,16 @@ async def scrape_google_maps(
                     await asyncio.gather(*spa_tasks, return_exceptions=True)
                     raise
                 valid_results: list[list[dict[str, Any]]] = []
-                for res in list_of_results:
+                for query, res in zip(query_list, list_of_results, strict=True):
                     if isinstance(res, Exception):
                         logger.error(
                             "Unexpected exception gathered in SPA query: %s",
                             res,
                         )
                     elif isinstance(res, list):
-                        valid_results.append(res)
+                        valid_results.append(
+                            [{**place, "query": query} for place in res]
+                        )
                 results = list(itertools.chain.from_iterable(valid_results))
                 logger.info(
                     "✅ Successfully collected %d places via SPA Navigation.",
@@ -2023,7 +2032,7 @@ async def scrape_google_maps(
 
                 tasks = [
                     asyncio.create_task(run_get_urls(i, query))
-                    for i, query in enumerate(queries)
+                    for i, query in enumerate(query_list)
                 ]
                 try:
                     list_of_sets_of_links = await asyncio.gather(
@@ -2035,16 +2044,17 @@ async def scrape_google_maps(
                             t.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
                     raise
-                valid_link_sets: list[set[str]] = []
-                for r in list_of_sets_of_links:
+                link_queries: dict[str, set[str]] = {}
+                for query, r in zip(query_list, list_of_sets_of_links, strict=True):
                     if isinstance(r, Exception):
                         logger.error(
                             "Unexpected exception gathered in get_place_urls: %s",
                             r,
                         )
                     elif isinstance(r, set):
-                        valid_link_sets.append(r)
-                place_links = list(set(itertools.chain.from_iterable(valid_link_sets)))
+                        for link in r:
+                            link_queries.setdefault(link, set()).add(query)
+                place_links = list(link_queries)
                 logger.info("Collected %d unique place URLs.", len(place_links))
 
                 logger.info(
@@ -2074,7 +2084,7 @@ async def scrape_google_maps(
                                 asyncio.Semaphore(1),
                                 idx + 1,
                                 total,
-                                fields=fields,
+                                fields=extraction_fields,
                                 proxy_rotator=proxy_rotator,
                                 navigation_timeout=navigation_timeout,
                                 captcha_timeout=captcha_timeout,
@@ -2116,7 +2126,12 @@ async def scrape_google_maps(
                             t.cancel()
                     await asyncio.gather(*detail_tasks, return_exceptions=True)
                     raise
-                results = [r for r in raw_results if isinstance(r, dict)]
+                results = [
+                    {**place, "query": query}
+                    for link, place in zip(place_links, raw_results, strict=True)
+                    if isinstance(place, dict)
+                    for query in sorted(link_queries[link])
+                ]
                 logger.info("✅ Successfully collected %d places.", len(results))
 
         except asyncio.CancelledError:
@@ -2129,4 +2144,6 @@ async def scrape_google_maps(
         finally:
             await _safe_close_browser(browser)
 
-    return format_places_dataframe(results, flatten=flatten, fields=fields)
+    return format_places_dataframe(
+        results, flatten=flatten, fields=fields, include_query=True
+    )

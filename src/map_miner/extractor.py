@@ -1183,6 +1183,7 @@ def format_places_dataframe(
     results: list[dict[str, Any]],
     flatten: bool = False,
     fields: Sequence[str] | set[str] | None = None,
+    include_query: bool = False,
 ) -> pl.DataFrame:
     """Formats scraped places data into a Polars DataFrame.
 
@@ -1200,6 +1201,8 @@ def format_places_dataframe(
         results (list[dict[str, Any]]): List of scraped place dictionaries.
         flatten (bool, optional): Whether to flatten all fields into individual columns.
         fields (Sequence[str] | set[str] | None, optional): Specific fields to include.
+        include_query (bool, optional): Keep the originating query as a top-level
+            string column even when fields omits it. Used by scrape_google_maps.
 
     Returns:
         pl.DataFrame: Formatted Polars DataFrame.
@@ -1220,13 +1223,22 @@ def format_places_dataframe(
         sanitized_results.append(item_copy)
     results = sanitized_results
 
+    def with_query(row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+        if include_query:
+            row["query"] = item.get("query")
+        return row
+
     if flatten:
         if not results:
             if fields is not None:
                 schema = {
                     f: (pl.Int64 if f == "reviews_count" else pl.String) for f in fields
                 }
+                if include_query:
+                    schema["query"] = pl.String
                 return pl.DataFrame(schema=schema)
+            if include_query:
+                return pl.DataFrame(schema={"query": pl.String})
             return pl.DataFrame()
 
         schema_overrides: dict[str, Any] = {}
@@ -1234,7 +1246,8 @@ def format_places_dataframe(
             if "reviews_count" in fields:
                 schema_overrides["reviews_count"] = pl.Int64
             filtered_results = [
-                {k: item[k] for k in fields if k in item} for item in results
+                with_query({k: item[k] for k in fields if k in item}, item)
+                for item in results
             ]
             df = pl.from_dicts(
                 filtered_results,
@@ -1255,6 +1268,8 @@ def format_places_dataframe(
                 c: _get_flatten_column_type(c) for c in DEFAULT_FLATTEN_COLUMNS
             }
             schema["details"] = pl.String
+            if include_query:
+                schema["query"] = pl.String
             return pl.DataFrame(schema=schema)
 
         formatted_rows: list[dict[str, Any]] = []
@@ -1263,10 +1278,12 @@ def format_places_dataframe(
             details_dict = {
                 k: v
                 for k, v in item.items()
-                if k not in DEFAULT_FLATTEN_COLUMNS and v is not None
+                if k not in DEFAULT_FLATTEN_COLUMNS
+                and (not include_query or k != "query")
+                and v is not None
             }
             row["details"] = json.dumps(details_dict, ensure_ascii=False, default=str)
-            formatted_rows.append(row)
+            formatted_rows.append(with_query(row, item))
         schema_overrides = {
             "latitude": pl.Float64,
             "longitude": pl.Float64,
@@ -1282,13 +1299,19 @@ def format_places_dataframe(
     else:
         # fields is not None and flatten is False
         top_cols = [f for f in fields if f in DEFAULT_FLATTEN_COLUMNS]
-        other_cols = [f for f in fields if f not in DEFAULT_FLATTEN_COLUMNS]
+        other_cols = [
+            f
+            for f in fields
+            if f not in DEFAULT_FLATTEN_COLUMNS and (not include_query or f != "query")
+        ]
         if not results:
             schema_dict: dict[str, Any] = {
                 c: _get_flatten_column_type(c) for c in top_cols
             }
             if other_cols:
                 schema_dict["details"] = pl.String
+            if include_query:
+                schema_dict["query"] = pl.String
             return pl.DataFrame(schema=schema_dict)
 
         formatted_rows = []
@@ -1301,7 +1324,7 @@ def format_places_dataframe(
                 row["details"] = json.dumps(
                     details_dict, ensure_ascii=False, default=str
                 )
-            formatted_rows.append(row)
+            formatted_rows.append(with_query(row, item))
 
         overrides: dict[str, Any] = {
             c: _get_flatten_column_type(c)

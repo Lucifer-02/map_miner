@@ -2275,9 +2275,63 @@ def test_run_spa_query_rescues_results_on_watchdog_timeout():
 
         assert len(df) == 1
         assert df["name"][0] == "Rescued Cafe"
+        assert df["query"][0] == "cafe"
         assert len(created_contexts) == 1
         created_contexts[0].close.assert_awaited()
         fake_browser.close.assert_awaited()
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("use_spa", [True, False])
+@pytest.mark.parametrize("fields", [["name"], ["query"]])
+def test_scrape_google_maps_preserves_query_rows_without_extra_detail_requests(
+    use_spa, fields
+):
+    async def _run():
+        browser = make_fake_browser()
+        shared_link = "https://maps.google.com/place/shared"
+        seen_queries = set()
+        detail_calls = []
+
+        async def mock_spa(context, query, **kwargs):
+            seen_queries.add(query)
+            assert kwargs["fields"] == (["name"] if fields == ["name"] else None)
+            return [{"name": "Shared", "link": shared_link}]
+
+        async def mock_urls(context, query, **kwargs):
+            seen_queries.add(query)
+            return {shared_link}
+
+        async def mock_detail(context, link, *args, **kwargs):
+            detail_calls.append(link)
+            assert kwargs["fields"] == (["name"] if fields == ["name"] else None)
+            return {"name": "Shared", "link": link}
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(browser),
+            ),
+            patch("map_miner.scraper._scrape_query_spa", side_effect=mock_spa),
+            patch("map_miner.scraper._get_place_urls", side_effect=mock_urls),
+            patch("map_miner.scraper._process_link", side_effect=mock_detail),
+        ):
+            df = await scrape_google_maps(
+                queries={"cafe_hanoi", "coffee_shop"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                use_spa=use_spa,
+                fields=fields,
+                stagger_delay=0,
+            )
+
+        assert seen_queries == {"cafe hanoi", "coffee shop"}
+        assert df.columns == (["name", "query"] if fields == ["name"] else ["query"])
+        if "name" in df.columns:
+            assert df["name"].to_list() == ["Shared", "Shared"]
+        assert set(df["query"].to_list()) == {"cafe_hanoi", "coffee_shop"}
+        assert len(detail_calls) == (0 if use_spa else 1)
 
     asyncio.run(_run())
 
