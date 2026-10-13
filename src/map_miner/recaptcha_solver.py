@@ -6,7 +6,8 @@ import random
 import re
 import tempfile
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 import aiohttp
 import speech_recognition as sr
@@ -17,6 +18,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 from pydub import AudioSegment
+from pydub.effects import high_pass_filter, low_pass_filter, normalize
 
 logger = logging.getLogger(__name__)
 
@@ -113,13 +115,16 @@ def preprocess_audio(mp3_path: str, wav_path: str) -> None:
     Converts to 16kHz mono, normalizes volume, and applies 300Hz-3400Hz band-pass filter.
     Outputs standard 16-bit PCM WAV.
     """
-    sound = AudioSegment.from_mp3(mp3_path)
-    processed = (
-        sound.set_frame_rate(16000)
-        .set_channels(1)
-        .normalize()
-        .high_pass_filter(300)
-        .low_pass_filter(3400)
+    # from_mp3 returns AudioSegment, despite the inferred constructor union.
+    sound = cast(AudioSegment, AudioSegment.from_mp3(mp3_path))
+    processed = sound.set_frame_rate(16000).set_channels(1)
+    # The registration decorator returns each filter unchanged at runtime.
+    processed = cast(Callable[[AudioSegment], AudioSegment], normalize)(processed)
+    processed = cast(Callable[[AudioSegment, int], AudioSegment], high_pass_filter)(
+        processed, 300
+    )
+    processed = cast(Callable[[AudioSegment, int], AudioSegment], low_pass_filter)(
+        processed, 3400
     )
     processed.export(wav_path, format="wav")
 
@@ -175,7 +180,11 @@ def transcribe_audio(wav_path: str, engine: str = "auto") -> str:
 
     def _try_vosk() -> str | None:
         try:
-            res = recognizer.recognize_vosk(audio)
+            vosk_fn = getattr(recognizer, "recognize_vosk", None)
+            if vosk_fn is None:
+                errors.append("vosk: recognize_vosk not available")
+                return None
+            res = vosk_fn(audio)
             if isinstance(res, str) and "text" in res:
                 try:
                     data = json.loads(res)
@@ -745,7 +754,8 @@ class RecaptchaSolver:
                     def _export_raw_wav(
                         src: str = path_to_mp3, dst: str = path_to_raw_wav
                     ) -> None:
-                        snd = AudioSegment.from_mp3(src)
+                        # from_mp3 returns AudioSegment, despite the inferred union.
+                        snd = cast(AudioSegment, AudioSegment.from_mp3(src))
                         snd.set_frame_rate(16000).set_channels(1).export(
                             dst, format="wav"
                         )

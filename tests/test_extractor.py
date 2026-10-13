@@ -1,4 +1,5 @@
 import json
+from typing import Any
 from unittest.mock import MagicMock
 
 import polars as pl
@@ -72,7 +73,7 @@ def test_parse_dom_from_html():
 
 
 def test_extract_place_data_blob():
-    mock_blob = [None] * 250
+    mock_blob: list[Any] = [None] * 250
     mock_blob[11] = "Highlands Coffee"
     mock_blob[78] = "ChIJ12345"
     mock_blob[9] = [None, None, 21.0, 105.8]
@@ -129,13 +130,14 @@ def test_extract_place_data_field_filtering():
     </html>
     """
     data = extract_place_data(html_content=html, fields=["name", "rating"])
+    assert data is not None
     assert data == {"name": "Test Cafe", "rating": 4.2}
     assert "reviews_count" not in data
 
 
 def test_parse_json_data_xssi_variations():
     # Test path [3][6] with \r\n and whitespace after )]}'
-    blob = [None] * 20
+    blob: list[Any] = [None] * 20
     blob[11] = "Cafe With Windows CRLF"
     inner_data = [None, None, None, None, None, None, blob]
     crlf_str = ")]}'\r\n" + json.dumps(inner_data)
@@ -146,7 +148,7 @@ def test_parse_json_data_xssi_variations():
     assert res[11] == "Cafe With Windows CRLF"
 
     # Test path [3][5] alternative with space after )]}'
-    alt_blob = [None] * 20
+    alt_blob: list[Any] = [None] * 20
     alt_blob[11] = "Cafe Alt Path"
     alt_inner = [alt_blob]
     space_str = ")]}' " + json.dumps(alt_inner)

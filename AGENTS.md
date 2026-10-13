@@ -33,7 +33,7 @@ Với thay đổi mã, worker chạy:
 ```bash
 uv run ruff check .
 uv run ruff format --check .
-uv run ty check
+uv run pyrefly check
 uv run pytest
 ```
 

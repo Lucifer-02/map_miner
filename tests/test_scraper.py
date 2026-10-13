@@ -234,7 +234,7 @@ def test_preview_interceptor_validates_structure_not_magic_length():
         assert not interceptor.preview_event.is_set()
 
         # 2. Payload < 1500 characters but structurally VALID preview JSON -> MUST be accepted
-        valid_small_blob = [None] * 20
+        valid_small_blob: list[Any] = [None] * 20
         valid_small_blob[11] = "Tiny Cafe"
         valid_outer_list = [None, [], None, None, None, None, valid_small_blob]
         valid_small_payload = ")]}'\n" + json.dumps(valid_outer_list)
@@ -259,7 +259,7 @@ def test_preview_interceptor_validates_structure_not_magic_length():
 def test_polars_schema_infer_length_none():
     # 105 rows where first 100 rows have None for a nested struct/dict column,
     # and 101st row has an actual dictionary.
-    rows = []
+    rows: list[dict[str, str | dict[str, str] | list[str] | None]] = []
     for i in range(100):
         rows.append(
             {
@@ -307,7 +307,7 @@ def test_spa_processed_links_only_on_successful_click():
         mock_page.content.return_value = "<html></html>"
         mock_page.wait_for_selector.return_value = None
 
-        valid_blob = [None] * 20
+        valid_blob: list[Any] = [None] * 20
         valid_blob[11] = "Recovered Cafe"
         valid_outer = [None, [], None, None, None, None, valid_blob]
         valid_preview = ")]}'\n" + json.dumps(valid_outer)
@@ -416,7 +416,7 @@ def test_spa_field_filtering_few_fields_without_name():
         mock_page.content.return_value = "<html></html>"
         mock_page.wait_for_selector.return_value = None
 
-        valid_blob = [None] * 20
+        valid_blob: list[Any] = [None] * 20
         valid_blob[9] = [None, None, 21.0285, 105.8542]
         valid_blob[11] = "Sample Cafe"
         valid_outer = [None, [], None, None, None, None, valid_blob]
@@ -662,7 +662,14 @@ def test_scrape_google_maps_context_isolation_fallback_mode():
     asyncio.run(_run())
 
 
-def test_scrape_google_maps_context_cleanup_on_error():
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "Browser crashed or tab disconnected",
+        "Executable doesn't exist at /missing/chromium",
+    ],
+)
+def test_scrape_google_maps_context_cleanup_on_error(error_message):
     """Verifies that if a query fails, its context is still safely closed (Zero Leaks)."""
 
     async def _run():
@@ -672,7 +679,7 @@ def test_scrape_google_maps_context_cleanup_on_error():
         mock_playwright.chromium.launch.return_value = fake_browser
 
         async def mock_spa_fail(context, query, **kwargs):
-            raise PlaywrightError("Browser crashed or tab disconnected")
+            raise PlaywrightError(error_message)
 
         with (
             patch(
@@ -693,6 +700,77 @@ def test_scrape_google_maps_context_cleanup_on_error():
         assert len(created_contexts) == 1
         # Crucial test: context MUST be closed even when scrape_query_spa crashes
         created_contexts[0].close.assert_awaited_once()
+        fake_browser.close.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("use_spa", [True, False])
+@pytest.mark.parametrize("apostrophe", ["'", "’"])
+def test_scrape_google_maps_missing_chromium_raises(use_spa, apostrophe):
+    async def _run():
+        launch_error = PlaywrightError(
+            f"BrowserType.launch: Executable doesn{apostrophe}t exist at /missing/chromium"
+        )
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.side_effect = launch_error
+        playwright_context = AsyncMock()
+        playwright_context.__aenter__.return_value = mock_playwright
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright", return_value=playwright_context
+            ),
+            pytest.raises(RuntimeError, match="Chromium for Playwright") as exc_info,
+        ):
+            await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                use_spa=use_spa,
+                cache_dir=None,
+            )
+
+        assert "uv run playwright install chromium" in str(exc_info.value)
+        assert exc_info.value.__cause__ is launch_error
+        mock_playwright.chromium.launch.assert_awaited_once()
+        mock_playwright.chromium.launch.return_value.new_context.assert_not_awaited()
+        playwright_context.__aexit__.assert_awaited_once()
+        assert playwright_context.__aexit__.await_args.args[1] is exc_info.value
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("use_spa", [True, False])
+@pytest.mark.parametrize(
+    "launch_error",
+    [
+        PlaywrightError("Host system is missing dependencies to run browsers"),
+        PlaywrightError("Browser crashed or tab disconnected"),
+        RuntimeError("Executable doesn't exist at /missing/chromium"),
+    ],
+)
+def test_scrape_google_maps_other_launch_errors_return_empty(use_spa, launch_error):
+    async def _run():
+        mock_playwright = AsyncMock()
+        mock_playwright.chromium.launch.side_effect = launch_error
+        playwright_context = AsyncMock()
+        playwright_context.__aenter__.return_value = mock_playwright
+
+        with patch(
+            "map_miner.scraper.async_playwright", return_value=playwright_context
+        ):
+            df = await scrape_google_maps(
+                queries={"cafe"},
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                use_spa=use_spa,
+                cache_dir=None,
+            )
+
+        assert df.is_empty()
+        mock_playwright.chromium.launch.assert_awaited_once()
+        playwright_context.__aexit__.assert_awaited_once_with(None, None, None)
 
     asyncio.run(_run())
 
@@ -756,11 +834,9 @@ def test_scrape_google_maps_cache_dir_modes(tmp_path, cache_mode):
         elif cache_mode == "none":
             assert not any("--disk-cache-dir" in arg for arg in launch_args)
             assert not any("--disk-cache-size" in arg for arg in launch_args)
-        else:  # "default"
+        else:  # The default enables persistent Chromium disk caching.
             resolved_default = (Path(".cache") / "chromium_cache").resolve()
-            assert any(
-                f"--disk-cache-dir={resolved_default}" in arg for arg in launch_args
-            )
+            assert f"--disk-cache-dir={resolved_default}" in launch_args
             assert "--disk-cache-size=1073741824" in launch_args
 
     asyncio.run(_run())
@@ -848,7 +924,7 @@ def test_spa_early_drop():
         mock_page.content.return_value = "<html></html>"
         mock_page.wait_for_selector.return_value = None
 
-        valid_blob = [None] * 20
+        valid_blob: list[Any] = [None] * 20
         valid_blob[11] = "Near Cafe"
         valid_outer = [None, [], None, None, None, None, valid_blob]
         valid_preview = ")]}'\n" + json.dumps(valid_outer)
@@ -1148,10 +1224,12 @@ def test_spa_retry_on_captcha_blocked():
         mock_context_1 = MagicMock()
         mock_context_1.browser = mock_browser
         mock_context_1.close = AsyncMock()
+        mock_context_1.unroute_all = AsyncMock()
 
         mock_context_2 = MagicMock()
         mock_context_2.browser = mock_browser
         mock_context_2.close = AsyncMock()
+        mock_context_2.unroute_all = AsyncMock()
 
         page_1 = MagicMock()
         page_1.url = "https://www.google.com/sorry/index"
@@ -1273,7 +1351,7 @@ def test_scrape_query_spa_timeout_returns_partial_results():
         mock_page.content.return_value = "<html></html>"
         mock_page.wait_for_selector.return_value = None
 
-        valid_blob = [None] * 20
+        valid_blob: list[Any] = [None] * 20
         valid_blob[11] = "Cafe 1"
         valid_outer = [None, [], None, None, None, None, valid_blob]
         valid_preview = ")]}'\n" + json.dumps(valid_outer)
@@ -1639,9 +1717,13 @@ def test_scrape_google_maps_watchdog_timeout_spa():
             await asyncio.sleep(100.0)
             return []
 
+        original_wait_for = asyncio.wait_for
+
         async def mock_wait_for(coro, timeout):
-            coro.close()
-            raise TimeoutError("Hard watchdog timeout")
+            if timeout == 40.0:
+                coro.close()
+                raise TimeoutError("Hard watchdog timeout")
+            return await original_wait_for(coro, timeout)
 
         with (
             patch(
@@ -1977,6 +2059,147 @@ def test_static_route_cache_css_content_type(tmp_path):
         assert kwargs["headers"]["x-cache"] == "HIT-ROUTE-CACHE"
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize("failure_stage", ["fetch", "body"])
+def test_static_cache_failure_releases_browser_request(tmp_path, failure_stage):
+    async def run():
+        route = AsyncMock()
+        route.request.url = "https://www.google.com/maps/_/js/test.js"
+        route.request.method = "GET"
+        route.request.resource_type = "script"
+        response = AsyncMock(status=200)
+        route.fetch.return_value = response
+        getattr(
+            route if failure_stage == "fetch" else response, failure_stage
+        ).side_effect = PlaywrightError("fetch failed")
+        await _global_route_handler(route, static_cache_dir=tmp_path)
+        route.continue_.assert_awaited_once()
+        route.fulfill.assert_not_awaited()
+        assert not list(tmp_path.iterdir())
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation", ["continue_", "fulfill", "abort"])
+def test_route_resolution_error_does_not_retry(operation, tmp_path):
+    async def run():
+        route = AsyncMock()
+        route.request.url = (
+            "https://www.google.com/maps/_/js/test.js"
+            if operation == "fulfill"
+            else "https://example.com/resource"
+        )
+        route.request.method = "GET"
+        route.request.resource_type = "image" if operation == "abort" else "script"
+        route.fetch.return_value = AsyncMock(status=503)
+        getattr(route, operation).side_effect = PlaywrightError("context closed")
+        await _global_route_handler(route, static_cache_dir=tmp_path)
+        getattr(route, operation).assert_awaited_once()
+        if operation != "continue_":
+            route.continue_.assert_not_awaited()
+
+    asyncio.run(run())
+
+
+def test_static_cache_error_response_not_cached(tmp_path):
+    async def run():
+        route = AsyncMock()
+        route.request.url = "https://www.google.com/maps/_/js/test.js"
+        route.request.method = "GET"
+        route.request.resource_type = "script"
+        response = AsyncMock(status=503)
+        route.fetch.return_value = response
+        await _global_route_handler(route, static_cache_dir=tmp_path)
+        route.fulfill.assert_awaited_once_with(response=response)
+        response.body.assert_not_awaited()
+        assert not list(tmp_path.iterdir())
+
+    asyncio.run(run())
+
+
+def test_static_fetch_cancelled_aborts_without_retry(tmp_path):
+    async def run():
+        route = AsyncMock()
+        route.request.url = "https://www.google.com/maps/_/js/test.js"
+        route.request.method = "GET"
+        route.request.resource_type = "script"
+        started = asyncio.Event()
+
+        async def fetch():
+            started.set()
+            await asyncio.Event().wait()
+
+        route.fetch.side_effect = fetch
+        task = asyncio.create_task(
+            _global_route_handler(route, static_cache_dir=tmp_path)
+        )
+        await started.wait()
+        task.cancel()
+        await task
+        route.abort.assert_awaited_once()
+        route.continue_.assert_not_awaited()
+        assert not list(tmp_path.iterdir())
+
+    asyncio.run(run())
+
+
+def test_context_cleanup_waits_for_handlers_before_close():
+    async def run():
+        context = AsyncMock()
+        entered = asyncio.Event()
+        released = asyncio.Event()
+
+        async def drain(**kwargs):
+            entered.set()
+            await released.wait()
+
+        context.unroute_all.side_effect = drain
+        task = asyncio.create_task(_safe_close_context(context))
+        await entered.wait()
+        context.close.assert_not_awaited()
+        task.cancel()
+        released.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        context.close.assert_awaited_once()
+
+    asyncio.run(run())
+
+
+def test_context_cleanup_timeout_closes_only_own_context():
+    async def run():
+        context = AsyncMock()
+        other_context = AsyncMock()
+        other_released = asyncio.Event()
+        other_entered = asyncio.Event()
+
+        async def other_drain(**kwargs):
+            other_entered.set()
+            await other_released.wait()
+
+        other_context.unroute_all.side_effect = other_drain
+        other_task = asyncio.create_task(_safe_close_context(other_context))
+        await other_entered.wait()
+        drained = asyncio.Event()
+
+        async def drain(**kwargs):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                drained.set()
+
+        context.unroute_all.side_effect = drain
+        with patch("map_miner.scraper._CONTEXT_CLEANUP_TIMEOUT", 0.02):
+            await _safe_close_context(context)
+        assert drained.is_set()
+        context.close.assert_awaited_once()
+        assert not other_task.done()
+        other_context.close.assert_not_awaited()
+        other_released.set()
+        await other_task
+
+    asyncio.run(run())
 
 
 def test_scroll_feed_uses_first_locator_and_handles_multiple_elements():
@@ -2345,7 +2568,7 @@ def test_scrape_query_spa_timeout_in_element_loop():
         mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
         mock_context.new_page.return_value = mock_page
 
-        valid_blob = [None] * 20
+        valid_blob: list[Any] = [None] * 20
         valid_blob[11] = "Cafe 1"
         valid_outer = [None, [], None, None, None, None, valid_blob]
         valid_preview = ")]}'\n" + json.dumps(valid_outer)
@@ -2526,7 +2749,7 @@ def test_spa_post_extraction_range_filter():
         mock_page.locator = MagicMock(side_effect=mock_feed_locator)
 
         # Preview JSON with coordinates ~110km away (22.0, 106.0 vs 21.0, 105.8)
-        valid_blob = [None] * 20
+        valid_blob: list[Any] = [None] * 20
         valid_blob[11] = "Distant Cafe"
         valid_blob[9] = [None, None, 22.0, 106.0]
         valid_outer = [None, [], None, None, None, None, valid_blob]
@@ -2578,7 +2801,7 @@ def test_safe_close_context_cancellation():
 
     async def _run():
         mock_context = AsyncMock()
-        mock_context.unroute = AsyncMock()
+        mock_context.unroute_all = AsyncMock()
         mock_context.close = AsyncMock()
 
         async def worker():
@@ -2598,7 +2821,7 @@ def test_safe_close_context_cancellation():
             cancelled = True
 
         assert cancelled is True
-        mock_context.unroute.assert_awaited_once_with("**/*")
+        mock_context.unroute_all.assert_awaited_once_with(behavior="wait")
         mock_context.close.assert_awaited_once()
 
     asyncio.run(_run())

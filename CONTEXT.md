@@ -1,6 +1,6 @@
 # Bối cảnh kỹ thuật: map_miner
 
-`map_miner` 0.3.6 là thư viện Python 3.12+ thu thập địa điểm từ Google Maps bằng Playwright bất đồng bộ và trả về `polars.DataFrame`. Tài liệu này mô tả hành vi hiện hành; lịch sử thay đổi nằm trong [CHANGELOG.md](CHANGELOG.md).
+`map_miner` 0.3.7 là thư viện Python 3.12+ thu thập địa điểm từ Google Maps bằng Playwright bất đồng bộ và trả về `polars.DataFrame`. Tài liệu này mô tả hành vi hiện hành; lịch sử thay đổi nằm trong [CHANGELOG.md](CHANGELOG.md).
 
 ## Điểm vào và luồng dữ liệu
 
@@ -57,7 +57,9 @@ Các giá trị dưới đây lấy từ chữ ký `scrape_google_maps` trong [`
 
 Hai helper `_scrape_query_spa` và `_get_place_urls` cũng mặc định `range_limit=25000.0`. Scraper kiểm tra khoảng cách từ tọa độ trong URL trước khi click; nếu URL không có tọa độ, SPA thử kiểm tra sau khi trích dữ liệu. `range_limit` là bộ lọc phía scraper, không điều khiển bán kính xếp hạng của Google Maps.
 
-Cache Chromium và tài nguyên tĩnh mặc định nằm dưới `.cache/`. Có thể đặt `cache_dir=None` để tắt cờ disk cache của Chromium; `static_cache_dir` được cấu hình riêng.
+Cờ disk cache Chromium bật mặc định qua `cache_dir=Path(".cache") / "chromium_cache"`; truyền `Path(...)` khác để chọn thư mục và `disk_cache_size` để giới hạn dung lượng. `cache_dir=None` bỏ riêng cờ disk cache Chromium. Cache tài nguyên tĩnh ở lớp ứng dụng vẫn mặc định nằm dưới `.cache/static_assets/` và được cấu hình riêng qua `static_cache_dir`. [Playwright ghi rõ routing tắt HTTP cache](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route); scraper có routing nên các cờ Chromium không bảo đảm tái sử dụng HTTP cache, còn cache static ứng dụng lưu riêng vẫn tồn tại. Trong kiểm chứng Playwright 1.63.0 / Chromium 153.0.8010.12, nhiều context dùng chung cờ `--disk-cache-dir` bị chậm response document và timeout tìm kiếm, kể cả với thư mục cache mới; `cache_dir=None` cho cả bốn truy vấn điều hướng thành công ở lượt kiểm chứng và là workaround có thể dùng. Mặc định bật cờ cache vẫn có thể tái hiện timeout với workload đồng thời. Không coi đây là bằng chứng cache cũ hỏng hoặc regression upstream đã xác nhận; chưa so sánh browser phiên bản trước.
+
+Nếu fetch/body của cache tài nguyên tĩnh lỗi Playwright, scraper tiếp tục request gốc bằng trình duyệt để không bỏ route chưa xử lý; response lỗi và body chưa đọc xong không được cache. Khi fetch bị hủy, route được abort thay vì thử mạng lại. Khi đóng context, scraper dùng `unroute_all(behavior="wait")` để đợi handler đang chạy; mỗi bước đợi trước đóng, đóng context và đợi sau đóng có ngân sách 5 s (tối đa khoảng 15 s), rồi hủy task đợi riêng của context nếu vẫn treo. Hủy từ caller vẫn được truyền lại sau cleanup. Cleanup không hủy task của context khác; các timeout navigation/query và mức concurrency mặc định không đổi.
 
 Ví dụ dùng luồng nhiều trang, bán kính 5 km và chỉ lấy các trường cần thiết:
 
@@ -86,7 +88,7 @@ Khi không có kết quả ở chế độ mặc định, DataFrame rỗng vẫn
 ## Giới hạn vận hành
 
 - Google Maps có thể đổi DOM, payload, thứ tự kết quả hoặc chặn bot; trích xuất là best effort. Các trường và số hàng thực tế có thể thay đổi giữa các lượt chạy.
-- Lỗi khởi chạy Chromium hiện có thể bị bắt và trả DataFrame rỗng; kết quả rỗng không tự chứng minh rằng Google Maps không có địa điểm.
+- Khi Playwright báo executable Chromium không tồn tại lúc khởi chạy, `scrape_google_maps` ném `RuntimeError` kèm hướng dẫn `uv run playwright install chromium` và giữ lỗi gốc trong `__cause__`. Áp dụng cho cả SPA và luồng nhiều trang; scraper không tự cài trình duyệt. Các lỗi khởi chạy khác vẫn có thể bị bắt và trả DataFrame rỗng; kết quả rỗng không tự chứng minh rằng Google Maps không có địa điểm.
 - Mặc định dừng cuộn sau 3 lượt liên tiếp chỉ có địa điểm ngoài bán kính. Feed không được sắp xếp chặt theo khoảng cách, nên địa điểm gần ở lượt sau có thể bị bỏ lỡ.
 - Với link thiếu Hex ID/Place ID, bộ lọc preview hiện có thể nhận response của địa điểm khác. Tọa độ `@lat,lon` trong URL có thể là tâm viewport nhưng vẫn được dùng để lọc như tọa độ địa điểm.
 - Nếu `fields` loại `latitude`/`longitude`, bước lọc bán kính sau trích xuất có thể không đủ dữ liệu để loại địa điểm xa. Không coi bộ lọc này là bảo đảm tuyệt đối.
@@ -95,13 +97,15 @@ Khi không có kết quả ở chế độ mặc định, DataFrame rỗng vẫn
 
 ## Thiết lập và kiểm tra
 
+Nhóm dependency `dev` khóa Pyrefly ở bản ổn định `1.3.2`; `uv sync` cài checker này. Cấu hình `[tool.pyrefly]` trong [`pyproject.toml`](pyproject.toml) kiểm tra `src/`, `tests/` và `main.py`, với `src/` làm đường dẫn tìm import.
+
 ```bash
 uv sync
 uv run playwright install chromium
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
-uv run ty check
+uv run pyrefly check
 ```
 
 [`tests/`](tests) chứa kiểm thử unit và ca mô phỏng; chúng không thay thế kiểm tra Google Maps thật. Khi chỉ sửa tài liệu, rà link/nội dung và chạy `git diff --check`; khi sửa mã, chạy các kiểm tra Python ở trên. Xem [README.md](README.md) để bắt đầu nhanh và [AGENTS.md](AGENTS.md) để phối hợp reviewer/worker.

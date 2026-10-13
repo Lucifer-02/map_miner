@@ -153,7 +153,7 @@ NO_RESULTS_TEXT_PATTERNS: tuple[str, ...] = (
 )
 
 
-_active_route_tasks: set[asyncio.Task[Any]] = set()
+_CONTEXT_CLEANUP_TIMEOUT = 5.0
 
 
 async def _global_route_handler(
@@ -168,11 +168,6 @@ async def _global_route_handler(
         route (Route): Playwright route object.
         static_cache_dir (Path, optional): Directory to store static assets cache.
     """
-    curr_task = asyncio.current_task()
-    if curr_task is not None:
-        _active_route_tasks.add(curr_task)
-        curr_task.add_done_callback(_active_route_tasks.discard)
-
     try:
         req = route.request
         url = req.url
@@ -227,14 +222,27 @@ async def _global_route_handler(
             except OSError:
                 pass
 
-            response = await route.fetch()
-            if response.status == 200:
-                try:
+            try:
+                response = await route.fetch()
+                if response.status == 200:
                     body = await response.body()
-                    static_cache_dir.mkdir(parents=True, exist_ok=True)
-                    cache_file.write_bytes(body)
-                except OSError:
-                    pass
+                    try:
+                        static_cache_dir.mkdir(parents=True, exist_ok=True)
+                        cache_file.write_bytes(body)
+                    except OSError:
+                        pass
+            except asyncio.CancelledError:
+                # Resolve the request without retrying network work on cancellation.
+                await route.abort()
+                return
+            except PlaywrightError as error:
+                # fetch/body errors leave the intercepted browser request unresolved.
+                # Let the browser retry it directly rather than stalling its route.
+                logger.warning(
+                    "Static asset fetch failed; continuing request: %s", error
+                )
+                await route.continue_()
+                return
             await route.fulfill(response=response)
             return
 
@@ -268,20 +276,39 @@ async def _safe_close_context(context: BrowserContext | None) -> None:
     proper cleanup without dangling pending tasks under cancellation."""
     if not context:
         return
-    try:
+
+    async def cleanup() -> None:
+        drain_task = asyncio.create_task(context.unroute_all(behavior="wait"))
         try:
-            if hasattr(context, "unroute"):
-                await context.unroute("**/*")
-        except BaseException:  # noqa: BLE001, S110
-            pass
-        close_task = asyncio.create_task(context.close())
-        try:
-            await asyncio.shield(close_task)
-        except asyncio.CancelledError:
+            await asyncio.wait_for(
+                asyncio.shield(drain_task), timeout=_CONTEXT_CLEANUP_TIMEOUT
+            )
+        except (TimeoutError, PlaywrightError) as error:
+            logger.debug("Route drain interrupted before context close: %s", error)
+        finally:
             try:
-                await close_task
-            except BaseException:  # noqa: BLE001, S110
-                pass
+                await asyncio.wait_for(
+                    context.close(), timeout=_CONTEXT_CLEANUP_TIMEOUT
+                )
+            except (TimeoutError, PlaywrightError) as error:
+                logger.debug("Context close failed: %s", error)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(drain_task), timeout=_CONTEXT_CLEANUP_TIMEOUT
+                )
+            except (TimeoutError, PlaywrightError):
+                drain_task.cancel()
+                await asyncio.gather(drain_task, return_exceptions=True)
+
+    cleanup_task = asyncio.create_task(cleanup())
+    try:
+        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError:
+        # Caller cancellation must not abandon this context's in-flight handlers.
+        try:
+            await cleanup_task
+        finally:
+            raise
     except BaseException:  # noqa: BLE001, S110
         pass
 
@@ -509,8 +536,8 @@ async def _handle_captcha_if_present(
                     await diag_res
             except Exception as e:  # noqa: BLE001
                 logger.debug("Failed to save captcha diagnostics: %s", e)
+        safe_timeout = max(1.0, float(timeout))
         try:
-            safe_timeout = max(1.0, float(timeout))
             return await asyncio.wait_for(solver.solve_captcha(), timeout=safe_timeout)
         except TimeoutError:
             logger.warning(
@@ -541,7 +568,7 @@ async def _find_feed_selector(page: Page, timeout: int = 15000) -> str | None:
     """
     try:
         await page.wait_for_selector(
-            '[role="feed"]', state="visible", timeout=max(1, int(timeout))
+            '[role="feed"]', state="visible", timeout=max(1, timeout)
         )
         return '[role="feed"]'
     except PlaywrightTimeoutError:
@@ -731,7 +758,7 @@ async def _get_place_urls(
         await search_page.goto(
             search_url,
             wait_until="domcontentloaded",
-            timeout=max(1, int(navigation_timeout)),
+            timeout=max(1, navigation_timeout),
         )
         await asyncio.sleep(
             random.uniform(initial_delay_range[0], initial_delay_range[1])
@@ -1042,7 +1069,7 @@ async def _scrape_query_spa(
             await search_page.goto(
                 search_url,
                 wait_until="domcontentloaded",
-                timeout=max(1, int(navigation_timeout)),
+                timeout=max(1, navigation_timeout),
             )
             await asyncio.sleep(
                 random.uniform(initial_delay_range[0], initial_delay_range[1])
@@ -1237,7 +1264,7 @@ async def _scrape_query_spa(
                 try:
                     async with search_page.expect_response(
                         is_matching_preview,
-                        timeout=max(1, int(cur_timeout_ms)),
+                        timeout=max(1, cur_timeout_ms),
                     ) as response_info:
                         try:
                             await el.evaluate("e => e.click()")
@@ -1588,7 +1615,7 @@ async def _process_link(
                     await page.goto(
                         link,
                         wait_until="domcontentloaded",
-                        timeout=max(1, int(navigation_timeout)),
+                        timeout=max(1, navigation_timeout),
                     )
                 except PlaywrightTimeoutError:
                     logger.warning("  ❌ Timeout navigating to: %s", link)
@@ -1764,8 +1791,9 @@ async def scrape_google_maps(
             If False (default), bundles non-default fields into a 'details' JSON string column,
             keeping 11 common columns at top-level.
         use_spa (bool, optional): Whether to use high-speed SPA navigation.
-        cache_dir (Path | None, optional): Directory to store persistent Chromium disk cache.
-            flags will not be passed.
+        cache_dir (Path | None, optional): Persistent Chromium disk cache directory.
+            Defaults to .cache/chromium_cache.
+            When None, disk cache flags are omitted.
         range_limit (float): Maximum radius distance in meters from geo_coordinates.
             Google Maps local ranking combines Relevance, Distance, and Prominence
             (https://support.google.com/business/answer/7091). Prominent places further away
@@ -1791,6 +1819,10 @@ async def scrape_google_maps(
     Returns:
         pl.DataFrame: DataFrame containing scraped places data. Places found by
             multiple queries have one row per query, with its original string.
+
+    Raises:
+        RuntimeError: If Playwright cannot find the Chromium executable. Install
+            it with `uv run playwright install chromium` before scraping.
     """
     results: list[dict[str, Any]] = []
     extraction_fields = fields
@@ -2139,7 +2171,17 @@ async def scrape_google_maps(
             raise
         except PlaywrightTimeoutError:
             logger.error("Playwright timeout error during scraping process.")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
+            if (
+                browser is None
+                and isinstance(e, PlaywrightError)
+                and "executable doesn't exist at" in str(e).lower().replace("’", "'")
+            ):
+                raise RuntimeError(
+                    "Chromium for Playwright is not installed. "
+                    "Run `uv run playwright install chromium` "
+                    "(or `python -m playwright install chromium`) before scraping."
+                ) from e
             logger.error("Unexpected error during scraping: %s", e)
         finally:
             await _safe_close_browser(browser)

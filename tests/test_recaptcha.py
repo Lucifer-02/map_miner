@@ -1,10 +1,12 @@
 import asyncio
 import json
 import os
+import wave
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 import speech_recognition as sr
+from pydub.generators import Sine
 
 from map_miner.recaptcha_solver import (
     RecaptchaBlockedError,
@@ -79,24 +81,51 @@ def test_recaptcha_blocked_detection():
 
 
 def test_preprocess_audio():
-    with patch("map_miner.recaptcha_solver.AudioSegment") as mock_audio_segment:
+    with (
+        patch("map_miner.recaptcha_solver.AudioSegment") as mock_audio_segment,
+        patch("map_miner.recaptcha_solver.normalize") as mock_normalize,
+        patch("map_miner.recaptcha_solver.high_pass_filter") as mock_high_pass,
+        patch("map_miner.recaptcha_solver.low_pass_filter") as mock_low_pass,
+    ):
         mock_sound = MagicMock()
         mock_audio_segment.from_mp3.return_value = mock_sound
         mock_sound.set_frame_rate.return_value = mock_sound
         mock_sound.set_channels.return_value = mock_sound
-        mock_sound.normalize.return_value = mock_sound
-        mock_sound.high_pass_filter.return_value = mock_sound
-        mock_sound.low_pass_filter.return_value = mock_sound
+        mock_normalize.return_value = mock_sound
+        mock_high_pass.return_value = mock_sound
+        mock_low_pass.return_value = mock_sound
 
         preprocess_audio("sample.mp3", "output.wav")
 
         mock_audio_segment.from_mp3.assert_called_once_with("sample.mp3")
         mock_sound.set_frame_rate.assert_called_once_with(16000)
         mock_sound.set_channels.assert_called_once_with(1)
-        mock_sound.normalize.assert_called_once()
-        mock_sound.high_pass_filter.assert_called_once_with(300)
-        mock_sound.low_pass_filter.assert_called_once_with(3400)
+        mock_normalize.assert_called_once_with(mock_sound)
+        mock_high_pass.assert_called_once_with(mock_sound, 300)
+        mock_low_pass.assert_called_once_with(mock_sound, 3400)
         mock_sound.export.assert_called_once_with("output.wav", format="wav")
+
+
+def test_preprocess_audio_preserves_waveform(tmp_path):
+    sound = Sine(1000).to_audio_segment(duration=100)
+    sound = sound.set_channels(2)
+    resampled = sound.set_frame_rate(16000).set_channels(1)
+    # Exercise the previous dynamically registered method chain for equivalence.
+    expected = (
+        getattr(resampled, "normalize")()  # noqa: B009
+        .high_pass_filter(300)
+        .low_pass_filter(3400)
+    )
+    output = tmp_path / "processed.wav"
+
+    with patch("map_miner.recaptcha_solver.AudioSegment.from_mp3", return_value=sound):
+        preprocess_audio("sample.mp3", str(output))
+
+    with wave.open(str(output), "rb") as wav:
+        assert wav.getframerate() == 16000
+        assert wav.getnchannels() == 1
+        assert wav.getsampwidth() == 2
+        assert wav.readframes(wav.getnframes()) == expected.raw_data
 
 
 def test_transcribe_audio_fallback():
@@ -130,6 +159,18 @@ def test_transcribe_audio_fallback():
         mock_recognizer.recognize_vosk.side_effect = ImportError("vosk not installed")
         with pytest.raises(RecaptchaSolveError):
             transcribe_audio("test.wav", engine="auto")
+
+
+def test_transcribe_audio_vosk_unavailable():
+    with (
+        patch("speech_recognition.AudioFile"),
+        patch("speech_recognition.Recognizer") as recognizer_cls,
+    ):
+        recognizer = MagicMock()
+        del recognizer.recognize_vosk
+        recognizer_cls.return_value = recognizer
+        with pytest.raises(RecaptchaSolveError, match="recognize_vosk not available"):
+            transcribe_audio("test.wav", engine="vosk")
 
 
 def test_sorry_page_submission():

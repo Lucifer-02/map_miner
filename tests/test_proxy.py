@@ -239,6 +239,7 @@ def test_normalize_proxy_socks_strips_credentials():
         "bypass": "localhost",
     }
     normalized = _normalize_proxy(proxy)
+    assert normalized is not None
     assert normalized == {
         "server": "socks5://127.0.0.1:1080",
         "bypass": "localhost",
@@ -253,6 +254,7 @@ def test_normalize_proxy_socks_strips_credentials():
         "password": "pwd",
     }
     norm_s4 = _normalize_proxy(proxy_s4)
+    assert norm_s4 is not None
     assert norm_s4 == {"server": "socks4://127.0.0.1:1080"}
     assert "username" not in norm_s4
     assert "password" not in norm_s4

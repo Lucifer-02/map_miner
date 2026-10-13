@@ -934,16 +934,13 @@ def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
     hex_match = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", decoded_canonical)
     place_id_match = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", decoded_canonical)
 
-    has_hex = hex_match is not None
-    has_place_id = place_id_match is not None
-
-    if has_hex or has_place_id:
+    if hex_match is not None or place_id_match is not None:
         matched = False
-        if has_hex:
+        if hex_match is not None:
             hex_id = hex_match.group(0).lower()
             if hex_id in decoded_url_lower:
                 matched = True
-        if has_place_id:
+        if place_id_match is not None:
             place_id = place_id_match.group(1)
             if place_id in decoded_url or place_id.lower() in decoded_url_lower:
                 matched = True

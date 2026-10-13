@@ -30,6 +30,7 @@ dev = [
     "pytest>=9.0.1",
     "ipython>=9.7.0",
     "notebook>=7.4.7",
+    "pyrefly==1.3.2",
 ]
 
 [tool.hatch.version]
@@ -37,4 +38,11 @@ path = "src/map_miner/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/map_miner"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/main.py"]
+
+[tool.pyrefly]
+project-includes = ["src/**/*.py", "tests/**/*.py", "main.py"]
+search-path = ["src"]
 

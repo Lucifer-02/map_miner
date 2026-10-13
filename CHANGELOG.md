@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Đồng bộ tài liệu và test với cờ disk cache Chromium bật mặc định ở `.cache/chromium_cache/`; ghi rõ giới hạn HTTP cache khi routing, timeout đã quan sát khi nhiều context dùng chung disk cache trong Chromium 153 và workaround `cache_dir=None`, giữ cache static ứng dụng.
+- Giải phóng route khi fetch/body cache static lỗi bằng cách tiếp tục request gốc; abort khi fetch bị hủy, không cache response lỗi hoặc body đọc thất bại.
+- Đợi route handler bằng public `BrowserContext.unroute_all(behavior="wait")` trước khi đóng context, với cleanup có giới hạn thời gian và truyền lại cancellation của caller; bỏ tập task route toàn cục.
+- Kiểm tra sự tồn tại của `Recognizer.recognize_vosk` trước khi gọi, tương tự các speech engine khác, để tương thích API được gắn động và kiểm tra kiểu.
+
+## [0.3.7] - 2026-10-13
+
+### Fixed
+
+- Báo `RuntimeError` khi Playwright không tìm thấy executable Chromium lúc khởi chạy, kèm hướng dẫn `uv run playwright install chromium` và giữ lỗi gốc qua exception chaining. Áp dụng cho cả SPA và fallback; không tự cài trình duyệt.
+- Bổ sung annotations và kiểm tra giá trị `None` để kiểm tra kiểu đầy đủ trên mã nguồn và tests.
+
+### Changed
+
+- Thay cổng kiểm tra kiểu `ty` bằng Pyrefly ổn định `1.3.2`, khóa trong nhóm dependency `dev` và kiểm tra `src/`, `tests/`, `main.py`.
+- Đơn giản hóa xử lý audio bằng các public effects của pydub, tính timeout CAPTCHA một lần trước khi giải và bỏ các biến boolean trung gian khi đối chiếu identifier preview; giữ nguyên kết quả xử lý audio và logic lọc.
+
 ## [0.3.6] - 2026-09-27
 
 ### Added
