@@ -156,11 +156,9 @@ def transcribe_audio(wav_path: str, engine: str = "auto") -> str:
             if whisper_fn is None:
                 errors.append("whisper: recognize_whisper not available")
                 return None
-            res = str(whisper_fn(audio, model="tiny"))
-            if res and res.strip():
-                return res.strip()
-            return None
-        except (ImportError, Exception) as e:  # noqa: BLE001
+            res = str(whisper_fn(audio, model="tiny")).strip()
+            return res or None
+        except Exception as e:  # noqa: BLE001
             errors.append(f"whisper: {e}")
             return None
 
@@ -170,11 +168,9 @@ def transcribe_audio(wav_path: str, engine: str = "auto") -> str:
             if google_fn is None:
                 errors.append("google: recognize_google not available")
                 return None
-            res = str(google_fn(audio, language="en-US"))
-            if res and res.strip():
-                return res.strip()
-            return None
-        except (sr.UnknownValueError, sr.RequestError, Exception) as e:  # noqa: BLE001
+            res = str(google_fn(audio, language="en-US")).strip()
+            return res or None
+        except Exception as e:  # noqa: BLE001
             errors.append(f"google: {e}")
             return None
 
@@ -189,40 +185,30 @@ def transcribe_audio(wav_path: str, engine: str = "auto") -> str:
                 try:
                     data = json.loads(res)
                     v_text = str(data.get("text", res)).strip()
-                    return v_text if v_text else None
+                    return v_text or None
                 except json.JSONDecodeError:
-                    return res.strip() if res.strip() else None
-            return str(res).strip() if res and str(res).strip() else None
-        except (ImportError, Exception) as e:  # noqa: BLE001
+                    return res.strip() or None
+            if not res:
+                return None
+            return str(res).strip() or None
+        except Exception as e:  # noqa: BLE001
             errors.append(f"vosk: {e}")
             return None
 
-    if engine == "whisper":
-        text = _try_whisper()
-        if text:
-            engine_used = "whisper"
-    elif engine == "google":
-        text = _try_google()
-        if text:
-            engine_used = "google"
-    elif engine == "vosk":
-        text = _try_vosk()
-        if text:
-            engine_used = "vosk"
-    elif engine == "auto":
-        text = _try_whisper()
-        if text:
-            engine_used = "whisper"
-        if not text:
-            text = _try_google()
-            if text:
-                engine_used = "google"
-        if not text:
-            text = _try_vosk()
-            if text:
-                engine_used = "vosk"
-    else:
+    adapters = {
+        "whisper": _try_whisper,
+        "google": _try_google,
+        "vosk": _try_vosk,
+    }
+    engine_order = tuple(adapters)
+    if engine != "auto" and engine not in engine_order:
         raise ValueError(f"Unsupported transcription engine: {engine}")
+    engines = engine_order if engine == "auto" else (engine,)
+    for candidate in engines:
+        text = adapters[candidate]()
+        if text:
+            engine_used = candidate
+            break
 
     if not text:
         msg = f"Speech recognition failed: {'; '.join(errors)}"

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Gom setup mock và tham số hóa các ca kiểm thử STT, cache route, forwarding và CAPTCHA; giữ các assertions về cancellation, guardrails và giá trị mặc định.
+- Gom kiểu đầu vào proxy, startup delay và gather/cancellation drain dùng chung; làm gọn lựa chọn speech engine mà giữ thứ tự và fallback hiện hành.
+- Rút gọn ví dụ main, loại comment credentials/proxy không dùng và chỉnh tài liệu thành mô tả best effort; ghi rõ lỗi association DOM rescue đã quan sát, chưa sửa trong cleanup.
+
 ### Fixed
 
 - Đồng bộ tài liệu và test với cờ disk cache Chromium bật mặc định ở `.cache/chromium_cache/`; ghi rõ giới hạn HTTP cache khi routing, timeout đã quan sát khi nhiều context dùng chung disk cache trong Chromium 153 và workaround `cache_dir=None`, giữ cache static ứng dụng.

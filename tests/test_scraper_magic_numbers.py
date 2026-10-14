@@ -23,60 +23,57 @@ from map_miner.scraper import (
 
 
 def test_default_parameters_exist_and_match() -> None:
-    """Verifies that all operational control parameters exist in function signatures
-    with their required default values."""
-    # 1. _create_browser_context
-    sig_cbc = inspect.signature(_create_browser_context)
-    assert sig_cbc.parameters["viewport_width"].default == 1920
-    assert sig_cbc.parameters["viewport_height"].default == 1080
-    assert sig_cbc.parameters["viewport_variance"].default == 50
-
-    # 2. _pass_consent
-    sig_pc = inspect.signature(_pass_consent)
-    assert sig_pc.parameters["dismiss_delay"].default == 1.0
-
-    # 3. _find_feed_selector
-    sig_ffs = inspect.signature(_find_feed_selector)
-    assert sig_ffs.parameters["timeout"].default == 15000
-
-    # 4. _scroll_feed
-    sig_sf = inspect.signature(_scroll_feed)
-    assert sig_sf.parameters["scroll_delta_y"].default == 5000
-    assert sig_sf.parameters["scroll_delay_range"].default == (1.0, 1.6)
-
-    # 5. _get_place_urls
-    sig_gpu = inspect.signature(_get_place_urls)
-    assert sig_gpu.parameters["initial_delay_range"].default == (1.0, 2.5)
-    assert sig_gpu.parameters["min_remaining_time"].default == 2.0
-    assert sig_gpu.parameters["scroll_retry_delay"].default == 1.5
-
-    # 6. _scrape_query_spa
-    sig_sqs = inspect.signature(_scrape_query_spa)
-    assert sig_sqs.parameters["initial_delay_range"].default == (1.0, 2.0)
-    assert sig_sqs.parameters["min_remaining_time"].default == 2.0
-    assert sig_sqs.parameters["element_timeout"].default == 1000
-    assert sig_sqs.parameters["pre_click_delay_range"].default == (0.3, 0.8)
-    assert sig_sqs.parameters["min_preview_timeout_ms"].default == 1000
-    assert sig_sqs.parameters["timeout_safety_margin"].default == 0.5
-    assert sig_sqs.parameters["post_item_delay_range"].default == (0.15, 0.35)
-    assert sig_sqs.parameters["post_scroll_delay_range"].default == (1.2, 2.2)
-    assert sig_sqs.parameters["scroll_retry_delay"].default == 1.5
-    assert sig_sqs.parameters["secondary_rescue_min_time"].default == 5.0
-    assert sig_sqs.parameters["secondary_rescue_concurrency"].default == 4
-    assert sig_sqs.parameters["secondary_rescue_cutoff"].default == 3.0
-    assert sig_sqs.parameters["min_valid_fields"].default == 3
-
-    # 7. _process_link
-    sig_pl = inspect.signature(_process_link)
-    assert sig_pl.parameters["preview_wait_timeout"].default == 4.5
-    assert sig_pl.parameters["main_selector_timeout"].default == 2000
-    assert sig_pl.parameters["retry_delay_range"].default == (0.8, 1.5)
-    assert sig_pl.parameters["captcha_retry_delay_range"].default == (1.0, 2.0)
-    assert sig_pl.parameters["min_valid_fields"].default == 3
-
-    # 8. scrape_google_maps
-    sig_sgm = inspect.signature(scrape_google_maps)
-    assert sig_sgm.parameters["watchdog_grace_period"].default == 10.0
+    expected = {
+        _create_browser_context: {
+            "viewport_width": 1920,
+            "viewport_height": 1080,
+            "viewport_variance": 50,
+        },
+        _pass_consent: {
+            "dismiss_delay": 1.0,
+        },
+        _find_feed_selector: {
+            "timeout": 15000,
+        },
+        _scroll_feed: {
+            "scroll_delta_y": 5000,
+            "scroll_delay_range": (1.0, 1.6),
+        },
+        _get_place_urls: {
+            "initial_delay_range": (1.0, 2.5),
+            "min_remaining_time": 2.0,
+            "scroll_retry_delay": 1.5,
+        },
+        _scrape_query_spa: {
+            "initial_delay_range": (1.0, 2.0),
+            "min_remaining_time": 2.0,
+            "element_timeout": 1000,
+            "pre_click_delay_range": (0.3, 0.8),
+            "min_preview_timeout_ms": 1000,
+            "timeout_safety_margin": 0.5,
+            "post_item_delay_range": (0.15, 0.35),
+            "post_scroll_delay_range": (1.2, 2.2),
+            "scroll_retry_delay": 1.5,
+            "secondary_rescue_min_time": 5.0,
+            "secondary_rescue_concurrency": 4,
+            "secondary_rescue_cutoff": 3.0,
+            "min_valid_fields": 3,
+        },
+        _process_link: {
+            "preview_wait_timeout": 4.5,
+            "main_selector_timeout": 2000,
+            "retry_delay_range": (0.8, 1.5),
+            "captcha_retry_delay_range": (1.0, 2.0),
+            "min_valid_fields": 3,
+        },
+        scrape_google_maps: {
+            "watchdog_grace_period": 10.0,
+        },
+    }
+    for function, defaults in expected.items():
+        params = inspect.signature(function).parameters
+        for name, value in defaults.items():
+            assert params[name].default == value, (function.__name__, name)
 
 
 def test_override_create_browser_context_params() -> None:
@@ -190,19 +187,15 @@ def test_no_magic_numbers_in_ast() -> None:
             self.current_func: str | None = None
             self.violations: list[str] = []
 
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
             old = self.current_func
             self.current_func = node.name
             for item in node.body:
                 self.visit(item)
             self.current_func = old
 
-        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            old = self.current_func
-            self.current_func = node.name
-            for item in node.body:
-                self.visit(item)
-            self.current_func = old
+        visit_FunctionDef = _visit_function
+        visit_AsyncFunctionDef = _visit_function
 
         def visit_Constant(self, node: ast.Constant) -> None:
             if (

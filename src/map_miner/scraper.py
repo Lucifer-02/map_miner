@@ -16,7 +16,6 @@ from playwright.async_api import (
     Browser,
     BrowserContext,
     Page,
-    ProxySettings,
     Route,
     async_playwright,
 )
@@ -39,6 +38,7 @@ from .extractor import (
 )
 from .proxy import (
     ProxyRotator,
+    _ProxyInput,
 )
 from .recaptcha_solver import (
     RecaptchaBlockedError,
@@ -336,14 +336,7 @@ async def _create_browser_context(
     browser: Browser,
     geo_coordinates: Point,
     lang: str = "en",
-    proxy: (
-        ProxySettings
-        | dict[str, Any]
-        | Sequence[ProxySettings | dict[str, Any] | Any]
-        | str
-        | Sequence[str]
-        | None
-    ) = None,
+    proxy: _ProxyInput = None,
     static_cache_dir: Path = Path(".cache") / "static_assets",
     viewport_width: int = 1920,
     viewport_height: int = 1080,
@@ -1737,18 +1730,46 @@ async def _process_link(
         return None
 
 
+async def _stagger_query_start(
+    idx: int,
+    query: str,
+    stagger_delay: tuple[float, float] | list[float] | float | None,
+) -> None:
+    """Delay later query launches before they acquire the query semaphore."""
+    if stagger_delay is None or idx <= 0:
+        return
+    if isinstance(stagger_delay, (tuple, list)):
+        s_min, s_max = float(stagger_delay[0]), float(stagger_delay[1])
+        if not s_max > 0:
+            return
+        delay = idx * random.uniform(s_min, s_max)
+    elif isinstance(stagger_delay, (int, float)) and stagger_delay > 0:
+        delay = idx * float(stagger_delay)
+    else:
+        return
+    logger.info("Staggered query %d ('%s') delay %.2fs...", idx, query, delay)
+    await asyncio.sleep(delay)
+
+
+async def _gather_tasks[T](
+    tasks: Sequence[asyncio.Task[T]],
+) -> list[T | BaseException]:
+    """Gather in input order, draining unfinished tasks if the caller is cancelled."""
+    try:
+        return await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 async def scrape_google_maps(
     queries: set[str],
     geo_coordinates: Point,
     zoom: float,
-    proxy: (
-        ProxySettings
-        | dict[str, Any]
-        | Sequence[ProxySettings | dict[str, Any] | Any]
-        | str
-        | Sequence[str]
-        | None
-    ) = None,
+    proxy: _ProxyInput = None,
     max_places: int = 120,
     lang: str = "en",
     headless: bool = True,
@@ -1865,31 +1886,7 @@ async def scrape_google_maps(
                 )
 
                 async def run_spa_query(idx: int, q: str) -> list[dict[str, Any]]:
-                    if stagger_delay is not None and idx > 0:
-                        if isinstance(stagger_delay, (tuple, list)):
-                            s_min = float(stagger_delay[0])
-                            s_max = float(stagger_delay[1])
-                            if s_max > 0:
-                                delay = idx * random.uniform(s_min, s_max)
-                                logger.info(
-                                    "Staggered query %d ('%s') delay %.2fs...",
-                                    idx,
-                                    q,
-                                    delay,
-                                )
-                                await asyncio.sleep(delay)
-                        elif (
-                            isinstance(stagger_delay, (int, float))
-                            and stagger_delay > 0
-                        ):
-                            delay = idx * float(stagger_delay)
-                            logger.info(
-                                "Staggered query %d ('%s') delay %.2fs...",
-                                idx,
-                                q,
-                                delay,
-                            )
-                            await asyncio.sleep(delay)
+                    await _stagger_query_start(idx, q, stagger_delay)
 
                     async with query_semaphore:
                         allocated_proxy = proxy_rotator.get()
@@ -1952,16 +1949,7 @@ async def scrape_google_maps(
                     asyncio.create_task(run_spa_query(i, query))
                     for i, query in enumerate(query_list)
                 ]
-                try:
-                    list_of_results = await asyncio.gather(
-                        *spa_tasks, return_exceptions=True
-                    )
-                except asyncio.CancelledError:
-                    for t in spa_tasks:
-                        if not t.done():
-                            t.cancel()
-                    await asyncio.gather(*spa_tasks, return_exceptions=True)
-                    raise
+                list_of_results = await _gather_tasks(spa_tasks)
                 valid_results: list[list[dict[str, Any]]] = []
                 for query, res in zip(query_list, list_of_results, strict=True):
                     if isinstance(res, Exception):
@@ -1981,33 +1969,7 @@ async def scrape_google_maps(
             else:
                 # Multi-page fallback mode
                 async def run_get_urls(idx: int, q: str) -> set[str]:
-                    if stagger_delay is not None and idx > 0:
-                        if isinstance(stagger_delay, (tuple, list)):
-                            s_min, s_max = (
-                                float(stagger_delay[0]),
-                                float(stagger_delay[1]),
-                            )
-                            if s_max > 0:
-                                delay = idx * random.uniform(s_min, s_max)
-                                logger.info(
-                                    "Staggered startup: query %d ('%s') sleeping for %.2fs before launch...",
-                                    idx,
-                                    q,
-                                    delay,
-                                )
-                                await asyncio.sleep(delay)
-                        elif (
-                            isinstance(stagger_delay, (int, float))
-                            and stagger_delay > 0
-                        ):
-                            delay = idx * float(stagger_delay)
-                            logger.info(
-                                "Staggered startup: query %d ('%s') sleeping for %.2fs before launch...",
-                                idx,
-                                q,
-                                delay,
-                            )
-                            await asyncio.sleep(delay)
+                    await _stagger_query_start(idx, q, stagger_delay)
 
                     async with query_semaphore:
                         allocated_proxy = proxy_rotator.get()
@@ -2066,16 +2028,7 @@ async def scrape_google_maps(
                     asyncio.create_task(run_get_urls(i, query))
                     for i, query in enumerate(query_list)
                 ]
-                try:
-                    list_of_sets_of_links = await asyncio.gather(
-                        *tasks, return_exceptions=True
-                    )
-                except asyncio.CancelledError:
-                    for t in tasks:
-                        if not t.done():
-                            t.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    raise
+                list_of_sets_of_links = await _gather_tasks(tasks)
                 link_queries: dict[str, set[str]] = {}
                 for query, r in zip(query_list, list_of_sets_of_links, strict=True):
                     if isinstance(r, Exception):
@@ -2148,16 +2101,7 @@ async def scrape_google_maps(
                     asyncio.create_task(run_process_link(i, link))
                     for i, link in enumerate(place_links)
                 ]
-                try:
-                    raw_results = await asyncio.gather(
-                        *detail_tasks, return_exceptions=True
-                    )
-                except asyncio.CancelledError:
-                    for t in detail_tasks:
-                        if not t.done():
-                            t.cancel()
-                    await asyncio.gather(*detail_tasks, return_exceptions=True)
-                    raise
+                raw_results = await _gather_tasks(detail_tasks)
                 results = [
                     {**place, "query": query}
                     for link, place in zip(place_links, raw_results, strict=True)

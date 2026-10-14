@@ -1,0 +1,104 @@
+{
+  "run_id": "r2_cache_on_pw163",
+  "cache": "on",
+  "versions": {
+    "playwright": "1.63.0",
+    "chromium": "153.0.8010.12",
+    "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+    "headless_shell_revision": "1243",
+    "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
+  },
+  "started_utc": "2026-10-13T10:27:25.027280+00:00",
+  "query_order": [
+    "gym",
+    "cafe",
+    "hospital",
+    "atm"
+  ],
+  "pythonhashseed": "0",
+  "source_sha256": {
+    "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+    "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+    "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+    "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+    "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+  },
+  "parameters": {
+    "max_places": 50,
+    "lang": "en",
+    "coordinates": [
+      21.018785,
+      105.830415
+    ],
+    "zoom": 18,
+    "n_semaphore": 8,
+    "use_spa": true,
+    "query_timeout": 300,
+    "preview_timeout": 10000,
+    "range_limit": 25000,
+    "stagger_delay": [
+      1.5,
+      3.5
+    ],
+    "static_cache": "fresh per run",
+    "disk_cache": "fresh per run"
+  },
+  "total_count": 50,
+  "unique_links": 50,
+  "elapsed_seconds": 100.262,
+  "queries": {
+    "cafe": {
+      "elapsed_seconds": 30.047,
+      "count": 0,
+      "unique_links": 0,
+      "null_name": 0,
+      "preview_timeout_or_error": 0,
+      "navigation_timeout": 1,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+      ],
+      "fallback_rescued": 0
+    },
+    "hospital": {
+      "elapsed_seconds": 30.074,
+      "count": 0,
+      "unique_links": 0,
+      "null_name": 0,
+      "preview_timeout_or_error": 0,
+      "navigation_timeout": 1,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+      ],
+      "fallback_rescued": 0
+    },
+    "atm": {
+      "elapsed_seconds": 30.067,
+      "count": 0,
+      "unique_links": 0,
+      "null_name": 0,
+      "preview_timeout_or_error": 0,
+      "navigation_timeout": 1,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+      ],
+      "fallback_rescued": 0
+    },
+    "gym": {
+      "elapsed_seconds": 99.79,
+      "count": 50,
+      "unique_links": 50,
+      "null_name": 0,
+      "preview_timeout_or_error": 0,
+      "navigation_timeout": 0,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "max_places"
+      ],
+      "fallback_rescued": 0
+    }
+  },
+  "global_warning_events": []
+}

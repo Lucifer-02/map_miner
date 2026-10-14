@@ -1,0 +1,44 @@
+{
+  "run_id": "r1_cache_on_pw162",
+  "cache": "on",
+  "versions": {
+    "playwright": "1.62.0",
+    "chromium": "151.0.7922.34",
+    "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome"
+  },
+  "started_utc": "2026-10-13T10:18:54.726543+00:00",
+  "query_order": [
+    "gym",
+    "cafe",
+    "hospital",
+    "atm"
+  ],
+  "pythonhashseed": "0",
+  "source_sha256": {
+    "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+    "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+    "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+    "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+    "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+  },
+  "parameters": {
+    "max_places": 50,
+    "lang": "en",
+    "coordinates": [
+      21.018785,
+      105.830415
+    ],
+    "zoom": 18,
+    "n_semaphore": 8,
+    "use_spa": true,
+    "query_timeout": 300,
+    "preview_timeout": 10000,
+    "range_limit": 25000,
+    "stagger_delay": [
+      1.5,
+      3.5
+    ],
+    "static_cache": "fresh per run",
+    "disk_cache": "fresh per run"
+  }
+}

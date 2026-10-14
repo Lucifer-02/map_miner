@@ -68,7 +68,7 @@ when the result is empty.
 
 ## Features
 
-- **Blazing Fast**: Asynchronous I/O powered by Playwright and Polars.
-- **Rich Data**: Extracts 27+ structured fields including detailed address components (`street`, `sublocality`, `district`, `city`, `postal_code`, `country_code`).
-- **Resilient**: Multi-layer parsing, zero DOM query fragility, adaptive waits, and retry loop.
-- **Anti-Bot & Stealth**: Integrated CAPTCHA handling and undetected browser flags.
+- Concurrent searches and place-detail requests using Playwright, returning Polars DataFrames.
+- Structured place fields including address components, categories, ratings and review counts when available.
+- Preview extraction with DOM/detail fallback, timeouts and retry handling; extraction remains best effort as Google Maps changes.
+- Proxy rotation and CAPTCHA diagnostics/solving attempts; browser flags do not guarantee avoidance of bot detection.

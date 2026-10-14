@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import wave
+from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -128,49 +129,117 @@ def test_preprocess_audio_preserves_waveform(tmp_path):
         assert wav.readframes(wav.getnframes()) == expected.raw_data
 
 
-def test_transcribe_audio_fallback():
+@pytest.fixture
+def speech_mocks():
+    """Fresh audio and recognizer mocks for each transcription case."""
     with (
-        patch("speech_recognition.AudioFile"),
-        patch("speech_recognition.Recognizer") as mock_recognizer_cls,
-    ):
-        mock_recognizer = MagicMock()
-        mock_recognizer_cls.return_value = mock_recognizer
-
-        # Scenario 1: Whisper available and succeeds
-        mock_recognizer.recognize_whisper.return_value = "HELLO, WORLD!"
-        result = transcribe_audio("test.wav", engine="auto")
-        assert result == "hello world"
-
-        # Scenario 2: Whisper fails, Google succeeds
-        mock_recognizer.recognize_whisper.side_effect = ImportError(
-            "whisper not installed"
-        )
-        mock_recognizer.recognize_google.return_value = "One, Two; Three! 123"
-        result = transcribe_audio("test.wav", engine="auto")
-        assert result == "one two three 123"
-
-        # Scenario 3: Whisper & Google fail, Vosk succeeds
-        mock_recognizer.recognize_google.side_effect = sr.RequestError("quota exceeded")
-        mock_recognizer.recognize_vosk.return_value = '{"text": "spoken words here"}'
-        result = transcribe_audio("test.wav", engine="auto")
-        assert result == "spoken words here"
-
-        # Scenario 4: All engines fail
-        mock_recognizer.recognize_vosk.side_effect = ImportError("vosk not installed")
-        with pytest.raises(RecaptchaSolveError):
-            transcribe_audio("test.wav", engine="auto")
-
-
-def test_transcribe_audio_vosk_unavailable():
-    with (
-        patch("speech_recognition.AudioFile"),
+        patch("speech_recognition.AudioFile") as audio_file,
         patch("speech_recognition.Recognizer") as recognizer_cls,
     ):
-        recognizer = MagicMock()
-        del recognizer.recognize_vosk
-        recognizer_cls.return_value = recognizer
-        with pytest.raises(RecaptchaSolveError, match="recognize_vosk not available"):
+        yield audio_file, recognizer_cls.return_value
+
+
+@pytest.mark.parametrize("scenario", ["whisper", "google", "vosk", "all-fail"])
+def test_transcribe_audio_fallback(speech_mocks, scenario):
+    _, recognizer = speech_mocks
+    recognizer.recognize_whisper.return_value = "HELLO, WORLD!"
+    recognizer.recognize_google.return_value = "One, Two; Three! 123"
+    recognizer.recognize_vosk.return_value = '{"text": "spoken words here"}'
+    if scenario != "whisper":
+        recognizer.recognize_whisper.side_effect = ImportError("whisper not installed")
+    if scenario in ("vosk", "all-fail"):
+        recognizer.recognize_google.side_effect = sr.RequestError("quota exceeded")
+    if scenario == "all-fail":
+        recognizer.recognize_vosk.side_effect = ImportError("vosk not installed")
+        with pytest.raises(RecaptchaSolveError) as failure:
+            transcribe_audio("test.wav", engine="auto")
+        assert str(failure.value) == (
+            "Speech recognition failed: whisper: whisper not installed; "
+            "google: quota exceeded; vosk: vosk not installed"
+        )
+    else:
+        expected = {
+            "whisper": "hello world",
+            "google": "one two three 123",
+            "vosk": "spoken words here",
+        }
+        assert transcribe_audio("test.wav", engine="auto") == expected[scenario]
+
+
+@pytest.mark.parametrize("engine", ["whisper", "google", "vosk"])
+def test_transcribe_audio_explicit_engine_has_no_fallback(engine, speech_mocks):
+    _, recognizer = speech_mocks
+    getattr(recognizer, f"recognize_{engine}").side_effect = RuntimeError("engine down")
+    with pytest.raises(RecaptchaSolveError, match=f"{engine}: engine down"):
+        transcribe_audio("test.wav", engine=engine)
+    for candidate in ("whisper", "google", "vosk"):
+        method = getattr(recognizer, f"recognize_{candidate}")
+        assert method.call_count == (1 if candidate == engine else 0)
+
+
+@pytest.mark.parametrize("winner", ["whisper", "google", "vosk"])
+def test_transcribe_audio_auto_order_stops_after_success(winner, speech_mocks):
+    _, recognizer = speech_mocks
+    order = []
+
+    def adapter(candidate):
+        def recognize(*args, **kwargs):
+            order.append(candidate)
+            if candidate == "whisper":
+                assert kwargs == {"model": "tiny"}
+            if candidate == "google":
+                assert kwargs == {"language": "en-US"}
+            if candidate != winner:
+                return " "
+            return (
+                '{"text":" Spoken, WORDS! "}'
+                if candidate == "vosk"
+                else " Spoken, WORDS! "
+            )
+
+        return recognize
+
+    engines = ["whisper", "google", "vosk"]
+    for candidate in engines:
+        getattr(recognizer, f"recognize_{candidate}").side_effect = adapter(candidate)
+    assert transcribe_audio("test.wav") == "spoken words"
+    assert order == engines[: engines.index(winner) + 1]
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ("text: HELLO!", "text hello"),
+        ('{"text":"   "}', None),
+        ("   ", None),
+        (0, None),
+    ],
+)
+def test_transcribe_audio_vosk_malformed_and_empty(response, expected, speech_mocks):
+    _, recognizer = speech_mocks
+    recognizer.recognize_vosk.return_value = response
+    if expected is None:
+        with pytest.raises(RecaptchaSolveError, match="Speech recognition failed:"):
             transcribe_audio("test.wav", engine="vosk")
+    else:
+        assert transcribe_audio("test.wav", engine="vosk") == expected
+
+
+def test_transcribe_audio_invalid_engine_checked_after_record(speech_mocks):
+    audio_file, recognizer = speech_mocks
+    with pytest.raises(ValueError, match="Unsupported transcription engine"):
+        transcribe_audio("test.wav", engine=cast(Any, []))
+    recognizer.record.assert_called_once()
+    audio_file.side_effect = OSError("missing audio")
+    with pytest.raises(OSError, match="missing audio"):
+        transcribe_audio("test.wav", engine="invalid")
+
+
+def test_transcribe_audio_vosk_unavailable(speech_mocks):
+    _, recognizer = speech_mocks
+    del recognizer.recognize_vosk
+    with pytest.raises(RecaptchaSolveError, match="recognize_vosk not available"):
+        transcribe_audio("test.wav", engine="vosk")
 
 
 def test_sorry_page_submission():
@@ -784,16 +853,11 @@ def test_save_captcha_diagnostics(tmp_path):
     assert os.path.exists(os.path.join(diag_paths[1], "meta.json"))
 
 
-def test_transcribe_audio_google_en_us():
+def test_transcribe_audio_google_en_us(speech_mocks):
     """Verifies that transcribe_audio passes language='en-US' explicitly to recognize_google."""
-    with (
-        patch("speech_recognition.AudioFile"),
-        patch("speech_recognition.Recognizer") as mock_recognizer_cls,
-    ):
-        mock_recognizer = MagicMock()
-        mock_recognizer_cls.return_value = mock_recognizer
-        mock_recognizer.recognize_google.return_value = "seven three four"
+    _, recognizer = speech_mocks
+    recognizer.recognize_google.return_value = "seven three four"
 
-        result = transcribe_audio("test.wav", engine="google")
-        assert result == "seven three four"
-        mock_recognizer.recognize_google.assert_called_once_with(ANY, language="en-US")
+    result = transcribe_audio("test.wav", engine="google")
+    assert result == "seven three four"
+    recognizer.recognize_google.assert_called_once_with(ANY, language="en-US")

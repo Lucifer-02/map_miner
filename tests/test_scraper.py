@@ -23,6 +23,7 @@ from map_miner.scraper import (
     LAUNCH_ARGS,
     ProxyRotator,
     _create_browser_context,
+    _gather_tasks,
     _get_place_urls,
     _global_route_handler,
     _handle_captcha_if_present,
@@ -32,6 +33,7 @@ from map_miner.scraper import (
     _safe_close_page,
     _scrape_query_spa,
     _scroll_feed,
+    _stagger_query_start,
     extract_coordinates_from_url,
     is_preview_response_for_link,
     make_place_url,
@@ -97,6 +99,21 @@ def make_mock_context(
     if browser is not None:
         ctx.browser = browser
     return ctx
+
+
+def make_mock_route(
+    url: str, resource_type: str = "script", method: str = "GET"
+) -> AsyncMock:
+    route = AsyncMock()
+    route.request = MagicMock(url=url, resource_type=resource_type, method=method)
+    return route
+
+
+def make_captcha_page() -> MagicMock:
+    page = MagicMock()
+    page.url = "https://www.google.com/sorry/index"
+    page.locator.return_value = MagicMock(count=AsyncMock(return_value=1))
+    return page
 
 
 def test_make_place_url():
@@ -1291,13 +1308,12 @@ def test_spa_retry_on_captcha_blocked():
 
 
 def test_handle_captcha_if_present_timeout():
-    """Verifies that handle_captcha_if_present wraps solve_captcha in a 35s timeout,
+    """Verifies that handle_captcha_if_present wraps solve_captcha in an 85s timeout,
     and returns False on timeout instead of hanging indefinitely.
     """
 
     async def _run():
-        mock_page = MagicMock()
-        mock_page.url = "https://www.google.com/sorry/index"
+        mock_page = make_captcha_page()
 
         with (
             patch("map_miner.scraper.RecaptchaSolver") as mock_solver_cls,
@@ -1322,8 +1338,7 @@ def test_handle_captcha_if_present_success():
     """Verifies that handle_captcha_if_present returns True when solver succeeds."""
 
     async def _run():
-        mock_page = MagicMock()
-        mock_page.url = "https://www.google.com/sorry/index"
+        mock_page = make_captcha_page()
 
         with patch("map_miner.scraper.RecaptchaSolver") as mock_solver_cls:
             mock_solver = MagicMock()
@@ -1798,44 +1813,193 @@ def test_create_browser_context_modern_stealth_and_client_hints():
     asyncio.run(_run())
 
 
-def test_handle_captcha_if_present_default_and_custom_timeout():
-    """Verifies handle_captcha_if_present timeout behavior with default 85.0s and custom timeouts."""
+@pytest.mark.parametrize(
+    ("timeout", "expected"),
+    [
+        pytest.param(0.05, False, id="clamped-hanging-solver"),
+        pytest.param(None, True, id="default-success"),
+    ],
+)
+def test_handle_captcha_if_present_default_and_custom_timeout(timeout, expected):
     assert (
         inspect.signature(_handle_captcha_if_present).parameters["timeout"].default
         == 85.0
     )
 
-    async def _run():
-        mock_page = MagicMock()
-        mock_page.url = "https://www.google.com/sorry/index"
-        mock_page.locator.return_value = MagicMock(count=AsyncMock(return_value=1))
+    async def run():
+        page = make_captcha_page()
+        cancelled = asyncio.Event()
 
-        # Test timeout handling
-        with patch(
-            "map_miner.scraper.RecaptchaSolver.solve_captcha",
-            new_callable=AsyncMock,
-        ) as mock_solve:
-
-            async def _hang():
+        async def hang():
+            try:
                 await asyncio.sleep(10.0)
                 return True
+            finally:
+                cancelled.set()
 
-            mock_solve.side_effect = _hang
-
-            # Timeout after 0.05s
-            res = await _handle_captcha_if_present(mock_page, timeout=0.05)
-            assert res is False
-
-        # Test successful solve
         with patch(
             "map_miner.scraper.RecaptchaSolver.solve_captcha",
             new_callable=AsyncMock,
             return_value=True,
-        ):
-            res = await _handle_captcha_if_present(mock_page)
-            assert res is True
+        ) as solve:
+            if not expected:
+                solve.side_effect = hang
+            kwargs = {} if timeout is None else {"timeout": timeout}
+            # Real wait_for cancels the hanging solver at the 1s floor, not 0.05s.
+            assert await _handle_captcha_if_present(page, **kwargs) is expected
+            if not expected:
+                assert cancelled.is_set()
 
-    asyncio.run(_run())
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("idx", "setting", "sample", "expected"),
+    [
+        (0, [], None, None),
+        (1, None, None, None),
+        (2, 0, None, None),
+        (2, -3, None, None),
+        (3, 2.0, None, 6.0),
+        (2, (1.0, 3.0), 2.5, 5.0),
+        (2, ["1", "3"], 2.5, 5.0),
+        (1, (-2.0, 1.0), -1.0, -1.0),
+        (1, (-2.0, 0.0), None, None),
+        (1, (0.0, float("nan")), None, None),
+    ],
+)
+def test_stagger_query_start_values(idx, setting, sample, expected):
+    async def run():
+        with (
+            patch("map_miner.scraper.random.uniform", return_value=sample) as uniform,
+            patch("map_miner.scraper.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        ):
+            await _stagger_query_start(idx, "cafe", setting)
+        if expected is None:
+            sleep.assert_not_awaited()
+            uniform.assert_not_called()
+        else:
+            sleep.assert_awaited_once_with(expected)
+            if sample is not None:
+                uniform.assert_called_once_with(float(setting[0]), float(setting[1]))
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("use_spa", [True, False])
+def test_stagger_delay_precedes_semaphore_in_both_modes(use_spa):
+    async def run():
+        browser = make_fake_browser()
+        first_running = asyncio.Event()
+        release_first = asyncio.Event()
+        delay_started = asyncio.Event()
+        release_delay = asyncio.Event()
+        launches = []
+
+        async def scrape(**kwargs):
+            launches.append(kwargs["query"])
+            if len(launches) == 1:
+                first_running.set()
+                await release_first.wait()
+            return [] if use_spa else set()
+
+        async def sleep(delay):
+            assert delay == 2.0
+            delay_started.set()
+            await release_delay.wait()
+
+        with (
+            patch(
+                "map_miner.scraper.async_playwright",
+                return_value=MockPlaywrightContext(browser),
+            ),
+            patch("map_miner.scraper._scrape_query_spa", side_effect=scrape),
+            patch("map_miner.scraper._get_place_urls", side_effect=scrape),
+            patch("map_miner.scraper.asyncio.sleep", side_effect=sleep),
+        ):
+            task = asyncio.create_task(
+                scrape_google_maps(
+                    queries={"first", "second"},
+                    geo_coordinates=Point(21, 105.8),
+                    zoom=18,
+                    n_semaphore=1,
+                    use_spa=use_spa,
+                    stagger_delay=2.0,
+                )
+            )
+            await asyncio.wait_for(first_running.wait(), 1)
+            await asyncio.wait_for(delay_started.wait(), 1)
+            assert len(launches) == 1
+            release_delay.set()
+            release_first.set()
+            await task
+            assert len(launches) == 2
+
+    asyncio.run(run())
+
+
+def test_gather_tasks_preserves_values_exception_and_input_order():
+    async def run():
+        error = ValueError("one failed")
+        release = asyncio.Event()
+
+        async def slow():
+            await release.wait()
+            return "first"
+
+        async def failed():
+            raise error
+
+        async def last():
+            release.set()
+            return "third"
+
+        tasks = [asyncio.create_task(fn()) for fn in (slow, failed, last)]
+        results = await _gather_tasks(tasks)
+        assert results == ["first", error, "third"]
+        assert all(task.done() for task in tasks)
+
+    asyncio.run(run())
+
+
+def test_gather_tasks_preserves_child_cancellation_as_result():
+    async def run():
+        async def cancelled():
+            raise asyncio.CancelledError
+
+        task = asyncio.create_task(cancelled())
+        results = await _gather_tasks([task])
+        assert len(results) == 1
+        assert isinstance(results[0], asyncio.CancelledError)
+        assert task.done()
+
+    asyncio.run(run())
+
+
+def test_gather_tasks_drains_sibling_finalizers_on_cancellation():
+    async def run():
+        entered = [asyncio.Event(), asyncio.Event()]
+        finalized = [asyncio.Event(), asyncio.Event()]
+
+        async def sibling(idx):
+            try:
+                entered[idx].set()
+                await asyncio.Event().wait()
+            finally:
+                # A cancelled caller must await this asynchronous finalizer too.
+                await asyncio.sleep(0)
+                finalized[idx].set()
+
+        tasks = [asyncio.create_task(sibling(i)) for i in range(2)]
+        caller = asyncio.create_task(_gather_tasks(tasks))
+        await asyncio.gather(*(event.wait() for event in entered))
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        assert all(event.is_set() for event in finalized)
+        assert all(task.done() for task in tasks)
+
+    asyncio.run(run())
 
 
 def test_staggered_query_dispatch_spa():
@@ -1924,23 +2088,35 @@ def test_preview_timeout_forwarding_in_scrape_google_maps():
     asyncio.run(_run())
 
 
-def test_static_route_cache_hit(tmp_path):
+@pytest.mark.parametrize(
+    ("url", "resource_type", "body", "content_type"),
+    [
+        pytest.param(
+            "https://www.google.com/maps/_/js/k=maps.m.en.js",
+            "script",
+            b"/* cached javascript code */",
+            "application/javascript; charset=utf-8",
+            id="javascript",
+        ),
+        pytest.param(
+            "https://www.google.com/maps/_/ss/k=maps.m.en.css",
+            "stylesheet",
+            b"body { color: red; }",
+            "text/css; charset=utf-8",
+            id="css",
+        ),
+    ],
+)
+def test_static_route_cache_hit(tmp_path, url, resource_type, body, content_type):
     async def _run():
         cache_dir = tmp_path / "static_assets"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        url = "https://www.google.com/maps/_/js/k=maps.m.en.js"
         cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
         cache_file = cache_dir / cache_key
-        cache_file.write_bytes(b"/* cached javascript code */")
+        cache_file.write_bytes(body)
 
-        route = AsyncMock()
-        route.request.url = url
-        route.request.method = "GET"
-        route.request.resource_type = "script"
-        route.fulfill = AsyncMock()
-        route.continue_ = AsyncMock()
-        route.abort = AsyncMock()
+        route = make_mock_route(url, resource_type=resource_type)
 
         await _global_route_handler(route, static_cache_dir=cache_dir)
 
@@ -1948,13 +2124,12 @@ def test_static_route_cache_hit(tmp_path):
         assert route.fulfill.await_args is not None
         kwargs = route.fulfill.await_args.kwargs
         assert kwargs["status"] == 200
-        assert kwargs["body"] == b"/* cached javascript code */"
-        assert (
-            kwargs["headers"]["content-type"] == "application/javascript; charset=utf-8"
-        )
+        assert kwargs["body"] == body
+        assert kwargs["headers"]["content-type"] == content_type
         assert kwargs["headers"]["x-cache"] == "HIT-ROUTE-CACHE"
         route.continue_.assert_not_called()
         route.abort.assert_not_called()
+        route.fetch.assert_not_called()
 
     asyncio.run(_run())
 
@@ -1981,13 +2156,7 @@ def test_static_route_cache_skips(tmp_path, url, method, resource_type):
         cache_dir = tmp_path / "static_assets"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        route = AsyncMock()
-        route.request.url = url
-        route.request.method = method
-        route.request.resource_type = resource_type
-        route.fulfill = AsyncMock()
-        route.continue_ = AsyncMock()
-        route.abort = AsyncMock()
+        route = make_mock_route(url, resource_type=resource_type, method=method)
 
         await _global_route_handler(route, static_cache_dir=cache_dir)
 
@@ -2011,14 +2180,8 @@ def test_static_route_cache_miss_fetches_and_saves(tmp_path):
         mock_resp.status = 200
         mock_resp.body.return_value = b"console.log('fresh js');"
 
-        route = AsyncMock()
-        route.request.url = url
-        route.request.method = "GET"
-        route.request.resource_type = "script"
+        route = make_mock_route(url)
         route.fetch = AsyncMock(return_value=mock_resp)
-        route.fulfill = AsyncMock()
-        route.continue_ = AsyncMock()
-        route.abort = AsyncMock()
 
         await _global_route_handler(route, static_cache_dir=cache_dir)
 
@@ -2030,44 +2193,10 @@ def test_static_route_cache_miss_fetches_and_saves(tmp_path):
     asyncio.run(_run())
 
 
-def test_static_route_cache_css_content_type(tmp_path):
-    async def _run():
-        cache_dir = tmp_path / "static_assets"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        url = "https://www.google.com/maps/_/ss/k=maps.m.en.css"
-        cache_key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-        cache_file = cache_dir / cache_key
-        cache_file.write_bytes(b"body { color: red; }")
-
-        route = AsyncMock()
-        route.request.url = url
-        route.request.method = "GET"
-        route.request.resource_type = "stylesheet"
-        route.fulfill = AsyncMock()
-        route.continue_ = AsyncMock()
-        route.abort = AsyncMock()
-
-        await _global_route_handler(route, static_cache_dir=cache_dir)
-
-        route.fulfill.assert_awaited_once()
-        assert route.fulfill.await_args is not None
-        kwargs = route.fulfill.await_args.kwargs
-        assert kwargs["status"] == 200
-        assert kwargs["body"] == b"body { color: red; }"
-        assert kwargs["headers"]["content-type"] == "text/css; charset=utf-8"
-        assert kwargs["headers"]["x-cache"] == "HIT-ROUTE-CACHE"
-
-    asyncio.run(_run())
-
-
 @pytest.mark.parametrize("failure_stage", ["fetch", "body"])
 def test_static_cache_failure_releases_browser_request(tmp_path, failure_stage):
     async def run():
-        route = AsyncMock()
-        route.request.url = "https://www.google.com/maps/_/js/test.js"
-        route.request.method = "GET"
-        route.request.resource_type = "script"
+        route = make_mock_route("https://www.google.com/maps/_/js/test.js")
         response = AsyncMock(status=200)
         route.fetch.return_value = response
         getattr(
@@ -2084,14 +2213,12 @@ def test_static_cache_failure_releases_browser_request(tmp_path, failure_stage):
 @pytest.mark.parametrize("operation", ["continue_", "fulfill", "abort"])
 def test_route_resolution_error_does_not_retry(operation, tmp_path):
     async def run():
-        route = AsyncMock()
-        route.request.url = (
+        route = make_mock_route(
             "https://www.google.com/maps/_/js/test.js"
             if operation == "fulfill"
-            else "https://example.com/resource"
+            else "https://example.com/resource",
+            resource_type="image" if operation == "abort" else "script",
         )
-        route.request.method = "GET"
-        route.request.resource_type = "image" if operation == "abort" else "script"
         route.fetch.return_value = AsyncMock(status=503)
         getattr(route, operation).side_effect = PlaywrightError("context closed")
         await _global_route_handler(route, static_cache_dir=tmp_path)
@@ -2104,10 +2231,7 @@ def test_route_resolution_error_does_not_retry(operation, tmp_path):
 
 def test_static_cache_error_response_not_cached(tmp_path):
     async def run():
-        route = AsyncMock()
-        route.request.url = "https://www.google.com/maps/_/js/test.js"
-        route.request.method = "GET"
-        route.request.resource_type = "script"
+        route = make_mock_route("https://www.google.com/maps/_/js/test.js")
         response = AsyncMock(status=503)
         route.fetch.return_value = response
         await _global_route_handler(route, static_cache_dir=tmp_path)
@@ -2120,10 +2244,7 @@ def test_static_cache_error_response_not_cached(tmp_path):
 
 def test_static_fetch_cancelled_aborts_without_retry(tmp_path):
     async def run():
-        route = AsyncMock()
-        route.request.url = "https://www.google.com/maps/_/js/test.js"
-        route.request.method = "GET"
-        route.request.resource_type = "script"
+        route = make_mock_route("https://www.google.com/maps/_/js/test.js")
         started = asyncio.Event()
 
         async def fetch():
@@ -2981,168 +3102,123 @@ def test_scrape_query_spa_fallback_rescue_from_dom():
     asyncio.run(_run())
 
 
-def test_scrape_google_maps_forwards_all_custom_parameters_spa(tmp_path):
-    """Verifies that scrape_google_maps forwards all 14 custom parameters down
-    to Chromium launch args, _create_browser_context, and _scrape_query_spa in SPA mode."""
-
-    async def _run():
-        fake_browser = make_fake_browser()
-        mock_context = make_mock_context()
-        custom_cache_dir = tmp_path / "custom_chromium_cache"
-        custom_static_cache_dir = tmp_path / "custom_static_cache"
-        mock_playwright_ctx = MockPlaywrightContext(fake_browser)
-
-        mock_spa = AsyncMock(
-            return_value=[{"name": "Custom Cafe", "link": "https://maps.google.com/1"}]
+@pytest.mark.parametrize(
+    ("use_spa", "custom"),
+    [
+        pytest.param(
+            True,
+            {
+                "range_limit": 7777.0,
+                "query_timeout": 120.0,
+                "place_timeout": 50.0,
+                "preview_timeout": 4500,
+                "navigation_timeout": 15000,
+                "captcha_timeout": 45.0,
+                "max_captcha_retries": 5,
+                "disk_cache_size": 50000000,
+                "max_consecutive_empty_scrolls": 2,
+                "max_consecutive_out_of_range_scrolls": 1,
+                "max_scroll_attempts_without_new_links": 3,
+            },
+            id="spa",
+        ),
+        pytest.param(
+            False,
+            {
+                "range_limit": 8888.0,
+                "query_timeout": 140.0,
+                "place_timeout": 55.0,
+                "preview_timeout": 3500,
+                "navigation_timeout": 16000,
+                "captcha_timeout": 48.0,
+                "max_captcha_retries": 3,
+                "disk_cache_size": 60000000,
+                "max_consecutive_empty_scrolls": 2,
+                "max_consecutive_out_of_range_scrolls": 1,
+                "max_scroll_attempts_without_new_links": 3,
+            },
+            id="fallback",
+        ),
+    ],
+)
+def test_scrape_google_maps_forwards_all_custom_parameters(tmp_path, use_spa, custom):
+    async def run():
+        browser = make_fake_browser()
+        context = make_mock_context()
+        suffix = "" if use_spa else "_fallback"
+        cache_dir = tmp_path / f"custom_chromium_cache{suffix}"
+        static_dir = tmp_path / f"custom_static_cache{suffix}"
+        playwright = MockPlaywrightContext(browser)
+        name = "Custom Cafe" if use_spa else "Fallback Cafe"
+        query = "custom_cafe" if use_spa else "fallback_cafe"
+        link = (
+            "https://maps.google.com/1"
+            if use_spa
+            else "https://maps.google.com/place_1"
         )
-        mock_create_ctx = AsyncMock(return_value=mock_context)
-
+        place = {"name": name, "link": link}
+        create_context = AsyncMock(return_value=context)
+        spa = AsyncMock(return_value=[place])
+        get_urls = AsyncMock(return_value={link})
+        process = AsyncMock(return_value=place)
         with (
-            patch(
-                "map_miner.scraper.async_playwright",
-                return_value=mock_playwright_ctx,
-            ),
-            patch("map_miner.scraper._create_browser_context", mock_create_ctx),
-            patch("map_miner.scraper._scrape_query_spa", mock_spa),
+            patch("map_miner.scraper.async_playwright", return_value=playwright),
+            patch("map_miner.scraper._create_browser_context", create_context),
+            patch("map_miner.scraper._scrape_query_spa", spa),
+            patch("map_miner.scraper._get_place_urls", get_urls),
+            patch("map_miner.scraper._process_link", process),
         ):
-            df = await scrape_google_maps(
-                queries={"custom_cafe"},
+            frame = await scrape_google_maps(
+                queries={query},
                 geo_coordinates=Point(21.0, 105.8),
                 zoom=15,
-                use_spa=True,
+                use_spa=use_spa,
                 stagger_delay=0,
-                cache_dir=custom_cache_dir,
-                range_limit=7777.0,
-                query_timeout=120.0,
-                place_timeout=50.0,
-                preview_timeout=4500,
-                navigation_timeout=15000,
-                captcha_timeout=45.0,
-                max_captcha_retries=5,
-                static_cache_dir=custom_static_cache_dir,
-                disk_cache_size=50000000,
-                max_consecutive_empty_scrolls=2,
-                max_consecutive_out_of_range_scrolls=1,
-                max_scroll_attempts_without_new_links=3,
+                cache_dir=cache_dir,
+                static_cache_dir=static_dir,
+                **custom,
             )
-
-        assert len(df) == 1
-        assert df["name"][0] == "Custom Cafe"
-
-        # Check Chromium launch args
-        launch_args = mock_playwright_ctx.mock_playwright.chromium.launch.call_args[1][
+        assert len(frame) == 1
+        assert frame["name"][0] == name
+        launch_args = playwright.mock_playwright.chromium.launch.call_args.kwargs[
             "args"
         ]
-        assert f"--disk-cache-dir={custom_cache_dir.resolve()}" in launch_args
-        assert "--disk-cache-size=50000000" in launch_args
-
-        # Check _create_browser_context arguments
-        assert mock_create_ctx.call_count >= 1
-        assert (
-            mock_create_ctx.call_args.kwargs["static_cache_dir"]
-            == custom_static_cache_dir
-        )
-
-        # Check _scrape_query_spa arguments
-        mock_spa.assert_awaited_once()
-        spa_kwargs = mock_spa.call_args.kwargs
-        assert spa_kwargs["range_limit"] == 7777.0
-        assert spa_kwargs["query_timeout"] == 120.0
-        assert spa_kwargs["preview_timeout"] == 4500
-        assert spa_kwargs["navigation_timeout"] == 15000
-        assert spa_kwargs["captcha_timeout"] == 45.0
-        assert spa_kwargs["max_captcha_retries"] == 5
-        assert spa_kwargs["static_cache_dir"] == custom_static_cache_dir
-        assert spa_kwargs["max_consecutive_empty_scrolls"] == 2
-        assert spa_kwargs["max_consecutive_out_of_range_scrolls"] == 1
-        assert spa_kwargs["max_scroll_attempts_without_new_links"] == 3
-
-    asyncio.run(_run())
-
-
-def test_scrape_google_maps_forwards_all_custom_parameters_fallback(tmp_path):
-    """Verifies that scrape_google_maps forwards all custom parameters down
-    to _get_place_urls and _process_link in multi-page fallback mode."""
-
-    async def _run():
-        fake_browser = make_fake_browser()
-        mock_context = make_mock_context()
-        custom_cache_dir = tmp_path / "custom_chromium_cache_fallback"
-        custom_static_cache_dir = tmp_path / "custom_static_cache_fallback"
-        mock_playwright_ctx = MockPlaywrightContext(fake_browser)
-
-        mock_get_urls = AsyncMock(return_value={"https://maps.google.com/place_1"})
-        mock_process = AsyncMock(
-            return_value={
-                "name": "Fallback Cafe",
-                "link": "https://maps.google.com/place_1",
-            }
-        )
-        mock_create_ctx = AsyncMock(return_value=mock_context)
-
-        with (
-            patch(
-                "map_miner.scraper.async_playwright",
-                return_value=mock_playwright_ctx,
-            ),
-            patch("map_miner.scraper._create_browser_context", mock_create_ctx),
-            patch("map_miner.scraper._get_place_urls", mock_get_urls),
-            patch("map_miner.scraper._process_link", mock_process),
+        assert f"--disk-cache-dir={cache_dir.resolve()}" in launch_args
+        assert f"--disk-cache-size={custom['disk_cache_size']}" in launch_args
+        assert create_context.call_count >= 1
+        for call in create_context.call_args_list:
+            assert call.kwargs["static_cache_dir"] == static_dir
+        search = spa if use_spa else get_urls
+        search.assert_awaited_once()
+        search_kwargs = search.call_args.kwargs
+        for key in (
+            "range_limit",
+            "query_timeout",
+            "navigation_timeout",
+            "captcha_timeout",
+            "max_consecutive_empty_scrolls",
+            "max_consecutive_out_of_range_scrolls",
+            "max_scroll_attempts_without_new_links",
         ):
-            df = await scrape_google_maps(
-                queries={"fallback_cafe"},
-                geo_coordinates=Point(21.0, 105.8),
-                zoom=15,
-                use_spa=False,
-                stagger_delay=0,
-                cache_dir=custom_cache_dir,
-                range_limit=8888.0,
-                query_timeout=140.0,
-                place_timeout=55.0,
-                preview_timeout=3500,
-                navigation_timeout=16000,
-                captcha_timeout=48.0,
-                max_captcha_retries=3,
-                static_cache_dir=custom_static_cache_dir,
-                disk_cache_size=60000000,
-                max_consecutive_empty_scrolls=2,
-                max_consecutive_out_of_range_scrolls=1,
-                max_scroll_attempts_without_new_links=3,
+            assert search_kwargs[key] == custom[key], key
+        if use_spa:
+            assert search_kwargs["preview_timeout"] == custom["preview_timeout"]
+            assert search_kwargs["max_captcha_retries"] == custom["max_captcha_retries"]
+            assert search_kwargs["static_cache_dir"] == static_dir
+            get_urls.assert_not_awaited()
+            process.assert_not_awaited()
+        else:
+            spa.assert_not_awaited()
+            process.assert_awaited_once()
+            assert (
+                process.call_args.kwargs["navigation_timeout"]
+                == custom["navigation_timeout"]
+            )
+            assert (
+                process.call_args.kwargs["captcha_timeout"] == custom["captcha_timeout"]
             )
 
-        assert len(df) == 1
-        assert df["name"][0] == "Fallback Cafe"
-
-        # Check Chromium launch args
-        launch_args = mock_playwright_ctx.mock_playwright.chromium.launch.call_args[1][
-            "args"
-        ]
-        assert f"--disk-cache-dir={custom_cache_dir.resolve()}" in launch_args
-        assert "--disk-cache-size=60000000" in launch_args
-
-        # Check _create_browser_context received static_cache_dir
-        assert mock_create_ctx.call_count >= 1
-        for call in mock_create_ctx.call_args_list:
-            assert call.kwargs["static_cache_dir"] == custom_static_cache_dir
-
-        # Check _get_place_urls arguments
-        mock_get_urls.assert_awaited_once()
-        urls_kwargs = mock_get_urls.call_args.kwargs
-        assert urls_kwargs["range_limit"] == 8888.0
-        assert urls_kwargs["query_timeout"] == 140.0
-        assert urls_kwargs["navigation_timeout"] == 16000
-        assert urls_kwargs["captcha_timeout"] == 48.0
-        assert urls_kwargs["max_consecutive_empty_scrolls"] == 2
-        assert urls_kwargs["max_consecutive_out_of_range_scrolls"] == 1
-        assert urls_kwargs["max_scroll_attempts_without_new_links"] == 3
-
-        # Check _process_link arguments
-        mock_process.assert_awaited_once()
-        process_kwargs = mock_process.call_args.kwargs
-        assert process_kwargs["navigation_timeout"] == 16000
-        assert process_kwargs["captcha_timeout"] == 48.0
-
-    asyncio.run(_run())
+    asyncio.run(run())
 
 
 def test_scrape_query_spa_custom_guardrails():
@@ -3558,27 +3634,28 @@ def test_node_options_suppresses_warnings(
     asyncio.run(_run())
 
 
-def test_handle_captcha_if_present_safe_timeout():
+@pytest.mark.parametrize(
+    ("timeout", "expected"),
+    [(-5.0, 1.0), (0.05, 1.0), (45.0, 45.0)],
+    ids=["negative-clamp", "small-clamp", "custom-positive"],
+)
+def test_handle_captcha_if_present_safe_timeout(timeout, expected):
     """Verifies that _handle_captcha_if_present clamps timeout to >= 1.0s."""
 
     async def _run():
-        mock_page = MagicMock()
-        mock_page.url = "https://www.google.com/sorry/index"
+        mock_page = make_captcha_page()
         with patch("map_miner.scraper.RecaptchaSolver") as mock_solver_cls:
             mock_solver = MagicMock()
 
-            async def _fake_solve():
-                return True
-
-            mock_solver.solve_captcha = _fake_solve
+            mock_solver.solve_captcha = AsyncMock(return_value=True)
             mock_solver.save_captcha_diagnostics = MagicMock(return_value=None)
             mock_solver_cls.return_value = mock_solver
 
             with patch(
                 "map_miner.scraper.asyncio.wait_for", wraps=asyncio.wait_for
             ) as spy_wait_for:
-                solved = await _handle_captcha_if_present(mock_page, timeout=-5.0)
+                solved = await _handle_captcha_if_present(mock_page, timeout=timeout)
                 assert solved is True
-                assert spy_wait_for.call_args.kwargs["timeout"] == 1.0
+                assert spy_wait_for.call_args.kwargs["timeout"] == expected
 
     asyncio.run(_run())

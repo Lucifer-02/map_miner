@@ -88,6 +88,7 @@ Khi không có kết quả ở chế độ mặc định, DataFrame rỗng vẫn
 ## Giới hạn vận hành
 
 - Google Maps có thể đổi DOM, payload, thứ tự kết quả hoặc chặn bot; trích xuất là best effort. Các trường và số hàng thực tế có thể thay đổi giữa các lượt chạy.
+- Trong lượt kiểm chứng tối đa 100 địa điểm mỗi query, hai hàng DOM rescue ghép sai tên với link/tọa độ/ID: link Quán Cafe Lả có tên Highlands Coffee; link Đường Ô Chợ Dừa có tên TapTap Brunch. Locator theo vị trí có thể đổi thẻ khi feed cập nhật sau click/chờ preview, nhưng cơ chế này vẫn là giả thuyết chưa được đo trực tiếp. Cleanup/refactor hiện tại chưa sửa lỗi association này; rescue thành công không chứng minh đúng địa điểm.
 - Khi Playwright báo executable Chromium không tồn tại lúc khởi chạy, `scrape_google_maps` ném `RuntimeError` kèm hướng dẫn `uv run playwright install chromium` và giữ lỗi gốc trong `__cause__`. Áp dụng cho cả SPA và luồng nhiều trang; scraper không tự cài trình duyệt. Các lỗi khởi chạy khác vẫn có thể bị bắt và trả DataFrame rỗng; kết quả rỗng không tự chứng minh rằng Google Maps không có địa điểm.
 - Mặc định dừng cuộn sau 3 lượt liên tiếp chỉ có địa điểm ngoài bán kính. Feed không được sắp xếp chặt theo khoảng cách, nên địa điểm gần ở lượt sau có thể bị bỏ lỡ.
 - Với link thiếu Hex ID/Place ID, bộ lọc preview hiện có thể nhận response của địa điểm khác. Tọa độ `@lat,lon` trong URL có thể là tâm viewport nhưng vẫn được dùng để lọc như tọa độ địa điểm.

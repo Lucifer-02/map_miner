@@ -1,0 +1,880 @@
+{
+  "valid_runs": [
+    {
+      "run_id": "r1_cache_off_pw162",
+      "cache": "off",
+      "versions": {
+        "playwright": "1.62.0",
+        "chromium": "151.0.7922.34",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome",
+        "headless_shell_revision": "1234",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:23:08.742507+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": null
+      },
+      "total_count": 192,
+      "unique_links": 192,
+      "elapsed_seconds": 126.882,
+      "queries": {
+        "hospital": {
+          "elapsed_seconds": 105.157,
+          "count": 42,
+          "unique_links": 42,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Reached end of results list marker in SPA feed and all items processed."
+          ],
+          "fallback_rescued": 0
+        },
+        "gym": {
+          "elapsed_seconds": 122.789,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 113.404,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "cafe": {
+          "elapsed_seconds": 124.497,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        }
+      },
+      "global_warning_events": []
+    },
+    {
+      "run_id": "r1_cache_off_pw163",
+      "cache": "off",
+      "versions": {
+        "playwright": "1.63.0",
+        "chromium": "153.0.8010.12",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+        "headless_shell_revision": "1243",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:25:16.797535+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": null
+      },
+      "total_count": 192,
+      "unique_links": 192,
+      "elapsed_seconds": 126.934,
+      "queries": {
+        "gym": {
+          "elapsed_seconds": 107.452,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "hospital": {
+          "elapsed_seconds": 106.275,
+          "count": 42,
+          "unique_links": 42,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items."
+          ],
+          "fallback_rescued": 0
+        },
+        "cafe": {
+          "elapsed_seconds": 118.977,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 116.441,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        }
+      },
+      "global_warning_events": []
+    },
+    {
+      "run_id": "r2_cache_on_pw163",
+      "cache": "on",
+      "versions": {
+        "playwright": "1.63.0",
+        "chromium": "153.0.8010.12",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+        "headless_shell_revision": "1243",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:27:25.027280+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": "fresh per run"
+      },
+      "total_count": 50,
+      "unique_links": 50,
+      "elapsed_seconds": 100.262,
+      "queries": {
+        "cafe": {
+          "elapsed_seconds": 30.047,
+          "count": 0,
+          "unique_links": 0,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 1,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+          ],
+          "fallback_rescued": 0
+        },
+        "hospital": {
+          "elapsed_seconds": 30.074,
+          "count": 0,
+          "unique_links": 0,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 1,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 30.067,
+          "count": 0,
+          "unique_links": 0,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 1,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+          ],
+          "fallback_rescued": 0
+        },
+        "gym": {
+          "elapsed_seconds": 99.79,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        }
+      },
+      "global_warning_events": []
+    },
+    {
+      "run_id": "r2_cache_on_pw162",
+      "cache": "on",
+      "versions": {
+        "playwright": "1.62.0",
+        "chromium": "151.0.7922.34",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome",
+        "headless_shell_revision": "1234",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:29:06.256558+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": "fresh per run"
+      },
+      "total_count": 193,
+      "unique_links": 193,
+      "elapsed_seconds": 111.314,
+      "queries": {
+        "cafe": {
+          "elapsed_seconds": 89.786,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "gym": {
+          "elapsed_seconds": 99.559,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 1,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 1
+        },
+        "hospital": {
+          "elapsed_seconds": 103.909,
+          "count": 43,
+          "unique_links": 43,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items."
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 100.862,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        }
+      },
+      "global_warning_events": []
+    },
+    {
+      "run_id": "r2_cache_off_pw163",
+      "cache": "off",
+      "versions": {
+        "playwright": "1.63.0",
+        "chromium": "153.0.8010.12",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+        "headless_shell_revision": "1243",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:30:58.749752+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": null
+      },
+      "total_count": 193,
+      "unique_links": 193,
+      "elapsed_seconds": 141.865,
+      "queries": {
+        "gym": {
+          "elapsed_seconds": 125.042,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 115.693,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "cafe": {
+          "elapsed_seconds": 127.029,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "hospital": {
+          "elapsed_seconds": 134.734,
+          "count": 43,
+          "unique_links": 43,
+          "null_name": 0,
+          "preview_timeout_or_error": 1,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items."
+          ],
+          "fallback_rescued": 1
+        }
+      },
+      "global_warning_events": []
+    },
+    {
+      "run_id": "r2_cache_off_pw162",
+      "cache": "off",
+      "versions": {
+        "playwright": "1.62.0",
+        "chromium": "151.0.7922.34",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome",
+        "headless_shell_revision": "1234",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:33:21.828230+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": null
+      },
+      "total_count": 190,
+      "unique_links": 190,
+      "elapsed_seconds": 119.282,
+      "queries": {
+        "cafe": {
+          "elapsed_seconds": 100.298,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 93.907,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "gym": {
+          "elapsed_seconds": 111.083,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "hospital": {
+          "elapsed_seconds": 112.275,
+          "count": 40,
+          "unique_links": 40,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items."
+          ],
+          "fallback_rescued": 0
+        }
+      },
+      "global_warning_events": []
+    },
+    {
+      "run_id": "r1_retry_cache_on_pw162",
+      "cache": "on",
+      "versions": {
+        "playwright": "1.62.0",
+        "chromium": "151.0.7922.34",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome",
+        "headless_shell_revision": "1234",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:35:22.292391+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": "fresh per run"
+      },
+      "total_count": 192,
+      "unique_links": 192,
+      "elapsed_seconds": 147.342,
+      "queries": {
+        "hospital": {
+          "elapsed_seconds": 107.524,
+          "count": 42,
+          "unique_links": 42,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Reached end of results list marker in SPA feed and all items processed."
+          ],
+          "fallback_rescued": 0
+        },
+        "cafe": {
+          "elapsed_seconds": 128.531,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 124.162,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        },
+        "gym": {
+          "elapsed_seconds": 146.836,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 2,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 2
+        }
+      },
+      "global_warning_events": []
+    },
+    {
+      "run_id": "r1_retry_cache_on_pw163",
+      "cache": "on",
+      "versions": {
+        "playwright": "1.63.0",
+        "chromium": "153.0.8010.12",
+        "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+        "headless_shell_revision": "1243",
+        "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell"
+      },
+      "started_utc": "2026-10-13T10:37:51.158511+00:00",
+      "query_order": [
+        "gym",
+        "cafe",
+        "hospital",
+        "atm"
+      ],
+      "pythonhashseed": "0",
+      "source_sha256": {
+        "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+        "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+        "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+        "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+        "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+      },
+      "parameters": {
+        "max_places": 50,
+        "lang": "en",
+        "coordinates": [
+          21.018785,
+          105.830415
+        ],
+        "zoom": 18,
+        "n_semaphore": 8,
+        "use_spa": true,
+        "query_timeout": 300,
+        "preview_timeout": 10000,
+        "range_limit": 25000,
+        "stagger_delay": [
+          1.5,
+          3.5
+        ],
+        "static_cache": "fresh per run",
+        "disk_cache": "fresh per run"
+      },
+      "total_count": 50,
+      "unique_links": 50,
+      "elapsed_seconds": 96.959,
+      "queries": {
+        "cafe": {
+          "elapsed_seconds": 30.052,
+          "count": 0,
+          "unique_links": 0,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 1,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+          ],
+          "fallback_rescued": 0
+        },
+        "hospital": {
+          "elapsed_seconds": 30.065,
+          "count": 0,
+          "unique_links": 0,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 1,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+          ],
+          "fallback_rescued": 0
+        },
+        "atm": {
+          "elapsed_seconds": 30.088,
+          "count": 0,
+          "unique_links": 0,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 1,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.\nCall log:\n  - navigating to \"https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en\", waiting until \"domcontentloaded\"\n"
+          ],
+          "fallback_rescued": 0
+        },
+        "gym": {
+          "elapsed_seconds": 96.497,
+          "count": 50,
+          "unique_links": 50,
+          "null_name": 0,
+          "preview_timeout_or_error": 0,
+          "navigation_timeout": 0,
+          "captcha_messages": 0,
+          "stop_reasons": [
+            "max_places"
+          ],
+          "fallback_rescued": 0
+        }
+      },
+      "global_warning_events": []
+    }
+  ],
+  "groups": [
+    {
+      "cache": "on",
+      "playwright": "1.62.0",
+      "run_count": 2,
+      "mean_total_count": 192.5,
+      "mean_elapsed_seconds": 129.328,
+      "navigation_timeout_total": 0,
+      "preview_timeout_or_error_total": 3
+    },
+    {
+      "cache": "on",
+      "playwright": "1.63.0",
+      "run_count": 2,
+      "mean_total_count": 50,
+      "mean_elapsed_seconds": 98.6105,
+      "navigation_timeout_total": 6,
+      "preview_timeout_or_error_total": 0
+    },
+    {
+      "cache": "off",
+      "playwright": "1.62.0",
+      "run_count": 2,
+      "mean_total_count": 191,
+      "mean_elapsed_seconds": 123.082,
+      "navigation_timeout_total": 0,
+      "preview_timeout_or_error_total": 0
+    },
+    {
+      "cache": "off",
+      "playwright": "1.63.0",
+      "run_count": 2,
+      "mean_total_count": 192.5,
+      "mean_elapsed_seconds": 134.3995,
+      "navigation_timeout_total": 0,
+      "preview_timeout_or_error_total": 1
+    }
+  ],
+  "pilot_run_ids": [
+    "r1_cache_on_pw162",
+    "r1_cache_on_pw163"
+  ],
+  "launches": 10,
+  "source_unchanged": true
+}

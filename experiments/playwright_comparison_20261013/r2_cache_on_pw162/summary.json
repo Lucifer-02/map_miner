@@ -1,0 +1,104 @@
+{
+  "run_id": "r2_cache_on_pw162",
+  "cache": "on",
+  "versions": {
+    "playwright": "1.62.0",
+    "chromium": "151.0.7922.34",
+    "executable_path": "/home/lucifer/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome",
+    "headless_shell_revision": "1234",
+    "headless_shell_executable": "/home/lucifer/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell"
+  },
+  "started_utc": "2026-10-13T10:29:06.256558+00:00",
+  "query_order": [
+    "gym",
+    "cafe",
+    "hospital",
+    "atm"
+  ],
+  "pythonhashseed": "0",
+  "source_sha256": {
+    "src/map_miner/recaptcha_solver.py": "a660ec54ab1af15ec28e09ca66a26f9668bfdcc59187e784e9d478d5e139cb42",
+    "src/map_miner/__init__.py": "8b384d79bc4ccf33106a413d18efd04caf301858cf7d797fb3c9c0d97de125bb",
+    "src/map_miner/proxy.py": "fef71a5942348d241f46379be195494df85d8c79955994f2778ad62dfcd522d2",
+    "src/map_miner/extractor.py": "55b4ada6a3006b6886a8c091ff43247b9120df49d2b399179653681d1b28f5dd",
+    "src/map_miner/scraper.py": "3f7e8d06833c17b8ddf1f897623923122a6fd33b01ed0c5ead5fd58f891ddee8"
+  },
+  "parameters": {
+    "max_places": 50,
+    "lang": "en",
+    "coordinates": [
+      21.018785,
+      105.830415
+    ],
+    "zoom": 18,
+    "n_semaphore": 8,
+    "use_spa": true,
+    "query_timeout": 300,
+    "preview_timeout": 10000,
+    "range_limit": 25000,
+    "stagger_delay": [
+      1.5,
+      3.5
+    ],
+    "static_cache": "fresh per run",
+    "disk_cache": "fresh per run"
+  },
+  "total_count": 193,
+  "unique_links": 193,
+  "elapsed_seconds": 111.314,
+  "queries": {
+    "cafe": {
+      "elapsed_seconds": 89.786,
+      "count": 50,
+      "unique_links": 50,
+      "null_name": 0,
+      "preview_timeout_or_error": 0,
+      "navigation_timeout": 0,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "max_places"
+      ],
+      "fallback_rescued": 0
+    },
+    "gym": {
+      "elapsed_seconds": 99.559,
+      "count": 50,
+      "unique_links": 50,
+      "null_name": 0,
+      "preview_timeout_or_error": 1,
+      "navigation_timeout": 0,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "max_places"
+      ],
+      "fallback_rescued": 1
+    },
+    "hospital": {
+      "elapsed_seconds": 103.909,
+      "count": 43,
+      "unique_links": 43,
+      "null_name": 0,
+      "preview_timeout_or_error": 0,
+      "navigation_timeout": 0,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items."
+      ],
+      "fallback_rescued": 0
+    },
+    "atm": {
+      "elapsed_seconds": 100.862,
+      "count": 50,
+      "unique_links": 50,
+      "null_name": 0,
+      "preview_timeout_or_error": 0,
+      "navigation_timeout": 0,
+      "captcha_messages": 0,
+      "stop_reasons": [
+        "max_places"
+      ],
+      "fallback_rescued": 0
+    }
+  },
+  "global_warning_events": []
+}

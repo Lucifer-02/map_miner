@@ -14,6 +14,15 @@ from playwright.async_api import ProxySettings
 
 logger = logging.getLogger(__name__)
 
+type _ProxyInput = (
+    ProxySettings
+    | dict[str, Any]
+    | Sequence[ProxySettings | dict[str, Any] | Any]
+    | str
+    | Sequence[str]
+    | None
+)
+
 DEFAULT_PROXY_BYPASS = "maps.gstatic.com,*.gstatic.com,fonts.googleapis.com,fonts.gstatic.com,apis.google.com,ssl.gstatic.com"
 DEFAULT_TOR_RENEW_COOLDOWN: float = 15.0
 
@@ -159,14 +168,7 @@ class ProxyRotator:
 
     def __init__(
         self,
-        proxy: (
-            ProxySettings
-            | dict[str, Any]
-            | Sequence[ProxySettings | dict[str, Any] | Any]
-            | str
-            | Sequence[str]
-            | None
-        ) = None,
+        proxy: _ProxyInput = None,
     ) -> None:
         self._proxies: list[ProxySettings] = []
         if proxy is not None:
@@ -207,8 +209,8 @@ class ProxyRotator:
         """Renews or rotates proxy.
 
         If using Tor SOCKS proxy (127.0.0.1:9050 or localhost:9050), attempts ControlPort
-        renewal respecting min_cooldown and generates a new isolated SOCKS credential. Otherwise,
-        advances to the next proxy in the pool.
+        renewal respecting min_cooldown and returns a proxy configuration without
+        credentials. Otherwise, advances to the next proxy in the pool.
 
         Args:
             current_proxy (ProxySettings | None): Currently active proxy.

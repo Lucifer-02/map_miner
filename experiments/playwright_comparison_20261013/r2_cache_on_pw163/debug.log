@@ -1,0 +1,72 @@
+2026-10-13 17:27:24,629 [DEBUG] [asyncio] [query=global] Using selector: EpollSelector
+2026-10-13 17:27:25,375 [INFO] [map_miner.scraper] [query=global] Scraping in SPA Navigation mode (max concurrency: 8, proxies: 0)...
+2026-10-13 17:27:25,375 [INFO] [map_miner.scraper] [query=global] Staggered query 1 ('cafe') delay 1.89s...
+2026-10-13 17:27:25,375 [INFO] [map_miner.scraper] [query=global] Staggered query 2 ('hospital') delay 6.52s...
+2026-10-13 17:27:25,375 [INFO] [map_miner.scraper] [query=global] Staggered query 3 ('atm') delay 9.97s...
+2026-10-13 17:27:25,477 [INFO] [map_miner.scraper] [query=gym] Navigating to search URL (SPA mode): https://www.google.com/maps/search/gym/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:27:27,310 [INFO] [map_miner.scraper] [query=cafe] Navigating to search URL (SPA mode): https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:27:29,645 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 1/50] Extracted: Sun Movement
+2026-10-13 17:27:31,300 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 2/50] Extracted: VIBE FIT - Gym & Fitness
+2026-10-13 17:27:31,972 [INFO] [map_miner.scraper] [query=hospital] Navigating to search URL (SPA mode): https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:27:33,455 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 3/50] Extracted: Phòng tập Gym CoachNgoc-TaplahetMap
+2026-10-13 17:27:35,305 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 4/50] Extracted: Coach Duy Nhất - Private Gym
+2026-10-13 17:27:35,438 [INFO] [map_miner.scraper] [query=atm] Navigating to search URL (SPA mode): https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:27:37,160 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 5/50] Extracted: The Fit Space
+2026-10-13 17:27:38,674 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 6/50] Extracted: Strong Ultimate Gym
+2026-10-13 17:27:40,297 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 7/50] Extracted: LUMINA FITNESS GYM KICKFIT & SAUNA
+2026-10-13 17:27:42,271 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 8/50] Extracted: Whey Gym
+2026-10-13 17:27:47,857 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 9/50] Extracted: Thicc Fit - Private Gym
+2026-10-13 17:27:49,466 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 10/50] Extracted: Forge Fight-Gym
+2026-10-13 17:27:51,062 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 11/50] Extracted: Private gym của Ngọc Phan
+2026-10-13 17:27:52,805 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 12/50] Extracted: Dũng Blue Private Gym
+2026-10-13 17:27:54,627 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 13/50] Extracted: Fat Attack
+2026-10-13 17:27:56,186 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 14/50] Extracted: Landkickfit
+2026-10-13 17:27:57,311 [ERROR] [map_miner.scraper] [query=cafe] Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to "https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en", waiting until "domcontentloaded"
+
+2026-10-13 17:27:57,613 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 15/50] Extracted: LUMA Pilates Studio
+2026-10-13 17:27:59,011 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 16/50] Extracted: The Barbell Club - Fitness Studio - Gym & PT Coach
+2026-10-13 17:28:01,977 [ERROR] [map_miner.scraper] [query=hospital] Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to "https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en", waiting until "domcontentloaded"
+
+2026-10-13 17:28:04,749 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 17/50] Extracted: Mưn sport - phụ kiện gym
+2026-10-13 17:28:05,443 [ERROR] [map_miner.scraper] [query=atm] Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to "https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en", waiting until "domcontentloaded"
+
+2026-10-13 17:28:06,582 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 18/50] Extracted: Siam Muay Club
+2026-10-13 17:28:08,429 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 19/50] Extracted: Spring Club
+2026-10-13 17:28:10,264 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 20/50] Extracted: BlueSky Gym & Yoga
+2026-10-13 17:28:11,872 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 21/50] Extracted: B-Wellness Private Gym Studio & Therapy
+2026-10-13 17:28:13,310 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 22/50] Extracted: Tiger gym
+2026-10-13 17:28:15,241 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 23/50] Extracted: Peace Gym Facilities
+2026-10-13 17:28:16,836 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 24/50] Extracted: HPC Private Gym Studio - Cơ sở 4 Xã Đàn
+2026-10-13 17:28:18,223 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 25/50] Extracted: Bear Fit Gym
+2026-10-13 17:28:19,929 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 26/50] Extracted: Leo Fitness Center
+2026-10-13 17:28:21,275 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 27/50] Extracted: GymHaus Thi Sách
+2026-10-13 17:28:27,453 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 28/50] Extracted: Muse Private Gym
+2026-10-13 17:28:29,202 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 29/50] Extracted: A.C.E Coaching Private Gym
+2026-10-13 17:28:30,732 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 30/50] Extracted: Tiger gym
+2026-10-13 17:28:32,288 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 31/50] Extracted: FYB Private Gym
+2026-10-13 17:28:33,902 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 32/50] Extracted: X-Men Gym
+2026-10-13 17:28:35,448 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 33/50] Extracted: 7FIT - GYM
+2026-10-13 17:28:36,817 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 34/50] Extracted: Kinetic Gym and Wellness Studio
+2026-10-13 17:28:38,125 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 35/50] Extracted: The Lab Dance Station
+2026-10-13 17:28:39,402 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 36/50] Extracted: Công Ty Cổ Phần Gym Icon Holdings
+2026-10-13 17:28:40,938 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 37/50] Extracted: Leefit Private Gym - Láng Hạ
+2026-10-13 17:28:42,597 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 38/50] Extracted: Elite Villa/Rooftop Pool/Gym/FREE Laundry/Location
+2026-10-13 17:28:44,107 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 39/50] Extracted: Ares Gym & Kickfit
+2026-10-13 17:28:49,758 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 40/50] Extracted: Leefit Private Gym - Phan Huy Chú
+2026-10-13 17:28:51,485 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 41/50] Extracted: Club olympia gym
+2026-10-13 17:28:52,842 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 42/50] Extracted: Thiết bị Gym & thể thao Precor, Eleiko
+2026-10-13 17:28:54,714 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 43/50] Extracted: QUAN LÝ GYM
+2026-10-13 17:28:56,397 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 44/50] Extracted: GYM đại học văn hóa
+2026-10-13 17:28:57,624 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 45/50] Extracted: HPC Private Gym Studio - Cơ sở 2
+2026-10-13 17:28:58,955 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 46/50] Extracted: The Nelson Luxury Apartment 3Bedroom - FREE Pool, Gym & Sauna
+2026-10-13 17:29:00,392 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 47/50] Extracted: T2FIT Thái Hà - Private Gym
+2026-10-13 17:29:01,768 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 48/50] Extracted: Quần Áo Tập Gym - Fitness - Gymshark, Alphalete, ARSV
+2026-10-13 17:29:03,446 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 49/50] Extracted: Fitcore - Phòng tập Gym
+2026-10-13 17:29:04,898 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 50/50] Extracted: California Fitness & Yoga Hàng Da Quận Hoàn Kiếm
+2026-10-13 17:29:05,190 [INFO] [map_miner.scraper] [query=global] ✅ Successfully collected 50 places via SPA Navigation.

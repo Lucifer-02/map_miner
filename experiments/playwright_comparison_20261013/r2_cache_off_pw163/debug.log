@@ -1,0 +1,254 @@
+2026-10-13 17:30:58,328 [DEBUG] [asyncio] [query=global] Using selector: EpollSelector
+2026-10-13 17:30:59,101 [INFO] [map_miner.scraper] [query=global] Scraping in SPA Navigation mode (max concurrency: 8, proxies: 0)...
+2026-10-13 17:30:59,102 [INFO] [map_miner.scraper] [query=global] Staggered query 1 ('cafe') delay 1.89s...
+2026-10-13 17:30:59,102 [INFO] [map_miner.scraper] [query=global] Staggered query 2 ('hospital') delay 6.52s...
+2026-10-13 17:30:59,102 [INFO] [map_miner.scraper] [query=global] Staggered query 3 ('atm') delay 9.97s...
+2026-10-13 17:30:59,195 [INFO] [map_miner.scraper] [query=gym] Navigating to search URL (SPA mode): https://www.google.com/maps/search/gym/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:31:01,039 [INFO] [map_miner.scraper] [query=cafe] Navigating to search URL (SPA mode): https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:31:02,880 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 1/50] Extracted: VIBE FIT - Gym & Fitness
+2026-10-13 17:31:04,870 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 2/50] Extracted: Sun Movement
+2026-10-13 17:31:05,270 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 1/50] Extracted: Bearish Coffee - Local From Learning To Lounging
+2026-10-13 17:31:05,794 [INFO] [map_miner.scraper] [query=hospital] Navigating to search URL (SPA mode): https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:31:06,215 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 3/50] Extracted: Phòng tập Gym CoachNgoc-TaplahetMap
+2026-10-13 17:31:06,533 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 2/50] Extracted: Moby-Dick Coffee
+2026-10-13 17:31:07,734 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 4/50] Extracted: The Fit Space
+2026-10-13 17:31:07,751 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 3/50] Extracted: Highlands Coffee 55 Nguyen Luong Bang HN
+2026-10-13 17:31:09,366 [INFO] [map_miner.scraper] [query=atm] Navigating to search URL (SPA mode): https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en
+2026-10-13 17:31:09,436 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 5/50] Extracted: Coach Duy Nhất - Private Gym
+2026-10-13 17:31:09,437 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 4/50] Extracted: Bem! Coffee & Tea
+2026-10-13 17:31:11,220 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 6/50] Extracted: Strong Ultimate Gym
+2026-10-13 17:31:11,704 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 5/50] Extracted: AHA Cafe
+2026-10-13 17:31:12,044 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 1/50] Extracted: Vietnam - Cuba Friendship Hospital
+2026-10-13 17:31:13,588 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 7/50] Extracted: LUMINA FITNESS GYM KICKFIT & SAUNA
+2026-10-13 17:31:14,265 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 2/50] Extracted: Hanoi Hospital
+2026-10-13 17:31:14,269 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 6/50] Extracted: Nâu cafe
+2026-10-13 17:31:15,382 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 1/50] Extracted: ATM SACOMBANK
+2026-10-13 17:31:15,901 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 8/50] Extracted: ProLifting Private Gym
+2026-10-13 17:31:16,189 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 7/50] Extracted: Ok Coffee
+2026-10-13 17:31:16,725 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 3/50] Extracted: Thu Cuc General Hospital (TCI)
+2026-10-13 17:31:17,147 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 2/50] Extracted: ATM MSB Số 8 Sở giao dịch
+2026-10-13 17:31:17,875 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 8/50] Extracted: Aries Rooftop Cafe
+2026-10-13 17:31:18,939 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 4/50] Extracted: Friendship Hospital
+2026-10-13 17:31:19,097 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 3/50] Extracted: TPBank LiveBank Lê Ngọc Hân Hai Bà Trưng
+2026-10-13 17:31:21,451 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 4/50] Extracted: Bidv - Atm
+2026-10-13 17:31:21,763 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 5/50] Extracted: Vinmec International Hospital
+2026-10-13 17:31:22,707 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 9/50] Extracted: Forge Fight-Gym
+2026-10-13 17:31:23,416 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 9/50] Extracted: Café Hương
+2026-10-13 17:31:23,453 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 5/50] Extracted: Maritime Bank - Atm
+2026-10-13 17:31:23,789 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 6/50] Extracted: Hanoi Medical University Hospital
+2026-10-13 17:31:24,584 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 10/50] Extracted: Thicc Fit - Private Gym
+2026-10-13 17:31:25,149 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 6/50] Extracted: ACB
+2026-10-13 17:31:25,364 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 10/50] Extracted: Nyahaha Cake & Coffee
+2026-10-13 17:31:25,681 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 7/50] Extracted: Trang An General Hospital
+2026-10-13 17:31:26,864 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 11/50] Extracted: Private gym của Ngọc Phan
+2026-10-13 17:31:27,159 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 7/50] Extracted: ATM Vietcombank
+2026-10-13 17:31:27,304 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 11/50] Extracted: Vui Coffee
+2026-10-13 17:31:27,559 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 8/50] Extracted: Hong Ha General Hospital
+2026-10-13 17:31:29,035 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 12/50] Extracted: Fat Attack
+2026-10-13 17:31:29,352 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 9/50] Extracted: Saint Paul's General Hospital
+2026-10-13 17:31:29,557 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 12/50] Extracted: Cafe Chòi
+2026-10-13 17:31:29,558 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 8/50] Extracted: BIDV
+2026-10-13 17:31:31,420 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 13/50] Extracted: The Barbell Club - Fitness Studio - Gym & PT Coach
+2026-10-13 17:31:31,522 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 13/50] Extracted: Trung Nguyen Coffee Shop
+2026-10-13 17:31:31,612 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 9/50] Extracted: Ngân hàng VIB - ATM
+2026-10-13 17:31:31,622 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 10/50] Extracted: Thanh Nhan Hospital
+2026-10-13 17:31:33,502 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 10/50] Extracted: ATM Techcombank
+2026-10-13 17:31:33,511 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 11/50] Extracted: Bệnh viện Quốc tế Thăng Long Lạc Việt
+2026-10-13 17:31:33,750 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 14/50] Extracted: Landkickfit
+2026-10-13 17:31:34,216 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 14/50] Extracted: Cafe Luna, 158 Hào Nam
+2026-10-13 17:31:35,031 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 11/50] Extracted: ATM - Ngân hàng Bản Việt
+2026-10-13 17:31:35,087 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 15/50] Extracted: LUMA Pilates Studio
+2026-10-13 17:31:36,297 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 15/50] Extracted: Lâm Cafe
+2026-10-13 17:31:36,491 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 12/50] Extracted: ATM Bac A Bank
+2026-10-13 17:31:36,650 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 16/50] Extracted: Spring Club
+2026-10-13 17:31:38,112 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 16/50] Extracted: Cafe Xưa
+2026-10-13 17:31:39,487 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 12/50] Extracted: Hong Ngoc General Hospital
+2026-10-13 17:31:39,643 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 17/50] Extracted: The Juice House
+2026-10-13 17:31:40,827 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 18/50] Extracted: Rêve coffee
+2026-10-13 17:31:40,987 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 13/50] Extracted: Hoe Nhai General Hospital
+2026-10-13 17:31:41,890 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 13/50] Extracted: ATM Vietcombank
+2026-10-13 17:31:42,362 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 17/50] Extracted: Whey Gym
+2026-10-13 17:31:42,571 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 19/50] Extracted: Fancha Ô Chợ Dừa
+2026-10-13 17:31:42,757 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 14/50] Extracted: General Hospital of Agricultural
+2026-10-13 17:31:44,425 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 14/50] Extracted: International Bank - ATM VIB
+2026-10-13 17:31:44,867 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 20/50] Extracted: Cafe Mèo Lizzy House
+2026-10-13 17:31:45,056 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 18/50] Extracted: Dũng Blue Private Gym
+2026-10-13 17:31:45,711 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 15/50] Extracted: Phòng khám Đa khoa Bệnh viện Hà Thành
+2026-10-13 17:31:46,478 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 15/50] Extracted: Pgbank - Atm
+2026-10-13 17:31:47,234 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 16/50] Extracted: Bắc Hà International General Hospital
+2026-10-13 17:31:47,235 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 19/50] Extracted: Mưn sport - phụ kiện gym
+2026-10-13 17:31:47,524 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 21/50] Extracted: TapTap Brunch
+2026-10-13 17:31:48,031 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 16/50] Extracted: ATM Techcombank (CDM)
+2026-10-13 17:31:49,154 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 22/50] Extracted: Timeline Coffee & Restaurant
+2026-10-13 17:31:49,155 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 17/50] Extracted: Military Hospital 354
+2026-10-13 17:31:49,466 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 20/50] Extracted: Siam Muay Club
+2026-10-13 17:31:49,770 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 17/50] Extracted: ATM VPBank - UBND Phường Nguyễn Du
+2026-10-13 17:31:51,894 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 23/50] Extracted: Trà Sữa Bọt Biếc - Ô Chợ Dừa
+2026-10-13 17:31:52,209 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 18/50] Extracted: Trung Tâm Cấp Cứu Bệnh viện Đa khoa Xanh Pôn
+2026-10-13 17:31:52,386 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 18/50] Extracted: Baovietbank - Atm
+2026-10-13 17:31:52,601 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 21/50] Extracted: B-Wellness Private Gym Studio & Therapy
+2026-10-13 17:31:54,216 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 24/50] Extracted: Chiếc mơ Nguyễn Hy Quang
+2026-10-13 17:31:54,576 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 19/50] Extracted: ATM ACB
+2026-10-13 17:31:55,250 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 19/50] Extracted: MEDLATEC Hospital
+2026-10-13 17:31:55,537 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 22/50] Extracted: Tiger gym
+2026-10-13 17:31:57,067 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 25/50] Extracted: Aroi Dessert Cafe
+2026-10-13 17:31:57,719 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 20/50] Extracted: ATM Techcombank (ATM & CDM)
+2026-10-13 17:31:58,072 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 23/50] Extracted: Peace Gym Facilities
+2026-10-13 17:31:58,396 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 20/50] Extracted: Tam Anh Hospital - Ha Noi
+2026-10-13 17:31:59,558 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 26/50] Extracted: Trà Dâu Sài Gòn
+2026-10-13 17:31:59,862 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 24/50] Extracted: HPC Private Gym Studio - Cơ sở 4 Xã Đàn
+2026-10-13 17:31:59,968 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 21/50] Extracted: Seabank - Atm
+2026-10-13 17:32:01,969 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 22/50] Extracted: Nasb - Atm
+2026-10-13 17:32:02,237 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 25/50] Extracted: BlueSky Gym & Yoga
+2026-10-13 17:32:03,525 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 23/50] Extracted: Mhb - Atm
+2026-10-13 17:32:03,969 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 26/50] Extracted: Bear Fit Gym
+2026-10-13 17:32:06,272 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 24/50] Extracted: MB ATM (Nộp/rút tiền)
+2026-10-13 17:32:07,356 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 27/50] Extracted: Leo Fitness Center
+2026-10-13 17:32:08,366 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 27/50] Extracted: Chè Chang Khâm Thiên
+2026-10-13 17:32:09,119 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 25/50] Extracted: Oceanbank - Atm
+2026-10-13 17:32:09,359 [WARNING] [map_miner.scraper] [query=hospital]   ⚠️ Error or timeout waiting for SPA preview (timeout=10000ms): https://www.google.com/maps/place/B%E1%BB%87nh+Vi%E1%BB%87n+%C4%90a+Khoa+Qu%E1%BB%91c+T%E1%BA%BF+Thu+C%C3%BAc/data=!4m7!3m6!1s0x3135ab106314aebf:0x850c9776536470f4!8m2!3d21.045041!4d105.814358!16s%2Fg%2F1hf1xs8y8!19sChIJv64UYxCrNTER9HBkU3aXDIU (Timeout 10000ms exceeded while waiting for event "response")
+2026-10-13 17:32:09,444 [INFO] [map_miner.scraper] [query=hospital]   🆘 [Fallback Rescue] Rescued place data from feed DOM for: Bệnh Viện Đa Khoa Quốc Tế Thu Cúc
+2026-10-13 17:32:09,658 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 28/50] Extracted: GymHaus Thi Sách
+2026-10-13 17:32:10,601 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 28/50] Extracted: Quy Chef home Party Center
+2026-10-13 17:32:11,520 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 22/50] Extracted: Hoe Nhai 2 General Hospital
+2026-10-13 17:32:11,733 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 26/50] Extracted: ATM Vietinbank - Securities Company
+2026-10-13 17:32:12,705 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 29/50] Extracted: papa cà phê
+2026-10-13 17:32:13,633 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 27/50] Extracted: MB ATM (Nộp/rút tiền)
+2026-10-13 17:32:13,809 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 30/50] Extracted: Ganbei
+2026-10-13 17:32:13,823 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 23/50] Extracted: Hanoi Medical University
+2026-10-13 17:32:14,903 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 29/50] Extracted: Muse Private Gym
+2026-10-13 17:32:16,397 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 28/50] Extracted: Pg 1 atm Bank Kham Thien
+2026-10-13 17:32:16,399 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 31/50] Extracted: GenZ Cinema & Music Đống Đa
+2026-10-13 17:32:16,703 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 24/50] Extracted: E Hospital
+2026-10-13 17:32:17,586 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 30/50] Extracted: A.C.E Coaching Private Gym
+2026-10-13 17:32:18,072 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 29/50] Extracted: ATM International Bank - VIB Hoan Kiem
+2026-10-13 17:32:18,180 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 32/50] Extracted: Drink Haven
+2026-10-13 17:32:18,505 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 25/50] Extracted: XƯƠNG KHỚP - CỘT SỐNG VIỆT XÔ
+2026-10-13 17:32:20,103 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 30/50] Extracted: ATM Vpbank
+2026-10-13 17:32:20,389 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 33/50] Extracted: C'est la Lituli
+2026-10-13 17:32:20,486 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 31/50] Extracted: Tiger gym
+2026-10-13 17:32:21,203 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 26/50] Extracted: Duc Giang General Hospital
+2026-10-13 17:32:22,669 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 31/50] Extracted: ATM Techcombank
+2026-10-13 17:32:22,933 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 32/50] Extracted: FYB Private Gym
+2026-10-13 17:32:23,171 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 34/50] Extracted: 85*C Bakery & Cafe
+2026-10-13 17:32:23,647 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 27/50] Extracted: Thien Duc Hospital
+2026-10-13 17:32:24,537 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 35/50] Extracted: HYBRA On Top
+2026-10-13 17:32:25,017 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 33/50] Extracted: X-Men Gym
+2026-10-13 17:32:25,018 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 32/50] Extracted: ATM BIDV
+2026-10-13 17:32:25,326 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 28/50] Extracted: Phòng Khám Đa Khoa Trần Duy Hưng
+2026-10-13 17:32:26,399 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 34/50] Extracted: 7FIT - GYM
+2026-10-13 17:32:26,460 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 36/50] Extracted: Nhà Hàng Bến Xưa 8
+2026-10-13 17:32:26,643 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 29/50] Extracted: Bệnh viện Đa khoa Quốc tế Vinmec Riverside
+2026-10-13 17:32:27,844 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 35/50] Extracted: The Lab Dance Station
+2026-10-13 17:32:28,191 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 30/50] Extracted: Bệnh Viện Đa khoa Quốc Tế TIMES
+2026-10-13 17:32:28,384 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 37/50] Extracted: Pizza Đình
+2026-10-13 17:32:29,081 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 36/50] Extracted: Kinetic Gym and Wellness Studio
+2026-10-13 17:32:29,618 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 38/50] Extracted: Xôi Cô Dung
+2026-10-13 17:32:30,033 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 31/50] Extracted: Ha Noi Traditional Medicine Hospital
+2026-10-13 17:32:30,804 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 33/50] Extracted: Ngân hàng Bản Việt - BVBank Hoàn Kiếm
+2026-10-13 17:32:32,025 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 37/50] Extracted: Leefit Private Gym - Láng Hạ
+2026-10-13 17:32:32,096 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 39/50] Extracted: Nước ép Xàm Xí
+2026-10-13 17:32:32,730 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 34/50] Extracted: ATM Ngân Hàng Phương Nam - Vincom
+2026-10-13 17:32:33,725 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 38/50] Extracted: Công Ty Cổ Phần Gym Icon Holdings
+2026-10-13 17:32:35,325 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 35/50] Extracted: MSB Phố Huế
+2026-10-13 17:32:36,278 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 39/50] Extracted: Elite Villa/Rooftop Pool/Gym/FREE Laundry/Location
+2026-10-13 17:32:38,469 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 36/50] Extracted: Saigon Bank - Atm
+2026-10-13 17:32:39,516 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 40/50] Extracted: Ares Gym & Kickfit
+2026-10-13 17:32:41,136 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 32/50] Extracted: Agriculture General Hospital
+2026-10-13 17:32:41,431 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 37/50] Extracted: ATM Techcombank (CDM)
+2026-10-13 17:32:42,904 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 41/50] Extracted: Gym Hoàn Kiếm- Whey Gym 2
+2026-10-13 17:32:43,837 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 40/50] Extracted: Bếp Bông - Green Life
+2026-10-13 17:32:44,020 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 38/50] Extracted: Vikki Bank - ATM Trung Tâm Triển Lãm Nghệ Thuật Việt Nam
+2026-10-13 17:32:44,025 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 33/50] Extracted: Gia Lam Hospital
+2026-10-13 17:32:45,305 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 42/50] Extracted: Shred.hanoi Private Gym
+2026-10-13 17:32:45,937 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 34/50] Extracted: Times Hospital - Phẫu Thuật Tạo Hình Thẩm Mỹ
+2026-10-13 17:32:46,527 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 41/50] Extracted: Quán Cafe Lả
+2026-10-13 17:32:46,793 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 39/50] Extracted: VPBank Express
+2026-10-13 17:32:46,937 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 43/50] Extracted: Gym Health Linh Đàm
+2026-10-13 17:32:47,532 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 35/50] Extracted: National Hospital for Tropical Diseases
+2026-10-13 17:32:48,486 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 42/50] Extracted: T&N COFFEE
+2026-10-13 17:32:49,061 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 40/50] Extracted: ATM Southernbank - Vincom
+2026-10-13 17:32:49,145 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 44/50] Extracted: GYM Success
+2026-10-13 17:32:49,742 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 36/50] Extracted: Dong Anh General Hospital
+2026-10-13 17:32:50,470 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 43/50] Extracted: Your Juice - Nước Ép Trái Cây
+2026-10-13 17:32:50,541 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 41/50] Extracted: ATM BIDV
+2026-10-13 17:32:50,567 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 45/50] Extracted: Phòng Tập Gym Olympic
+2026-10-13 17:32:51,632 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 37/50] Extracted: Hoai Duc General Hospital
+2026-10-13 17:32:51,910 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 44/50] Extracted: Đường Ô Chợ Dừa
+2026-10-13 17:32:52,047 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 42/50] Extracted: Eximbank - Atm
+2026-10-13 17:32:53,224 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 38/50] Extracted: Khoa Vi sinh BVĐK Đức Giang
+2026-10-13 17:32:53,814 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 43/50] Extracted: ATM VPBank - VPBank Hà Nội
+2026-10-13 17:32:54,348 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 45/50] Extracted: Cà Phê Lazio
+2026-10-13 17:32:54,919 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 39/50] Extracted: Thuong Tin Hospital
+2026-10-13 17:32:55,407 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 44/50] Extracted: PGBank ATM
+2026-10-13 17:32:55,958 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 46/50] Extracted: ORO cafe
+2026-10-13 17:32:56,600 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 45/50] Extracted: Mhb - Atm
+2026-10-13 17:32:56,748 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 40/50] Extracted: Đan Phượng General Hospital
+2026-10-13 17:32:56,769 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 46/50] Extracted: HC Gym & Kickfitness - 36 Hoàng Cầu
+2026-10-13 17:32:58,222 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 46/50] Extracted: ATM VIB
+2026-10-13 17:32:58,682 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 41/50] Extracted: Khoa Ngoại tổng hợp_Bệnh viện Bắc thăng long
+2026-10-13 17:32:59,092 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/B%E1%BB%87nh+vi%E1%BB%87n+%C4%90a+khoa+Ph%C3%BAc+Y%C3%AAn/data=!4m7!3m6!1s0x3134fc6bb268badf:0xf269d86ff4769140!8m2!3d21.2329169!4d105.7082836!16s%2Fg%2F1tdnbqhg!19sChIJ37posmv8NDERQJF29G_YafI is 26889.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:32:59,097 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Hong+Phuc+General+Hospital/data=!4m7!3m6!1s0x3135091cee720523:0x1934426cc4f1f4ff!8m2!3d21.1679179!4d106.046114!16s%2Fg%2F11fjn5yllk!19sChIJIwVy7hwJNTER__TxxGxCNBk is 27837.9m away, exceeding range limit (25000.0m).
+2026-10-13 17:32:59,113 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/B%E1%BB%87nh+Vi%E1%BB%87n+%C4%90a+Khoa+Y%C3%AAn+M%E1%BB%B9/data=!4m7!3m6!1s0x3135bb004ca45cb7:0xb258efb408b42857!8m2!3d20.8919371!4d106.0450203!16s%2Fg%2F11z2v_d1h9!19sChIJt1ykTAC7NTERVyi0CLTvWLI is 26370.2m away, exceeding range limit (25000.0m).
+2026-10-13 17:32:59,116 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 47/50] Extracted: AE FITNESS Đông Tác
+2026-10-13 17:32:59,247 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Bac+Ninh+General+Hospital/data=!4m7!3m6!1s0x31350bfe76ef2833:0x69a3ff12f3be817b!8m2!3d21.1664784!4d106.0666845!16s%2Fg%2F1tg5rjcg!19sChIJMyjvdv4LNTERe4G-8xL_o2k is 29497.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:32:59,264 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Van+Dinh+General+Hospital/data=!4m7!3m6!1s0x31343551d0a45a6f:0x796b1e640990467e!8m2!3d20.7259271!4d105.7740152!16s%2Fg%2F1tc_ngx6!19sChIJb1qk0FE1NDERfkaQCWQea3k is 32950.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:00,553 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 47/50] Extracted: ATM Vietinbank - Khách Sạn Kim Liên
+2026-10-13 17:33:00,871 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 48/50] Extracted: ProLifting Private Gym - CƠ SỞ 2
+2026-10-13 17:33:01,223 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 42/50] Extracted: Thú Y Tiupet
+2026-10-13 17:33:01,402 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Son+Tay+General+Hospital/data=!4m7!3m6!1s0x3134f60bf0efab19:0x38494180a33bfd62!8m2!3d21.1523036!4d105.5060473!16s%2Fg%2F1tvm06w7!19sChIJGavv8Av2NDERYv07o4BBSTg is 36804.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:01,407 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/L%C6%B0%C6%A1ng+S%C6%A1n+General+Hospital/data=!4m7!3m6!1s0x3134443f5cdc1983:0x8be1fdfb87b47556!8m2!3d20.8747794!4d105.5283751!16s%2Fg%2F1pp2v0ycm!19sChIJgxncXD9ENDERVnW0h_v94Ys is 35228.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:01,412 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/B%E1%BB%87nh+vi%E1%BB%87n+%C4%90a+khoa+Ph%E1%BB%91+N%E1%BB%91i/data=!4m7!3m6!1s0x3135a48716f7d879:0xb16ef278e240795f!8m2!3d20.9407102!4d106.0568525!16s%2Fg%2F1tff9ny3!19sChIJedj3FoekNTERX3lA4njybrE is 25082.6m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:01,416 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/TNH+Viet+Yen+Hospital/data=!4m7!3m6!1s0x313513ef19bf8947:0x3a66fac7f166c8a!8m2!3d21.26698!4d106.103594!16s%2Fg%2F11tscwh80x!19sChIJR4m_Ge8TNTERimwWf6xvpgM is 39500.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:01,420 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Phu+Xuyen+Hospital/data=!4m7!3m6!1s0x3135b62f28aff70f:0xd2f894f0491241a1!8m2!3d20.729694!4d105.9144424!16s%2Fg%2F11b682t205!19sChIJD_evKC-2NTERoUESSfCU-NI is 33179.6m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:01,921 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 48/50] Extracted: International Bank - VIB Hai Ba Trung
+2026-10-13 17:33:01,991 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 49/50] Extracted: FitHolic Boutique Gym
+2026-10-13 17:33:02,282 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 47/50] Extracted: Thịt Quay Ô Chợ Dừa ( Chuẩn Cô Hường )
+2026-10-13 17:33:03,550 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 49/50] Extracted: Saigon Bank - Atm
+2026-10-13 17:33:03,881 [INFO] [map_miner.scraper] [query=gym]   ✅ [SPA 50/50] Extracted: Victory's Gym Hoàng Mai
+2026-10-13 17:33:04,193 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 48/50] Extracted: Quán Xưa - Đông Các
+2026-10-13 17:33:04,714 [INFO] [map_miner.scraper] [query=atm]   ✅ [SPA 50/50] Extracted: Shb - Atm
+2026-10-13 17:33:05,630 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 49/50] Extracted: Bridge Coffee
+2026-10-13 17:33:06,157 [INFO] [map_miner.scraper] [query=hospital]   ✅ [SPA 43/50] Extracted: Nha khoa
+2026-10-13 17:33:06,458 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/B%E1%BB%87nh+Vi%E1%BB%87n+Giao+Th%C3%B4ng+V%E1%BA%ADn+T%E1%BA%A3i+V%C4%A9nh+Ph%C3%BAc+-+Khoa+Kh%C3%A1m+B%E1%BB%87nh/data=!4m7!3m6!1s0x3134fc7573e8fc1b:0x491e059277d95914!8m2!3d21.2339993!4d105.6893593!16s%2Fg%2F11b67mytm8!19sChIJG_zoc3X8NDERFFnZd5IFHkk is 27973.2m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:06,462 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/B%E1%BB%87nh+vi%E1%BB%87n+C/data=!4m7!3m6!1s0x31351f67eaaaaaab:0x2c2244a320fc9d22!8m2!3d21.4467294!4d105.8608698!16s%2Fg%2F1tf6jp9r!19sChIJq6qq6mcfNTERIp38IKNEIiw is 47487.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:06,466 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Son+Uyen+Hospital/data=!4m7!3m6!1s0x313510a18087c259:0xf657073d69c97fc1!8m2!3d21.3531623!4d105.978291!16s%2Fg%2F11b7sx1kt6!19sChIJWcKHgKEQNTERwX_JaT0HV_Y is 40080.3m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:06,470 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Tr%E1%BA%A1m+Y+T%E1%BA%BF+X%C3%A3+T%C3%A2n+D%C3%A2n/data=!4m7!3m6!1s0x3135b5a3b31130bf:0xe8ddb83324b45642!8m2!3d20.7396226!4d105.8706103!16s%2Fg%2F11gv14jyf5!19sChIJvzARs6O1NTERQla0JDO43eg is 31189.3m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:06,474 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Tien+Lu+General+Hospital/data=!4m7!3m6!1s0x3135bf8b293a9995:0x5541e093d7c3fb17!8m2!3d20.7056981!4d106.1342366!16s%2Fg%2F1pzph3b71!19sChIJlZk6KYu_NTERF_vD15PgQVU is 46917.1m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:06,478 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/B%E1%BB%87nh+vi%E1%BB%87n+%C4%91a+khoa+hi%E1%BB%87p+ho%C3%A0/data=!4m7!3m6!1s0x313511763519fc1f:0x4a431df997dbd52b!8m2!3d21.3548901!4d105.9866397!16s%2Fg%2F11szd_9pv9!19sChIJH_wZNXYRNTERK9Xbl_kdQ0o is 40595.6m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:06,483 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Trung+T%C3%A2m+Y+T%E1%BA%BF+Huy%E1%BB%87n+B%C3%ACnh+Xuy%C3%AAn/data=!4m7!3m6!1s0x3134fb0eaaaaaaab:0xcb559c1ec5e89ef9!8m2!3d21.2732511!4d105.6512998!16s%2Fg%2F1pzx5cql9!19sChIJq6qqqg77NDER-Z7oxR6cVcs is 33762.6m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:06,487 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Y+H%E1%BB%8Dc+C%E1%BB%95+Truy%E1%BB%81n+Th%C3%A0nh+%C4%90%E1%BA%A1t/data=!4m7!3m6!1s0x3135a4b28a426ff7:0x2a5a1a4e95b8c914!8m2!3d20.8984668!4d106.0510059!16s%2Fg%2F1pzqk_g9b!19sChIJ929CirKkNTERFMm4lU4aWio is 26528.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:07,695 [INFO] [map_miner.scraper] [query=cafe]   ✅ [SPA 50/50] Extracted: Cửa Hàng Trà Ô Long
+2026-10-13 17:33:09,841 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/General+Malvar+Hospital/data=!4m7!3m6!1s0x3397b75a30e3242b:0x9605c8c3a85aa644!8m2!3d14.667497!4d121.072678!16s%2Fg%2F1vf98wx2!19sChIJKyTjMFq3lzMRRKZaqMPIBZY is 1760548.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,845 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Assumption+Specialty+Hospital+and+Medical+Center/data=!4m7!3m6!1s0x3397bfc64f426e35:0x349c7fb2078bb662!8m2!3d14.6054348!4d121.1742288!16s%2Fg%2F11g2wv44_9!19sChIJNW5CT8a_lzMRYraLB7J_nDQ is 1773385.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,849 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Kim+Boi+General+Hospital/data=!4m7!3m6!1s0x313439431c1b9ee9:0x56819b101cde1b7e!8m2!3d20.6806286!4d105.5206944!16s%2Fg%2F1v41xxsx!19sChIJ6Z4bHEM5NDERfhveHBCbgVY is 49403.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,853 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Trung+T%C3%A2m+Ch%C4%83m+S%C3%B3c+S%E1%BB%A9c+Kh%E1%BB%8Fe+Sinh+S%E1%BA%A3n+T%E1%BB%89nh+V%C4%A9nh+Ph%C3%BAc/data=!4m7!3m6!1s0x3134facaa4756823:0x7865ac09bcd1af5c!8m2!3d21.3060965!4d105.6188314!16s%2Fg%2F1pzvq1jxr!19sChIJI2h1pMr6NDERXK_RvAmsZXg is 38662.8m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,857 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Lawksawk+General+Hospital/data=!4m7!3m6!1s0x30cc39e4bf7efdbf:0x3640332041f917d0!8m2!3d21.2508115!4d96.8613572!16s%2Fg%2F11fb0jmcjm!19sChIJv_1-v-Q5zDAR0Bf5QSAzQDY is 931906.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,861 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Pho+Yen+District+Oriental+Medicine/data=!4m7!3m6!1s0x31351ed307f55f8b:0x286a19ee62ab!8m2!3d21.4145048!4d105.8730678!16s%2Fg%2F1pzplsh_f!19sChIJi1_1B9MeNTERq2LuGWooAAA is 44037.2m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,865 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Trung+T%C3%A2m+Y+T%E1%BA%BF+D%E1%BB%B1+Ph%C3%B2ng+Huy%E1%BB%87n+Hi%E1%BB%87p+Ho%C3%A0/data=!4m7!3m6!1s0x313510af9a3cb307:0x9b3b542061866efa!8m2!3d21.3552091!4d105.9798085!16s%2Fg%2F1pzxlcfn3!19sChIJB7M8mq8QNTER-m6GYSBUO5s is 40350.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,868 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Hoang+Minh+Clinic/data=!4m7!3m6!1s0x3135126aaaaaaaab:0x599763423610fc43!8m2!3d21.2858633!4d106.0875326!16s%2Fg%2F1pzs8lr5g!19sChIJq6qqqmoSNTERQ_wQNkJjl1k is 39844.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,872 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Myebon+Hospital/data=!4m7!3m6!1s0x30b0e990bd865bb9:0x42c04094d4491a38!8m2!3d20.0423748!4d93.3721352!16s%2Fg%2F11gsn3gym2!19sChIJuVuGvZDpsDAROBpJ1JRAwEI is 1303450.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,876 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Minh+Tam+Clinic/data=!4m7!3m6!1s0x3135bfe1f187133d:0x2dabb46ef7d32707!8m2!3d20.7181875!4d106.156997!16s%2Fg%2F1pzyl1mkx!19sChIJPROH8eG_NTERByfT9260qy0 is 47566.3m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:09,880 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Ng%C3%B5+Y%E1%BA%BFt+Ki%C3%AAu/data=!4m7!3m6!1s0x31367f005258f7b5:0x237aa5bb46201729!8m2!3d20.3435763!4d105.8421591!16s%2Fg%2F11nc4vd8lj!19sChIJtfdYUgB_NjERKRcgRruleiM is 74764.3m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,358 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/CDG+Bohol+Doctors+Hospital/data=!4m7!3m6!1s0x33aa4ddfe2032fe9:0xf69a3b096bad7b14!8m2!3d9.6267075!4d123.8847453!16s%2Fg%2F1tf7d64q!19sChIJ6S8D4t9NqjMRFHutawk7mvY is 2308833.9m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,416 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Pk+Ng%E1%BB%8Dc+Thi%E1%BB%87n/data=!4m7!3m6!1s0x313513f6fd8604f9:0x8ceb32937a3389f1!8m2!3d21.3528082!4d106.0787373!16s%2Fg%2F11gf5wbf2n!19sChIJ-QSG_fYTNTER8YkzepMy64w is 45084.9m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,421 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Pushpshree+Hospital+%26+Research+Center/data=!4m7!3m6!1s0x3962fcde651cf41d:0x5849116be735b68d!8m2!3d22.6975551!4d75.8663926!16s%2Fg%2F1tfgbmvg!19sChIJHfQcZd78YjkRjbY152sRSVg is 3097625.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,436 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Tr%E1%BA%A1m+Y+T%E1%BA%BF+X%C3%A3+Th%C3%A1i+Ho%C3%A0/data=!4m7!3m6!1s0x3135bd7e51feaf19:0xd87c4b4866b0a723!8m2!3d20.8425292!4d106.1558676!16s%2Fg%2F1pzxqtf5j!19sChIJGa_-UX69NTERI6ewZkhLfNg is 39074.8m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,492 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Zhongshan+Hospital/data=!4m7!3m6!1s0x36af01a54201962b:0x4d9cbb543bb11e1d!8m2!3d23.5531707!4d110.3916693!16s%2Fg%2F11gz6r6yx!19sChIJK5YBQqUBrzYRHR6xO1S7nE0 is 547395.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,496 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/St.+Joseph+Medical+Center/data=!4m7!3m6!1s0x8640bf16441c2297:0x372520c108d585bd!8m2!3d29.748276!4d-95.3660561!16s%2Fm%2F04g3nht!19sChIJlyIcRBa_QIYRvYXVCMEgJTc is 13948772.7m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,501 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/hospital/data=!4m7!3m6!1s0x30cc9f0069a53513:0xd34a3c64434309a!8m2!3d22.0208917!4d96.4672292!16s%2Fg%2F11vqlbqqlh!19sChIJEzWlaQCfzDARmjA0RMajNA0 is 976246.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,513 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/M.+N.+Ghorawat+Hospital+-+Best+Multispeciality+%26+Emergency+Hospital+in+Ladnun/data=!4m7!3m6!1s0x396b2fd275b313ab:0x4af9d6ba0276b6!8m2!3d27.6349549!4d74.3935522!16s%2Fg%2F11d_9k6tt1!19sChIJqxOzddIvazkRtnYCutb5SgA is 3264109.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:14,572 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Divisional+Hospital+-+Wilgamuwa/data=!4m7!3m6!1s0x3ae4af38c5a42829:0x969e36871d8402f2!8m2!3d7.5402742!4d80.9144354!16s%2Fg%2F1q5bt65p0!19sChIJKSikxTiv5DoR8gKEHYc2npY is 3066784.6m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,637 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Sheetal+Hospital/data=!4m7!3m6!1s0x399145c849cad3db:0x781d2ce04249a89a!8m2!3d26.7918769!4d83.3561562!16s%2Fg%2F11gfn_cvmt!19sChIJ29PKSchFkTkRmqhJQuAsHXg is 2372278.3m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,642 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Saraswat+Hospital+-+Plastic,+Cosmetic+%26+Hair+Transplant+surgery+centre./data=!4m7!3m6!1s0x397477f22e436ab1:0x800327ccfbe2938!8m2!3d27.2056492!4d77.9453648!16s%2Fg%2F1thw0kvr!19sChIJsWpDLvJ3dDkROCm-z3wyAAg is 2909749.8m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,647 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/HCA+HealthONE+Rose/data=!4m7!3m6!1s0x876c7c1c7753143f:0x4f40bf2c60d977cc!8m2!3d39.7319796!4d-104.9335802!16s%2Fm%2F02770vd!19sChIJPxRTdxx8bIcRzHfZYCy_QE8 is 12562841.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,652 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/S+B+Multi-speciality+Ayurveda+Hospital/data=!4m7!3m6!1s0x3bae159beb10a2e3:0xd2af0c07cfcd5d08!8m2!3d12.9233011!4d77.5794395!16s%2Fg%2F11t55_cxq9!19sChIJ46IQ65sVrjsRCF3NzwcMr9I is 3133723.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,657 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/The+Johns+Hopkins+Hospital/data=!4m7!3m6!1s0x89c80462dd7f9b41:0xeceddd36a48a8c8f!8m2!3d39.2967385!4d-76.5927362!16zL20vMDFnMDhm!19sChIJQZt_3WIEyIkRj4yKpDbd7ew is 13322597.8m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,662 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Khwopa+hospital+wing+2/data=!4m7!3m6!1s0x39eb050069ecbeaf:0x305dabd4343b2f4e!8m2!3d27.6738875!4d85.4431094!16s%2Fg%2F11wq2vhs_s!19sChIJr77saQAF6zkRTi87NNSrXTA is 2192718.0m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,667 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Remission+hospital/data=!4m7!3m6!1s0x39ec4b3773e14bdd:0xf478a3b13966fb16!8m2!3d26.4393842!4d85.8938087!16s%2Fg%2F11sq4y2_zc!19sChIJ3UvhczdL7DkRFvtmObGjePQ is 2116849.1m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,672 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/B.B.+Hospital/data=!4m7!3m6!1s0x3a526466a72592e1:0x706cfccda1f5da03!8m2!3d13.1185463!4d80.2044292!16s%2Fg%2F1hm2nk402!19sChIJ4ZIlp2ZkUjoRA9r1oc38bHA is 2859959.5m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,676 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Cleveland+Clinic+Main+Campus/data=!4m7!3m6!1s0x8830fb9a2ad7ef19:0x1e2aa74bab017bd0!8m2!3d41.5030444!4d-81.6206971!16zL20vMDRwbW4z!19sChIJGe_XKpr7MIgR0HsBq0unKh4 is 13040053.3m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,681 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/Keduzhen+Central+Hospital/data=!4m7!3m6!1s0x36daf4345bcf4093:0x89d412e5d79faa1a!8m2!3d25.545895!4d102.854782!16s%2Fg%2F1wg5w9yj!19sChIJk0DPWzT02jYRGqqf1-US1Ik is 586491.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:17,688 [DEBUG] [map_miner.scraper] [query=hospital] Early drop: Place https://www.google.com/maps/place/153+General+Hospital,+Leh/data=!4m7!3m6!1s0x38fdeb4a092d61fd:0x1ac3ca7e519f2874!8m2!3d34.1613191!4d77.5667332!16s%2Fg%2F11l3dg05t5!19sChIJ_WEtCUrr_TgRdCifUX7Kwxo is 3132267.4m away, exceeding range limit (25000.0m).
+2026-10-13 17:33:20,457 [DEBUG] [map_miner.scraper] [query=hospital] Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items.
+2026-10-13 17:33:20,484 [INFO] [map_miner.scraper] [query=global] ✅ Successfully collected 193 places via SPA Navigation.

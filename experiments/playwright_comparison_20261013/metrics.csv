@@ -1,0 +1,51 @@
+run_id,cache,playwright,chromium,query,elapsed_seconds,count,unique_links,null_name,preview_timeout_or_error,navigation_timeout,captcha_messages,fallback_rescued,stop_reasons
+r1_cache_off_pw162,off,1.62.0,151.0.7922.34,hospital,105.157,42,42,0,0,0,0,0,Reached end of results list marker in SPA feed and all items processed.
+r1_cache_off_pw162,off,1.62.0,151.0.7922.34,gym,122.789,50,50,0,0,0,0,0,max_places
+r1_cache_off_pw162,off,1.62.0,151.0.7922.34,atm,113.404,50,50,0,0,0,0,0,max_places
+r1_cache_off_pw162,off,1.62.0,151.0.7922.34,cafe,124.497,50,50,0,0,0,0,0,max_places
+r1_cache_off_pw163,off,1.63.0,153.0.8010.12,gym,107.452,50,50,0,0,0,0,0,max_places
+r1_cache_off_pw163,off,1.63.0,153.0.8010.12,hospital,106.275,42,42,0,0,0,0,0,Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items.
+r1_cache_off_pw163,off,1.63.0,153.0.8010.12,cafe,118.977,50,50,0,0,0,0,0,max_places
+r1_cache_off_pw163,off,1.63.0,153.0.8010.12,atm,116.441,50,50,0,0,0,0,0,max_places
+r2_cache_on_pw163,on,1.63.0,153.0.8010.12,cafe,30.047,0,0,0,0,1,0,0,"Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to ""https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en"", waiting until ""domcontentloaded""
+"
+r2_cache_on_pw163,on,1.63.0,153.0.8010.12,hospital,30.074,0,0,0,0,1,0,0,"Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to ""https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en"", waiting until ""domcontentloaded""
+"
+r2_cache_on_pw163,on,1.63.0,153.0.8010.12,atm,30.067,0,0,0,0,1,0,0,"Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to ""https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en"", waiting until ""domcontentloaded""
+"
+r2_cache_on_pw163,on,1.63.0,153.0.8010.12,gym,99.79,50,50,0,0,0,0,0,max_places
+r2_cache_on_pw162,on,1.62.0,151.0.7922.34,cafe,89.786,50,50,0,0,0,0,0,max_places
+r2_cache_on_pw162,on,1.62.0,151.0.7922.34,gym,99.559,50,50,0,1,0,0,1,max_places
+r2_cache_on_pw162,on,1.62.0,151.0.7922.34,hospital,103.909,43,43,0,0,0,0,0,Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items.
+r2_cache_on_pw162,on,1.62.0,151.0.7922.34,atm,100.862,50,50,0,0,0,0,0,max_places
+r2_cache_off_pw163,off,1.63.0,153.0.8010.12,gym,125.042,50,50,0,0,0,0,0,max_places
+r2_cache_off_pw163,off,1.63.0,153.0.8010.12,atm,115.693,50,50,0,0,0,0,0,max_places
+r2_cache_off_pw163,off,1.63.0,153.0.8010.12,cafe,127.029,50,50,0,0,0,0,0,max_places
+r2_cache_off_pw163,off,1.63.0,153.0.8010.12,hospital,134.734,43,43,0,1,0,0,1,Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items.
+r2_cache_off_pw162,off,1.62.0,151.0.7922.34,cafe,100.298,50,50,0,0,0,0,0,max_places
+r2_cache_off_pw162,off,1.62.0,151.0.7922.34,atm,93.907,50,50,0,0,0,0,0,max_places
+r2_cache_off_pw162,off,1.62.0,151.0.7922.34,gym,111.083,50,50,0,0,0,0,0,max_places
+r2_cache_off_pw162,off,1.62.0,151.0.7922.34,hospital,112.275,40,40,0,0,0,0,0,Stopping SPA scroll: 3 consecutive scrolls with only out-of-range items.
+r1_retry_cache_on_pw162,on,1.62.0,151.0.7922.34,hospital,107.524,42,42,0,0,0,0,0,Reached end of results list marker in SPA feed and all items processed.
+r1_retry_cache_on_pw162,on,1.62.0,151.0.7922.34,cafe,128.531,50,50,0,0,0,0,0,max_places
+r1_retry_cache_on_pw162,on,1.62.0,151.0.7922.34,atm,124.162,50,50,0,0,0,0,0,max_places
+r1_retry_cache_on_pw162,on,1.62.0,151.0.7922.34,gym,146.836,50,50,0,2,0,0,2,max_places
+r1_retry_cache_on_pw163,on,1.63.0,153.0.8010.12,cafe,30.052,0,0,0,0,1,0,0,"Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to ""https://www.google.com/maps/search/cafe/@21.018785,105.830415,18z?hl=en"", waiting until ""domcontentloaded""
+"
+r1_retry_cache_on_pw163,on,1.63.0,153.0.8010.12,hospital,30.065,0,0,0,0,1,0,0,"Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to ""https://www.google.com/maps/search/hospital/@21.018785,105.830415,18z?hl=en"", waiting until ""domcontentloaded""
+"
+r1_retry_cache_on_pw163,on,1.63.0,153.0.8010.12,atm,30.088,0,0,0,0,1,0,0,"Error during scrape_query_spa: Page.goto: Timeout 30000ms exceeded.
+Call log:
+  - navigating to ""https://www.google.com/maps/search/atm/@21.018785,105.830415,18z?hl=en"", waiting until ""domcontentloaded""
+"
+r1_retry_cache_on_pw163,on,1.63.0,153.0.8010.12,gym,96.497,50,50,0,0,0,0,0,max_places
