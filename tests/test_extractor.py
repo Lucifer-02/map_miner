@@ -1,3 +1,4 @@
+import inspect
 import json
 from typing import Any
 from unittest.mock import MagicMock
@@ -6,14 +7,18 @@ import polars as pl
 import pytest
 from geopy.point import Point
 
+import map_miner
 from map_miner.extractor import (
     DEFAULT_FLATTEN_COLUMNS,
+    DEFAULT_RANGE_LIMIT,
     REQUIRED_COLUMNS,
+    _is_matching_feed_link,
     calculate_distance,
     extract_coordinates_from_url,
     extract_feed_item_dom,
     extract_place_data,
     format_places_dataframe,
+    get_reviews_count,
     is_preview_response_for_link,
     is_within_range,
     make_place_url,
@@ -307,9 +312,9 @@ def test_is_preview_response_for_link_place_id():
     resp_mismatch = MagicMock(url=preview_url_mismatch, status=200, ok=True)
     assert is_preview_response_for_link(resp_mismatch, chij_link) is False
 
-    # Link with neither ID (falls back to URL structure check)
+    # Link with neither ID (safely rejected to avoid cross-place data poisoning)
     simple_link = "https://www.google.com/maps/place/SomeCafe"
-    assert is_preview_response_for_link(resp_match, simple_link) is True
+    assert is_preview_response_for_link(resp_match, simple_link) is False
 
 
 def test_extract_feed_item_dom():
@@ -383,3 +388,228 @@ def test_format_places_dataframe_reviews_count_int64():
     df_nulls = format_places_dataframe(all_nulls, flatten=True)
     assert df_nulls["reviews_count"].dtype == pl.Int64
     assert df_nulls["reviews_count"].to_list() == [None, None]
+
+
+def test_extract_feed_item_dom_dom_recycling_guard():
+    """Verifies that DOM recycling cross-place poisoning is prevented."""
+    card_highlands = """
+    <div class="Nv2PK THOPZb">
+        <a class="hfpxzc" href="https://www.google.com/maps/place/Highlands+Coffee/data=!4m7!3m6!1s0x31752f3b9c025075:0x7c96362828b8cf44!8m2!3d10.771971!4d106.698345"></a>
+        <div class="qBF1Pd">Highlands Coffee</div>
+    </div>
+    """
+    cafe_la_link = "https://www.google.com/maps/place/Qu%C3%A1n+Cafe+L%E1%BA%A3/@10.771971,106.698345,17z/data=!4m6!3m5!1s0x31752f1111111111:0x2222222222222222"
+
+    # 1. Target link mismatch (Highlands card vs Cafe La link) -> safely rejected
+    res = extract_feed_item_dom(card_highlands, link=cafe_la_link)
+    assert res == {}
+
+    # 2. Matching target link with URL encoding difference
+    highlands_encoded_link = "https://www.google.com/maps/place/Highlands+Coffee/@10.771971,106.698345,17z/data=!4m7!3m6!1s0x31752f3b9c025075:0x7c96362828b8cf44"
+    res_match = extract_feed_item_dom(card_highlands, link=highlands_encoded_link)
+    assert res_match.get("name") == "Highlands Coffee"
+    assert res_match.get("link") == highlands_encoded_link
+
+    # 3. Relative DOM href matches absolute link
+    card_relative = """
+    <div class="Nv2PK">
+        <a class="hfpxzc" href="/maps/place/Cafe+L%E1%BA%A3/@10.7,106.6,17z"></a>
+        <div class="qBF1Pd">Cafe Lả</div>
+    </div>
+    """
+    abs_link = "https://www.google.com/maps/place/Cafe+L%E1%BA%A3/@10.7,106.6,17z"
+    res_rel = extract_feed_item_dom(card_relative, link=abs_link)
+    assert res_rel.get("name") == "Cafe Lả"
+
+    # 4. Conflicting Place ID
+    card_place_b = """
+    <div class="Nv2PK">
+        <a class="hfpxzc" href="https://www.google.com/maps/place/?q=place_id:ChIJplaceBBBBBBBBBBBBBBB"></a>
+        <div class="qBF1Pd">Place B</div>
+    </div>
+    """
+    link_place_a = (
+        "https://www.google.com/maps/place/?q=place_id:ChIJplaceAAAAAAAAAAAAAAA"
+    )
+    assert extract_feed_item_dom(card_place_b, link=link_place_a) == {}
+
+    # 5. Missing anchor tag in card HTML
+    card_no_a = '<div class="Nv2PK"><div class="qBF1Pd">No Link Cafe</div></div>'
+    assert extract_feed_item_dom(card_no_a, link=abs_link) == {}
+    assert extract_feed_item_dom(card_no_a) == {}
+
+    # 6. None or non-string card_html
+    assert extract_feed_item_dom(None) == {}  # type: ignore
+    assert extract_feed_item_dom("") == {}
+
+
+def test_is_matching_feed_link_direct():
+    """Directly unit tests _is_matching_feed_link multi-tier matching logic."""
+    # Exact match
+    assert (
+        _is_matching_feed_link(
+            "https://maps.google.com/place/A", "https://maps.google.com/place/A"
+        )
+        is True
+    )
+    # Canonical match with query params stripped
+    assert (
+        _is_matching_feed_link(
+            "https://maps.google.com/place/A?q=1", "https://maps.google.com/place/A?q=2"
+        )
+        is True
+    )
+    # Empty inputs
+    assert _is_matching_feed_link("", "https://maps.google.com/place/A") is False
+    assert _is_matching_feed_link("https://maps.google.com/place/A", "") is False
+
+
+def test_is_preview_response_for_link_no_id_returns_false():
+    """Verifies that is_preview_response_for_link strictly rejects links without unique identifiers."""
+    preview_url = "https://www.google.com/maps/preview/place?authuser=0&pb=!1m18!1sChIJdWb_e3MvdTERRLy4KKg2lnw"
+    resp_ok = MagicMock(url=preview_url, status=200, ok=True)
+
+    # Simple link without Hex ID or ChIJ ID -> must return False
+    assert (
+        is_preview_response_for_link(
+            resp_ok, "https://www.google.com/maps/place/SomeCafe"
+        )
+        is False
+    )
+    assert is_preview_response_for_link(resp_ok, "") is False
+    assert is_preview_response_for_link(resp_ok, None) is False  # type: ignore
+
+    # Non-preview response URL
+    non_preview_resp = MagicMock(
+        url="https://www.google.com/maps/search/cafe", status=200, ok=True
+    )
+    chij_link = (
+        "https://www.google.com/maps/place/?q=place_id:ChIJdWb_e3MvdTERRLy4KKg2lnw"
+    )
+    assert is_preview_response_for_link(non_preview_resp, chij_link) is False
+
+    # HTTP error response
+    error_resp = MagicMock(url=preview_url, status=500, ok=False)
+    assert is_preview_response_for_link(error_resp, chij_link) is False
+
+
+def test_get_reviews_count_dot_thousand_separator():
+    """Verifies that get_reviews_count correctly extracts review counts with dot or comma thousand separators."""
+    # Direct integer in data[4][8]
+    assert (
+        get_reviews_count(
+            [
+                None,
+                None,
+                None,
+                None,
+                [None, None, None, None, None, None, None, None, 500],
+            ]
+        )
+        == 500
+    )
+
+    # String with dot separator (e.g. Vietnamese / European: "1.234 đánh giá")
+    data_dot = [None, None, None, None, [None, None, None, [None, "1.234 đánh giá"]]]
+    assert get_reviews_count(data_dot) == 1234
+
+    # String with multiple dots: "1.234.567 đánh giá"
+    data_multi_dot = [
+        None,
+        None,
+        None,
+        None,
+        [None, None, None, [None, "1.234.567 đánh giá"]],
+    ]
+    assert get_reviews_count(data_multi_dot) == 1234567
+
+    # String with comma separator: "1,234 reviews"
+    data_comma = [None, None, None, None, [None, None, None, [None, "1,234 reviews"]]]
+    assert get_reviews_count(data_comma) == 1234
+
+    # Parentheses format: "(1.234)"
+    data_paren = [None, None, None, None, [None, None, None, [None, "(1.234)"]]]
+    assert get_reviews_count(data_paren) == 1234
+
+    # Zero reviews: "0 đánh giá"
+    data_zero = [None, None, None, None, [None, None, None, [None, "0 đánh giá"]]]
+    assert get_reviews_count(data_zero) == 0
+
+    # Non-numeric string: "Chưa có đánh giá"
+    data_none = [None, None, None, None, [None, None, None, [None, "Chưa có đánh giá"]]]
+    assert get_reviews_count(data_none) is None
+
+    # Empty data
+    assert get_reviews_count([]) is None
+
+
+def test_calculate_distance_handles_none_and_incomplete_coords():
+    """Verifies calculate_distance and is_within_range handle None and 1D-None coordinates returning inf and False."""
+    p_vn = (21.0285, 105.8542)  # Hanoi
+    p_null_island = (0.0, 0.0)
+
+    # 1. Target is None -> returns inf
+    assert calculate_distance(p_vn, None) == float("inf")
+    assert calculate_distance(p_null_island, None) == float("inf")
+
+    # 2. Origin is None -> returns inf
+    assert calculate_distance(None, p_vn) == float("inf")
+    assert calculate_distance(None, None) == float("inf")
+
+    # 3. 1D None coordinates (latitude or longitude is None) -> returns inf
+    assert calculate_distance((None, 105.8542), p_vn) == float("inf")
+    assert calculate_distance(p_vn, (21.0285, None)) == float("inf")
+    assert calculate_distance((None, None), p_vn) == float("inf")
+
+    # 4. Geopy Point with None attributes -> returns inf
+    mock_point_none = MagicMock(spec=Point)
+    mock_point_none.latitude = None
+    mock_point_none.longitude = None
+    assert calculate_distance(mock_point_none, p_vn) == float("inf")
+
+    # 5. True Null Island distance between real (0.0, 0.0) coordinates
+    assert calculate_distance((0.0, 0.0), (0.0, 0.0)) == 0.0
+
+    # 6. is_within_range safety: None coordinates never fall within range limit
+    assert is_within_range(p_null_island, None, range_limit=25000.0) is False
+    assert is_within_range(None, p_vn, range_limit=25000.0) is False
+    assert is_within_range(p_vn, (21.0285, None), range_limit=25000.0) is False
+    assert is_within_range((None, 105.8542), p_vn, range_limit=25000.0) is False
+    assert is_within_range((0.0, 0.0), (0.0, 0.0), range_limit=25000.0) is True
+
+
+def test_default_range_limit_constant_and_export():
+    """Kiểm tra hằng số DEFAULT_RANGE_LIMIT trong extractor, __all__ và map_miner package."""
+    assert isinstance(DEFAULT_RANGE_LIMIT, float)
+    assert DEFAULT_RANGE_LIMIT == 25000.0
+
+    import map_miner.extractor as extractor_module
+
+    assert "DEFAULT_RANGE_LIMIT" in extractor_module.__all__
+    assert hasattr(map_miner, "DEFAULT_RANGE_LIMIT")
+    assert map_miner.DEFAULT_RANGE_LIMIT == 25000.0
+    assert "DEFAULT_RANGE_LIMIT" in map_miner.__all__
+
+
+def test_is_within_range_default_parameter():
+    """Kiểm tra giá trị mặc định của tham số range_limit trong is_within_range là DEFAULT_RANGE_LIMIT."""
+    sig = inspect.signature(is_within_range)
+    assert "range_limit" in sig.parameters
+    assert sig.parameters["range_limit"].default == DEFAULT_RANGE_LIMIT
+    assert sig.parameters["range_limit"].default is DEFAULT_RANGE_LIMIT
+
+    # 1. Hai điểm cách nhau ~900m (Hoan Kiem - Hai Ba Trung, Hanoi) -> nằm trong bán kính mặc định 25km
+    p_hoan_kiem = (21.0285, 105.8542)
+    p_hai_ba_trung = (21.0188, 105.8560)
+    assert is_within_range(p_hoan_kiem, p_hai_ba_trung) is True
+
+    # 2. Hai điểm cách nhau > 25km (Hanoi - Bac Ninh ~29km) -> ngoài bán kính mặc định
+    p_bac_ninh = (21.1861, 106.0763)
+    assert calculate_distance(p_hoan_kiem, p_bac_ninh) > 25000.0
+    assert is_within_range(p_hoan_kiem, p_bac_ninh) is False
+
+    # 3. Điểm None hoặc tọa độ thiếu trả về False khi dùng range_limit mặc định
+    assert is_within_range(None, p_hoan_kiem) is False
+    assert is_within_range(p_hoan_kiem, None) is False
+    assert is_within_range((None, 105.85), p_hoan_kiem) is False
+    assert is_within_range(p_hoan_kiem, (21.02, None)) is False

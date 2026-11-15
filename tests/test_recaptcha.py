@@ -7,6 +7,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 import speech_recognition as sr
+from playwright.async_api import Error as PlaywrightError
 from pydub.generators import Sine
 
 from map_miner.recaptcha_solver import (
@@ -588,34 +589,98 @@ def test_is_solved_uses_timeout():
 
 
 def test_download_audio_uses_timeout():
-    """Verifies that download_audio initializes ClientSession with total=10.0 timeout."""
+    """Verifies that download_audio uses page.context.request.get with 10_000ms timeout."""
 
     async def _run():
         mock_page = MagicMock()
+        mock_resp = AsyncMock()
+        mock_resp.ok = True
+        mock_resp.status = 200
+        mock_resp.status_text = "OK"
+        mock_resp.body = AsyncMock(return_value=b"fake audio bytes")
+
+        mock_page.context.request.get = AsyncMock(return_value=mock_resp)
         solver = RecaptchaSolver(mock_page)
 
-        mock_resp = AsyncMock()
-        mock_resp.read = AsyncMock(return_value=b"fake audio bytes")
-
-        mock_session = MagicMock()
-        mock_session.get.return_value.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
-
-        with patch("aiohttp.ClientSession") as mock_session_cls:
-            mock_session_cls.return_value.__aenter__ = AsyncMock(
-                return_value=mock_session
+        with patch("map_miner.recaptcha_solver._write_bytes_sync") as mock_write:
+            await solver.download_audio(
+                "http://example.com/audio.mp3", "/tmp/audio.mp3"
             )
-            mock_session_cls.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            with patch("map_miner.recaptcha_solver._write_bytes_sync"):
-                await solver.download_audio(
-                    "http://example.com/audio.mp3", "/tmp/audio.mp3"
-                )
+        mock_page.context.request.get.assert_awaited_once_with(
+            "http://example.com/audio.mp3", timeout=10_000
+        )
+        mock_write.assert_called_once_with("/tmp/audio.mp3", b"fake audio bytes")
 
-            mock_session_cls.assert_called_once()
-            timeout_arg = mock_session_cls.call_args.kwargs.get("timeout")
-            assert timeout_arg is not None
-            assert timeout_arg.total == 10.0
+    asyncio.run(_run())
+
+
+def test_download_audio_playwright_context_request_success():
+    """Verifies successful audio download through browser request context inheriting session proxy/cookies."""
+
+    async def _run():
+        mock_page = MagicMock()
+        mock_resp = AsyncMock()
+        mock_resp.ok = True
+        mock_resp.status = 200
+        mock_resp.status_text = "OK"
+        mock_resp.body = AsyncMock(return_value=b"audio data payload")
+
+        mock_page.context.request.get = AsyncMock(return_value=mock_resp)
+        solver = RecaptchaSolver(mock_page)
+
+        with patch("map_miner.recaptcha_solver._write_bytes_sync") as mock_write:
+            await solver.download_audio(
+                "https://recaptcha.net/payload.mp3", "/dest/audio.mp3"
+            )
+
+        mock_page.context.request.get.assert_awaited_once_with(
+            "https://recaptcha.net/payload.mp3", timeout=10_000
+        )
+        mock_write.assert_called_once_with("/dest/audio.mp3", b"audio data payload")
+
+    asyncio.run(_run())
+
+
+def test_download_audio_playwright_context_request_http_error():
+    """Verifies that download_audio raises PlaywrightError when server returns non-ok HTTP status."""
+
+    async def _run():
+        mock_page = MagicMock()
+        mock_resp = AsyncMock()
+        mock_resp.ok = False
+        mock_resp.status = 403
+        mock_resp.status_text = "Forbidden"
+
+        mock_page.context.request.get = AsyncMock(return_value=mock_resp)
+        solver = RecaptchaSolver(mock_page)
+
+        with pytest.raises(PlaywrightError, match="HTTP 403 Forbidden"):
+            await solver.download_audio(
+                "https://recaptcha.net/payload.mp3", "/dest/audio.mp3"
+            )
+
+    asyncio.run(_run())
+
+
+def test_download_audio_playwright_context_request_empty_body():
+    """Verifies that download_audio raises PlaywrightError when audio content is empty."""
+
+    async def _run():
+        mock_page = MagicMock()
+        mock_resp = AsyncMock()
+        mock_resp.ok = True
+        mock_resp.status = 200
+        mock_resp.status_text = "OK"
+        mock_resp.body = AsyncMock(return_value=b"")
+
+        mock_page.context.request.get = AsyncMock(return_value=mock_resp)
+        solver = RecaptchaSolver(mock_page)
+
+        with pytest.raises(PlaywrightError, match="empty audio content"):
+            await solver.download_audio(
+                "https://recaptcha.net/payload.mp3", "/dest/audio.mp3"
+            )
 
     asyncio.run(_run())
 

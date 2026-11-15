@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_FLATTEN_COLUMNS",
+    "DEFAULT_RANGE_LIMIT",
     "REQUIRED_COLUMNS",
     "calculate_distance",
     "extract_coordinates_from_url",
@@ -52,6 +53,7 @@ DEFAULT_FLATTEN_COLUMNS: tuple[str, ...] = (
 REQUIRED_COLUMNS: tuple[str, ...] = (
     DEFAULT_FLATTEN_COLUMNS  # Backward compatibility alias
 )
+DEFAULT_RANGE_LIMIT: float = 25000.0  # 25 km in meters
 
 
 def safe_get(data: Any, *keys: Any) -> Any:
@@ -375,7 +377,7 @@ def get_rating(data: list) -> float | None:
 
 
 def get_reviews_count(data: list) -> int | None:
-    """Extracts the total number of reviews."""
+    """Extracts the total number of reviews, supporting both comma and dot thousand separators."""
     val = safe_get(data, 4, 8)
     if val is not None:
         try:
@@ -384,9 +386,13 @@ def get_reviews_count(data: list) -> int | None:
             pass
     rev_str = safe_get(data, 4, 3, 1)
     if isinstance(rev_str, str):
-        m = re.search(r"([0-9,]+)", rev_str)
+        m = re.search(r"([0-9,.]+)", rev_str)
         if m:
-            return int(m.group(1).replace(",", ""))
+            clean_num = m.group(1).replace(",", "").replace(".", "").strip()
+            try:
+                return int(clean_num)
+            except (ValueError, TypeError):
+                pass
     return None
 
 
@@ -918,8 +924,13 @@ def extract_coordinates_from_url(url: str) -> tuple[float, float] | None:
 def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
     """Validates whether an intercepted HTTP response corresponds to the place preview
     for a specific canonical link, avoiding race conditions and cross-place data leakage.
-    Supports both Hex ID (0x...:0x...) and Google Place ID (ChIJ...).
+    Requires and validates either Hex ID (0x...:0x...), Google Place ID (ChIJ...),
+    or matching place path slug when IDs are absent from the URL structure.
+    Returns False if canonical_link lacks identifiable IDs and slug does not match.
     """
+    if not canonical_link or not isinstance(canonical_link, str):
+        return False
+
     raw_url = getattr(response, "url", "")
     status = getattr(response, "status", 0)
     ok = getattr(response, "ok", status == 200)
@@ -944,10 +955,65 @@ def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
             place_id = place_id_match.group(1)
             if place_id in decoded_url or place_id.lower() in decoded_url_lower:
                 matched = True
-        if not matched:
-            return False
+        return matched
 
-    return True
+    # If canonical link has neither Hex ID nor Place ID, verify matching place slug
+    slug_canonical = re.search(r"/maps/place/([^/@?]+)", decoded_canonical)
+    slug_preview = re.search(r"/maps/preview/place/([^/@?]+)", decoded_url)
+    if slug_canonical and slug_preview:
+        s_c = slug_canonical.group(1).replace("+", " ").strip().lower()
+        s_p = slug_preview.group(1).replace("+", " ").strip().lower()
+        if s_c and s_p and s_c == s_p:
+            return True
+
+    return False
+
+
+def _is_matching_feed_link(target_link: str, dom_link: str) -> bool:
+    """Verifies whether a DOM card's href matches the expected target link,
+
+    preventing cross-place data poisoning caused by Google Maps DOM recycling.
+    """
+    if not target_link or not dom_link:
+        return False
+
+    t_clean = unquote(target_link).strip()
+    d_clean = unquote(dom_link).strip()
+
+    # Exact match
+    if t_clean == d_clean:
+        return True
+
+    # 1. Place ID check (ChIJ...)
+    chij_t = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", t_clean)
+    chij_d = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", d_clean)
+    if chij_t and chij_d:
+        return chij_t.group(1) == chij_d.group(1)
+
+    # 2. Hex ID check (0x...:0x...)
+    hex_t = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", t_clean)
+    hex_d = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", d_clean)
+    if hex_t and hex_d:
+        return hex_t.group(0).lower() == hex_d.group(0).lower()
+
+    # 3. Place slug check (/maps/place/<slug>)
+    slug_t = re.search(r"/maps/place/([^/@?]+)", t_clean)
+    slug_d = re.search(r"/maps/place/([^/@?]+)", d_clean)
+    if slug_t and slug_d:
+        s1 = slug_t.group(1).replace("+", " ").strip().lower()
+        s2 = slug_d.group(1).replace("+", " ").strip().lower()
+        if s1 and s2:
+            return s1 == s2
+
+    # 4. Canonical path match (only if path has specific place components beyond /maps/place)
+    t_path = re.sub(r"^https?://[^/]+", "", t_clean).split("?")[0].rstrip("/")
+    d_path = re.sub(r"^https?://[^/]+", "", d_clean).split("?")[0].rstrip("/")
+    return bool(
+        t_path
+        and d_path
+        and t_path == d_path
+        and t_path not in ("/maps/place", "/maps", "")
+    )
 
 
 def extract_feed_item_dom(
@@ -965,14 +1031,31 @@ def extract_feed_item_dom(
     soup = BeautifulSoup(card_html, "html.parser")
     res: dict[str, Any] = {}
 
-    # 1. Target link
-    target_link = link
-    if not target_link:
-        a_tag = soup.select_one("a[href*='/maps/place/']")
-        if a_tag and a_tag.get("href"):
-            target_link = str(a_tag["href"])
-    if target_link:
-        res["link"] = target_link
+    a_tag = soup.select_one("a[href*='/maps/place/'], a.hfpxzc")
+    dom_href = str(a_tag["href"]).strip() if (a_tag and a_tag.get("href")) else None
+
+    # 1. Target link validation & DOM recycling guard
+    if link:
+        if dom_href:
+            if not _is_matching_feed_link(link, dom_href):
+                return {}
+        else:
+            name_el = soup.select_one("div.qBF1Pd, div[role='heading'], h3")
+            card_name = name_el.get_text(strip=True) if name_el else ""
+            slug_m = re.search(r"/maps/place/([^/@?]+)", unquote(link))
+            if not card_name or not slug_m:
+                return {}
+            s_slug = re.sub(r"[\s+_]+", "", slug_m.group(1).lower())
+            s_card = re.sub(r"[\s+_]+", "", card_name.lower())
+            if s_slug != s_card:
+                return {}
+        target_link = link
+    else:
+        if not dom_href:
+            return {}
+        target_link = dom_href
+
+    res["link"] = target_link
 
     # 2. Place ID from link
     if target_link:
@@ -1130,39 +1213,64 @@ def extract_feed_item_dom(
     return {k: v for k, v in res.items() if v is not None}
 
 
+def _extract_coordinates(
+    pt: Point | tuple[float | None, float | None] | Sequence[float | None] | None,
+) -> tuple[float, float] | None:
+    """Safely extracts (latitude, longitude) floats from a Point or sequence.
+
+    Returns None if pt is None, malformed, or has None for either dimension.
+    """
+    if pt is None:
+        return None
+    if isinstance(pt, Point):
+        if (
+            getattr(pt, "latitude", None) is None
+            or getattr(pt, "longitude", None) is None
+        ):
+            return None
+        try:
+            return (float(pt.latitude), float(pt.longitude))
+        except (ValueError, TypeError):
+            return None
+    if isinstance(pt, (tuple, list)) and len(pt) >= 2:
+        lat, lon = pt[0], pt[1]
+        if lat is None or lon is None:
+            return None
+        try:
+            return (float(lat), float(lon))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def calculate_distance(
-    origin: Point | tuple[float, float],
-    target: Point | tuple[float, float],
+    origin: Point | tuple[float | None, float | None] | Sequence[float | None] | None,
+    target: Point | tuple[float | None, float | None] | Sequence[float | None] | None,
 ) -> float:
     """Calculates the geodesic distance in meters between two points.
 
-    Args:
-        origin (Point | tuple[float, float]): Origin coordinates.
-        target (Point | tuple[float, float]): Target coordinates.
-
-    Returns:
-        float: Geodesic distance in meters.
+    If either origin or target is None or missing coordinate dimensions,
+    returns float("inf") to prevent silent Null Island (0,0) fallback.
     """
-    p1 = (origin.latitude, origin.longitude) if isinstance(origin, Point) else origin
-    p2 = (target.latitude, target.longitude) if isinstance(target, Point) else target
+    p1 = _extract_coordinates(origin)
+    p2 = _extract_coordinates(target)
+    if p1 is None or p2 is None:
+        return float("inf")
     return float(geodesic(p1, p2).meters)
 
 
 def is_within_range(
-    origin: Point | tuple[float, float],
-    target: Point | tuple[float, float],
-    range_limit: float,
+    origin: Point | tuple[float | None, float | None] | Sequence[float | None] | None,
+    target: Point | tuple[float | None, float | None] | Sequence[float | None] | None,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
 ) -> bool:
     """Checks whether target is within range_limit meters from origin.
 
-    Args:
-        origin (Point | tuple[float, float]): Origin coordinates.
-        target (Point | tuple[float, float]): Target coordinates.
-        range_limit (float): Maximum radius distance in meters.
-
-    Returns:
-        bool: True if distance <= range_limit, False otherwise.
+    Defaults to DEFAULT_RANGE_LIMIT (25,000 meters = 25 km).
+    Returns False if either origin or target is None or missing coordinates.
     """
+    if origin is None or target is None:
+        return False
     return calculate_distance(origin, target) <= range_limit
 
 

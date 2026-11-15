@@ -9,7 +9,6 @@ import time
 from collections.abc import Callable
 from typing import Any, cast
 
-import aiohttp
 import speech_recognition as sr
 from playwright.async_api import (
     Error as PlaywrightError,
@@ -418,14 +417,19 @@ class RecaptchaSolver:
         return diag_dir
 
     async def download_audio(self, url: str, path: str) -> None:
-        """Downloads audio file asynchronously from URL to local file path."""
-        timeout = aiohttp.ClientTimeout(total=10.0)
-        async with (
-            aiohttp.ClientSession(timeout=timeout) as session,
-            session.get(url) as response,
-        ):
-            content = await response.read()
-            await asyncio.to_thread(_write_bytes_sync, path, content)
+        """Downloads audio file asynchronously using Playwright request context,
+
+        inheriting the browser session proxy, cookies, and TLS fingerprint.
+        """
+        response = await self.page.context.request.get(url, timeout=10_000)
+        if not response.ok:
+            raise PlaywrightError(
+                f"Failed to download audio from {url}: HTTP {response.status} {response.status_text}"
+            )
+        content = await response.body()
+        if not content:
+            raise PlaywrightError(f"Downloaded empty audio content from {url}")
+        await asyncio.to_thread(_write_bytes_sync, path, content)
         logger.debug("Downloaded audio file to: %s", path)
 
     async def solve_captcha(self) -> bool:

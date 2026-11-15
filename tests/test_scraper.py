@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,8 +12,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import polars as pl
 import pytest
 from geopy.point import Point
-from playwright.async_api import Error as PlaywrightError
+from playwright.async_api import (
+    BrowserContext,
+    Page,
+)
+from playwright.async_api import (
+    Error as PlaywrightError,
+)
 
+from map_miner.extractor import DEFAULT_RANGE_LIMIT
 from map_miner.proxy import DEFAULT_PROXY_BYPASS
 from map_miner.recaptcha_solver import RecaptchaBlockedError
 from map_miner.scraper import (
@@ -29,6 +37,8 @@ from map_miner.scraper import (
     _handle_captcha_if_present,
     _is_no_results_page,
     _PreviewInterceptor,
+    _process_link,
+    _safe_close_browser,
     _safe_close_context,
     _safe_close_page,
     _scrape_query_spa,
@@ -851,10 +861,9 @@ def test_scrape_google_maps_cache_dir_modes(tmp_path, cache_mode):
         elif cache_mode == "none":
             assert not any("--disk-cache-dir" in arg for arg in launch_args)
             assert not any("--disk-cache-size" in arg for arg in launch_args)
-        else:  # The default enables persistent Chromium disk caching.
-            resolved_default = (Path(".cache") / "chromium_cache").resolve()
-            assert f"--disk-cache-dir={resolved_default}" in launch_args
-            assert "--disk-cache-size=1073741824" in launch_args
+        else:  # The default is now None: no persistent disk cache flags to avoid file lock contention.
+            assert not any("--disk-cache-dir" in arg for arg in launch_args)
+            assert not any("--disk-cache-size" in arg for arg in launch_args)
 
     asyncio.run(_run())
 
@@ -2588,7 +2597,11 @@ def test_run_spa_query_rescues_results_on_watchdog_timeout():
             await asyncio.sleep(100.0)
             return results_collector or []
 
+        real_wait_for = asyncio.wait_for
+
         async def mock_wait_for(coro, timeout):
+            if timeout is not None and timeout < 20.0:
+                return await real_wait_for(coro, timeout=timeout)
             task = asyncio.create_task(coro)
             await asyncio.sleep(0.01)
             task.cancel()
@@ -3008,16 +3021,27 @@ def test_scraper_default_constants():
     assert params["captcha_timeout"].default == 85.0
     assert params["preview_timeout"].default == 10000
     assert params["range_limit"].default == 25000.0
+    assert params["range_limit"].default is DEFAULT_RANGE_LIMIT
     assert (
         inspect.signature(_scrape_query_spa).parameters["range_limit"].default
-        == 25000.0
+        is DEFAULT_RANGE_LIMIT
     )
     assert (
-        inspect.signature(_get_place_urls).parameters["range_limit"].default == 25000.0
+        inspect.signature(_get_place_urls).parameters["range_limit"].default
+        is DEFAULT_RANGE_LIMIT
     )
     assert params["max_captcha_retries"].default == 2
     assert params["stagger_delay"].default == (1.5, 3.5)
-    assert params["cache_dir"].default == Path(".cache") / "chromium_cache"
+    assert params["cache_dir"].default is None
+    assert params["timezone_id"].default == "UTC"
+    assert (
+        inspect.signature(_scrape_query_spa).parameters["timezone_id"].default == "UTC"
+    )
+    assert inspect.signature(_process_link).parameters["timezone_id"].default == "UTC"
+    assert (
+        inspect.signature(_create_browser_context).parameters["timezone_id"].default
+        == "UTC"
+    )
     assert params["static_cache_dir"].default == Path(".cache") / "static_assets"
     assert params["disk_cache_size"].default == 1073741824
     assert params["max_consecutive_empty_scrolls"].default == 4
@@ -3659,3 +3683,325 @@ def test_handle_captcha_if_present_safe_timeout(timeout, expected):
                 assert spy_wait_for.call_args.kwargs["timeout"] == expected
 
     asyncio.run(_run())
+
+
+def test_safe_close_page_timeout():
+    """Verifies that _safe_close_page aborts within bounded timeout when page.close hangs."""
+
+    async def _run():
+        mock_page = AsyncMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+
+        async def slow_close():
+            await asyncio.sleep(10.0)
+
+        mock_page.close = AsyncMock(side_effect=slow_close)
+
+        start = time.monotonic()
+        await _safe_close_page(mock_page, timeout=0.1)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0
+        mock_page.close.assert_called_once()
+
+    asyncio.run(_run())
+
+
+def test_safe_close_browser_timeout():
+    """Verifies that _safe_close_browser aborts within bounded timeout when browser.close hangs."""
+
+    async def _run():
+        mock_browser = AsyncMock()
+        mock_browser.is_connected = MagicMock(return_value=True)
+
+        async def slow_close():
+            await asyncio.sleep(10.0)
+
+        mock_browser.close = AsyncMock(side_effect=slow_close)
+
+        start = time.monotonic()
+        await _safe_close_browser(mock_browser, timeout=0.1)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.0
+        mock_browser.close.assert_called_once()
+
+    asyncio.run(_run())
+
+
+def test_safe_close_browser_cancellation():
+    """Verifies that _safe_close_browser properly closes browser even when enclosing task is cancelled."""
+
+    async def _run():
+        mock_browser = AsyncMock()
+        mock_browser.is_connected = MagicMock(return_value=True)
+        mock_browser.close = AsyncMock()
+
+        async def worker():
+            try:
+                await asyncio.sleep(100.0)
+            finally:
+                await _safe_close_browser(mock_browser)
+
+        task = asyncio.create_task(worker())
+        await asyncio.sleep(0.01)
+        task.cancel()
+
+        cancelled = False
+        try:
+            await task
+        except asyncio.CancelledError:
+            cancelled = True
+
+        assert cancelled is True
+        mock_browser.close.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_create_browser_context_utc_timezone():
+    """Verifies that _create_browser_context defaults to UTC timezone (even with coords or None)
+    and allows explicit override."""
+
+    async def _run():
+        mock_browser = AsyncMock()
+        mock_browser.new_context = AsyncMock()
+
+        # 1. Defaults to UTC even when specific coordinates (e.g. New York) are passed
+        ny_coords = Point(40.7128, -74.0060)
+        await _create_browser_context(browser=mock_browser, geo_coordinates=ny_coords)
+        assert mock_browser.new_context.await_count == 1
+        assert mock_browser.new_context.await_args is not None
+        kwargs = mock_browser.new_context.await_args.kwargs
+        assert kwargs["timezone_id"] == "UTC"
+
+        # 2. Defaults to UTC when timezone_id=None is explicitly passed
+        mock_browser.new_context.reset_mock()
+        await _create_browser_context(
+            browser=mock_browser,
+            geo_coordinates=ny_coords,
+            timezone_id=None,
+        )
+        assert mock_browser.new_context.await_count == 1
+        assert mock_browser.new_context.await_args is not None
+        kwargs = mock_browser.new_context.await_args.kwargs
+        assert kwargs["timezone_id"] == "UTC"
+
+        # 3. Defaults to UTC when timezone_id="" (empty string) is passed
+        mock_browser.new_context.reset_mock()
+        await _create_browser_context(
+            browser=mock_browser,
+            geo_coordinates=ny_coords,
+            timezone_id="",
+        )
+        assert mock_browser.new_context.await_count == 1
+        assert mock_browser.new_context.await_args is not None
+        kwargs = mock_browser.new_context.await_args.kwargs
+        assert kwargs["timezone_id"] == "UTC"
+
+        # 4. Explicit timezone_id override takes precedence
+        mock_browser.new_context.reset_mock()
+        await _create_browser_context(
+            browser=mock_browser,
+            geo_coordinates=ny_coords,
+            timezone_id="Asia/Tokyo",
+        )
+        assert mock_browser.new_context.await_count == 1
+        assert mock_browser.new_context.await_args is not None
+        kwargs = mock_browser.new_context.await_args.kwargs
+        assert kwargs["timezone_id"] == "Asia/Tokyo"
+
+    asyncio.run(_run())
+
+
+def test_scrape_query_spa_secondary_rescue_uses_active_context():
+    """Verifies that secondary fallback rescue in _scrape_query_spa passes active_context."""
+
+    async def _run():
+        mock_initial_page = make_mock_page(
+            url="https://www.google.com/sorry/index?continue=xyz"
+        )
+        mock_initial_context = make_mock_context(page=mock_initial_page)
+
+        mock_new_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
+        mock_new_context = make_mock_context(page=mock_new_page)
+        mock_initial_context.browser = AsyncMock()
+
+        mock_rotator = MagicMock(spec=ProxyRotator)
+        mock_rotator.renew.return_value = "http://proxy2:8080"
+
+        # Unresolved feed card element to trigger fallback rescue
+        card_el = AsyncMock()
+        card_url = "https://www.google.com/maps/place/RescueMe/data=!1s0x1:0x2!8m2!3d21.0!4d105.8"
+        card_el.get_attribute.return_value = card_url
+        card_el.evaluate.return_value = '<a href="' + card_url + '"></a>'
+
+        def mock_feed_locator(selector):
+            loc = AsyncMock()
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+            if 'a[href*="/maps/place/"]' in selector:
+                loc.all.return_value = [card_el]
+                loc.evaluate_all.return_value = [card_url]
+            return loc
+
+        mock_new_page.locator = MagicMock(side_effect=mock_feed_locator)
+        mock_new_page.evaluate = AsyncMock(return_value=1000)
+
+        class MockFailingExpectResponse:
+            async def __aenter__(self):
+                from playwright.async_api import (
+                    TimeoutError as PlaywrightTimeoutError,
+                )
+
+                raise PlaywrightTimeoutError("Timeout waiting for preview")
+
+            async def __aexit__(self, *args):
+                return None
+
+        mock_new_page.expect_response = MagicMock(
+            return_value=MockFailingExpectResponse()
+        )
+
+        # Interceptor returning None to trigger fallback rescue
+        mock_interceptor = AsyncMock()
+        mock_interceptor.wait_for_preview.return_value = None
+
+        with (
+            patch(
+                "map_miner.scraper._create_browser_context",
+                AsyncMock(return_value=mock_new_context),
+            ) as mock_create_ctx,
+            patch(
+                "map_miner.scraper._handle_captcha_if_present",
+                AsyncMock(return_value=False),
+            ),
+            patch(
+                "map_miner.scraper._PreviewInterceptor", return_value=mock_interceptor
+            ),
+            patch("map_miner.scraper.extract_feed_item_dom", return_value=None),
+            patch("map_miner.scraper._is_feed_at_end", AsyncMock(return_value=True)),
+            patch("map_miner.scraper._scroll_feed", AsyncMock()),
+            patch(
+                "map_miner.scraper._process_link",
+                AsyncMock(return_value={"name": "Rescued", "link": card_url}),
+            ) as mock_process,
+            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
+        ):
+            results = await _scrape_query_spa(
+                context=mock_initial_context,
+                query="cafe",
+                geo_coordinates=Point(21.0, 105.8),
+                zoom=16,
+                max_places=1,
+                proxy_rotator=mock_rotator,
+                max_captcha_retries=2,
+                query_timeout=30.0,
+            )
+
+            # Assert proxy rotation happened and created mock_new_context
+            mock_rotator.renew.assert_called_once()
+            mock_create_ctx.assert_awaited_once()
+
+            # Assert _process_link was called with context=mock_new_context (active_context)
+            assert mock_process.await_count == 1
+            assert mock_process.await_args is not None
+            call_kwargs = mock_process.await_args.kwargs
+            assert call_kwargs["context"] is mock_new_context
+            assert call_kwargs["context"] is not mock_initial_context
+            assert len(results) == 1
+            assert results[0]["name"] == "Rescued"
+
+    asyncio.run(_run())
+
+
+def test_process_link_proxy_renewal_creates_new_context():
+    """Verifies that _process_link rotates proxy, creates a new BrowserContext on CAPTCHA block,
+    and safely closes the created context in finally block."""
+
+    async def _run():
+        mock_browser = AsyncMock()
+        mock_context1 = AsyncMock(spec=BrowserContext)
+        mock_context1.browser = mock_browser
+
+        mock_page1 = AsyncMock(spec=Page)
+        mock_page1.url = "https://www.google.com/sorry/index?continue=place"
+        mock_page1.is_closed = MagicMock(return_value=False)
+        mock_context1.new_page = AsyncMock(return_value=mock_page1)
+
+        mock_context2 = AsyncMock(spec=BrowserContext)
+        mock_context2.browser = mock_browser
+        mock_page2 = AsyncMock(spec=Page)
+        mock_page2.url = "https://www.google.com/maps/place/Cafe"
+        mock_page2.is_closed = MagicMock(return_value=False)
+        mock_context2.new_page = AsyncMock(return_value=mock_page2)
+
+        mock_rotator = MagicMock(spec=ProxyRotator)
+        mock_rotator.renew.return_value = "http://proxy2:8080"
+
+        mock_interceptor = AsyncMock()
+        mock_interceptor.wait_for_preview.side_effect = [None, {"title": "Cafe 2"}]
+
+        with (
+            patch(
+                "map_miner.scraper._handle_captcha_if_present",
+                AsyncMock(return_value=False),
+            ),
+            patch(
+                "map_miner.scraper._create_browser_context",
+                AsyncMock(return_value=mock_context2),
+            ) as mock_create_ctx,
+            patch(
+                "map_miner.scraper._PreviewInterceptor", return_value=mock_interceptor
+            ),
+            patch(
+                "map_miner.scraper.extract_place_data", return_value={"name": "Cafe 2"}
+            ),
+            patch(
+                "map_miner.scraper._safe_close_context", AsyncMock()
+            ) as mock_close_ctx,
+            patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
+        ):
+            res = await _process_link(
+                context=mock_context1,
+                link="https://www.google.com/maps/place/Cafe",
+                semaphore=asyncio.Semaphore(1),
+                count=1,
+                total=1,
+                proxy_rotator=mock_rotator,
+                max_retries=2,
+            )
+
+            # Verification:
+            # 1. proxy_rotator.renew was called
+            mock_rotator.renew.assert_called_once()
+            # 2. _create_browser_context was called to create context2 with new proxy
+            mock_create_ctx.assert_awaited_once()
+            assert mock_create_ctx.await_args is not None
+            assert mock_create_ctx.await_args.kwargs["proxy"] == "http://proxy2:8080"
+            # 3. Attempt 2 used mock_context2.new_page
+            mock_context2.new_page.assert_awaited_once()
+            # 4. Result was successfully extracted from attempt 2
+            assert res is not None
+            assert res["name"] == "Cafe 2"
+            # 5. mock_context2 was safely closed in finally block
+            mock_close_ctx.assert_awaited_once_with(mock_context2)
+
+    asyncio.run(_run())
+
+
+def test_scraper_range_limit_uses_central_constant():
+    """Kiểm tra toàn bộ các hàm scraper dùng chung hằng số DEFAULT_RANGE_LIMIT từ extractor."""
+    assert (
+        inspect.signature(scrape_google_maps).parameters["range_limit"].default
+        is DEFAULT_RANGE_LIMIT
+    )
+    assert (
+        inspect.signature(_scrape_query_spa).parameters["range_limit"].default
+        is DEFAULT_RANGE_LIMIT
+    )
+    assert (
+        inspect.signature(_get_place_urls).parameters["range_limit"].default
+        is DEFAULT_RANGE_LIMIT
+    )
+    assert DEFAULT_RANGE_LIMIT == 25000.0

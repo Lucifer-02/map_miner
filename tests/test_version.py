@@ -41,3 +41,20 @@ def test_package_metadata_version():
         pytest.skip("Package 'map-miner' is not installed in metadata environment.")
 
     assert dist_version == map_miner.__version__
+
+
+def test_pyproject_dev_dependencies_contain_ruff():
+    """Kiểm tra pyproject.toml khai báo ruff trong dev dependencies (Issue T-02)."""
+    pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    assert pyproject_path.exists(), f"pyproject.toml not found at {pyproject_path}"
+
+    with open(pyproject_path, "rb") as f:
+        pyproject = tomllib.load(f)
+
+    dev_deps = pyproject.get("dependency-groups", {}).get("dev", [])
+    assert any("ruff" in dep for dep in dev_deps), (
+        f"ruff not found in dev dependencies: {dev_deps}"
+    )
+    assert any("ruff>=0.9.0" in dep for dep in dev_deps), (
+        f"ruff>=0.9.0 specification not found in dev dependencies: {dev_deps}"
+    )

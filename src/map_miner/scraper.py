@@ -27,6 +27,7 @@ from playwright.async_api import (
 )
 
 from .extractor import (
+    DEFAULT_RANGE_LIMIT,
     calculate_distance,
     extract_coordinates_from_url,
     extract_feed_item_dom,
@@ -252,8 +253,11 @@ async def _global_route_handler(
         return
 
 
-async def _safe_close_page(page: Page | None) -> None:
-    """Safely closes a Playwright Page, ensuring proper cleanup even under task cancellation."""
+async def _safe_close_page(
+    page: Page | None, timeout: float = _CONTEXT_CLEANUP_TIMEOUT
+) -> None:
+    """Safely closes a Playwright Page, ensuring proper cleanup even under task cancellation
+    and avoiding deadlocks with a bounded timeout."""
     if not page:
         return
     try:
@@ -261,12 +265,23 @@ async def _safe_close_page(page: Page | None) -> None:
             return
         close_task = asyncio.create_task(page.close())
         try:
-            await asyncio.shield(close_task)
+            await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
+        except TimeoutError:
+            logger.warning("Page close timed out after %s seconds", timeout)
+            close_task.cancel()
+            await asyncio.gather(close_task, return_exceptions=True)
         except asyncio.CancelledError:
             try:
-                await close_task
-            except BaseException:  # noqa: BLE001, S110
-                pass
+                try:
+                    await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
+                except TimeoutError:
+                    logger.warning(
+                        "Page close timed out after %s seconds on cancellation", timeout
+                    )
+            finally:
+                if not close_task.done():
+                    close_task.cancel()
+                await asyncio.gather(close_task, return_exceptions=True)
     except BaseException:  # noqa: BLE001, S110
         pass
 
@@ -313,8 +328,11 @@ async def _safe_close_context(context: BrowserContext | None) -> None:
         pass
 
 
-async def _safe_close_browser(browser: Browser | None) -> None:
-    """Safely closes a Playwright Browser instance without leaving dangling tasks."""
+async def _safe_close_browser(
+    browser: Browser | None, timeout: float = _CONTEXT_CLEANUP_TIMEOUT
+) -> None:
+    """Safely closes a Playwright Browser instance without leaving dangling tasks
+    and avoiding deadlocks with a bounded timeout."""
     if not browser:
         return
     try:
@@ -322,12 +340,24 @@ async def _safe_close_browser(browser: Browser | None) -> None:
             return
         close_task = asyncio.create_task(browser.close())
         try:
-            await asyncio.shield(close_task)
+            await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
+        except TimeoutError:
+            logger.warning("Browser close timed out after %s seconds", timeout)
+            close_task.cancel()
+            await asyncio.gather(close_task, return_exceptions=True)
         except asyncio.CancelledError:
             try:
-                await close_task
-            except BaseException:  # noqa: BLE001, S110
-                pass
+                try:
+                    await asyncio.wait_for(asyncio.shield(close_task), timeout=timeout)
+                except TimeoutError:
+                    logger.warning(
+                        "Browser close timed out after %s seconds on cancellation",
+                        timeout,
+                    )
+            finally:
+                if not close_task.done():
+                    close_task.cancel()
+                await asyncio.gather(close_task, return_exceptions=True)
     except BaseException:  # noqa: BLE001, S110
         pass
 
@@ -341,6 +371,7 @@ async def _create_browser_context(
     viewport_width: int = 1920,
     viewport_height: int = 1080,
     viewport_variance: int = 50,
+    timezone_id: str | None = "UTC",
 ) -> BrowserContext:
     """Creates and configures an isolated BrowserContext with proxy settings,
     stealth overrides, geolocation, and global resource blocking.
@@ -355,11 +386,13 @@ async def _create_browser_context(
         viewport_width (int, optional): Base viewport width.
         viewport_height (int, optional): Base viewport height.
         viewport_variance (int, optional): Random pixel variance added to viewport dimensions.
+        timezone_id (str | None, optional): IANA timezone ID for browser context. Defaults to "UTC".
 
     Returns:
         BrowserContext: Configured isolated browser context.
     """
     accept_lang = f"{lang}-{lang.upper()},{lang};q=0.9,en-US;q=0.8,en;q=0.7"
+    resolved_timezone = timezone_id or "UTC"
     context_options: dict[str, Any] = {
         "user_agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -383,7 +416,7 @@ async def _create_browser_context(
             + random.randint(-viewport_variance, viewport_variance),
         },
         "permissions": ["geolocation"],
-        "timezone_id": "Asia/Ho_Chi_Minh",
+        "timezone_id": resolved_timezone,
         "locale": lang,
         "geolocation": {
             "latitude": geo_coordinates.latitude,
@@ -689,7 +722,7 @@ async def _get_place_urls(
     geo_coordinates: Point,
     zoom: float,
     lang: str = "en",
-    range_limit: float = 25000.0,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
     proxy_rotator: ProxyRotator | None = None,
     query_timeout: float = 300.0,
     links_collector: set[str] | None = None,
@@ -958,7 +991,7 @@ async def _scrape_query_spa(
     max_places: int = 120,
     lang: str = "en",
     fields: Sequence[str] | set[str] | None = None,
-    range_limit: float = 25000.0,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
     proxy_rotator: ProxyRotator | None = None,
     max_captcha_retries: int = 2,
     query_timeout: float = 300.0,
@@ -970,6 +1003,7 @@ async def _scrape_query_spa(
     max_consecutive_out_of_range_scrolls: int = 3,
     max_scroll_attempts_without_new_links: int = 5,
     static_cache_dir: Path = Path(".cache") / "static_assets",
+    timezone_id: str | None = "UTC",
     initial_delay_range: tuple[float, float] = (1.0, 2.0),
     min_remaining_time: float = 2.0,
     element_timeout: int = 1000,
@@ -1020,6 +1054,7 @@ async def _scrape_query_spa(
         max_consecutive_out_of_range_scrolls (int, optional): Max consecutive scrolls with only out-of-range items before stopping.
         max_scroll_attempts_without_new_links (int, optional): Max scroll attempts when height is unchanged before stopping.
         static_cache_dir (Path, optional): Directory to store static assets cache when creating rotated contexts.
+        timezone_id (str | None, optional): IANA timezone ID for browser context. Defaults to "UTC".
         initial_delay_range (tuple[float, float], optional): Range of random sleep delay after initial navigation.
         min_remaining_time (float, optional): Minimum remaining time threshold in seconds before early exit.
         element_timeout (int, optional): Element operation timeout in ms.
@@ -1102,6 +1137,7 @@ async def _scrape_query_spa(
                             lang=lang,
                             proxy=new_proxy,
                             static_cache_dir=static_cache_dir,
+                            timezone_id=timezone_id,
                         )
                         created_contexts.append(new_context)
                         active_context = new_context
@@ -1500,7 +1536,7 @@ async def _scrape_query_spa(
                         break
                     try:
                         f_data = await _process_link(
-                            context=context,
+                            context=active_context,
                             link=f_link,
                             count=len(results) + 1,
                             total=max_places
@@ -1508,8 +1544,13 @@ async def _scrape_query_spa(
                             semaphore=rescue_sem,
                             fields=fields,
                             max_retries=1,
+                            proxy_rotator=proxy_rotator,
                             navigation_timeout=navigation_timeout,
                             captcha_timeout=captcha_timeout,
+                            geo_coordinates=geo_coordinates,
+                            lang=lang,
+                            static_cache_dir=static_cache_dir,
+                            timezone_id=timezone_id,
                         )
                         if f_data and (
                             fields is not None
@@ -1555,6 +1596,10 @@ async def _process_link(
     retry_delay_range: tuple[float, float] = (0.8, 1.5),
     captcha_retry_delay_range: tuple[float, float] = (1.0, 2.0),
     min_valid_fields: int = 3,
+    geo_coordinates: Point | None = None,
+    lang: str = "en",
+    static_cache_dir: Path = Path(".cache") / "static_assets",
+    timezone_id: str | None = "UTC",
 ) -> dict[str, Any] | None:
     """Processes a single place link in multi-page fallback mode:
     - Pure I/O: intercepts rich network payload or collects HTML content
@@ -1577,157 +1622,199 @@ async def _process_link(
         retry_delay_range (tuple[float, float], optional): Delay range in seconds before retry attempt.
         captcha_retry_delay_range (tuple[float, float], optional): Delay range in seconds before CAPTCHA retry.
         min_valid_fields (int, optional): Minimum fields required for valid place data.
+        geo_coordinates (Point | None, optional): Reference coordinates for dynamic context recreation.
+        lang (str, optional): Language code.
+        static_cache_dir (Path, optional): Directory to store static assets cache.
+        timezone_id (str | None, optional): IANA timezone ID for browser context. Defaults to "UTC".
 
     Returns:
         dict[str, Any] | None: Extracted place data dictionary, or None on failure.
     """
-    async with semaphore:
-        for attempt in range(1, max_retries + 1):
-            start_time = time.time()
-            page: Page | None = None
-            try:
-                logger.info(
-                    "Processing link [%d/%d] (attempt %d/%d): %s",
-                    count,
-                    total,
-                    attempt,
-                    max_retries,
-                    link,
-                )
-                page = await context.new_page()
-                interceptor = _PreviewInterceptor(page)
-
-                await page.set_extra_http_headers(
-                    {
-                        "Referer": "https://www.google.com/",
-                        "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
-                    }
-                )
-
+    active_context = context
+    created_contexts: list[BrowserContext] = []
+    try:
+        async with semaphore:
+            for attempt in range(1, max_retries + 1):
+                start_time = time.time()
+                page: Page | None = None
                 try:
-                    await page.goto(
+                    logger.info(
+                        "Processing link [%d/%d] (attempt %d/%d): %s",
+                        count,
+                        total,
+                        attempt,
+                        max_retries,
                         link,
-                        wait_until="domcontentloaded",
-                        timeout=max(1, navigation_timeout),
                     )
-                except PlaywrightTimeoutError:
-                    logger.warning("  ❌ Timeout navigating to: %s", link)
-                    if attempt < max_retries:
-                        await asyncio.sleep(
-                            random.uniform(retry_delay_range[0], retry_delay_range[1])
-                        )
-                        continue
-                    return None
-                except PlaywrightError as e:
-                    logger.error("  ❌ Navigation error for %s: %s", link, e)
-                    if attempt < max_retries:
-                        await asyncio.sleep(
-                            random.uniform(retry_delay_range[0], retry_delay_range[1])
-                        )
-                        continue
-                    return None
+                    page = await active_context.new_page()
+                    interceptor = _PreviewInterceptor(page)
 
-                # Wait for preview API response
-                preview_json = await interceptor.wait_for_preview(
-                    timeout=preview_wait_timeout
-                )
-                if not preview_json:
+                    await page.set_extra_http_headers(
+                        {
+                            "Referer": "https://www.google.com/",
+                            "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
+                        }
+                    )
+
                     try:
-                        await page.wait_for_selector(
-                            "h1, [role='main']", timeout=main_selector_timeout
+                        await page.goto(
+                            link,
+                            wait_until="domcontentloaded",
+                            timeout=max(1, navigation_timeout),
                         )
-                    except PlaywrightError:
-                        pass
+                    except PlaywrightTimeoutError:
+                        logger.warning("  ❌ Timeout navigating to: %s", link)
+                        if attempt < max_retries:
+                            await asyncio.sleep(
+                                random.uniform(
+                                    retry_delay_range[0], retry_delay_range[1]
+                                )
+                            )
+                            continue
+                        return None
+                    except PlaywrightError as e:
+                        logger.error("  ❌ Navigation error for %s: %s", link, e)
+                        if attempt < max_retries:
+                            await asyncio.sleep(
+                                random.uniform(
+                                    retry_delay_range[0], retry_delay_range[1]
+                                )
+                            )
+                            continue
+                        return None
 
-                # Early exit if rich preview JSON was intercepted
-                if preview_json:
+                    # Wait for preview API response
+                    preview_json = await interceptor.wait_for_preview(
+                        timeout=preview_wait_timeout
+                    )
+                    if not preview_json:
+                        try:
+                            await page.wait_for_selector(
+                                "h1, [role='main']", timeout=main_selector_timeout
+                            )
+                        except PlaywrightError:
+                            pass
+
+                    # Early exit if rich preview JSON was intercepted
+                    if preview_json:
+                        place_data = extract_place_data(
+                            html_content=None,
+                            preview_json=preview_json,
+                            fields=fields,
+                        )
+                        if place_data is not None and (
+                            fields is not None
+                            or "name" in place_data
+                            or len(place_data) >= min_valid_fields
+                        ):
+                            if fields is None or "link" in fields:
+                                place_data["link"] = link
+                            elapsed = time.time() - start_time
+                            logger.info(
+                                "  ✅ Extracted (early preview): %s in %.2fs",
+                                link,
+                                elapsed,
+                            )
+                            return place_data
+
+                    # CAPTCHA verification
+                    is_blocked = False
+                    try:
+                        captcha_solved = await _handle_captcha_if_present(
+                            page,
+                            context_label="process_link",
+                            timeout=captcha_timeout,
+                        )
+                    except RecaptchaBlockedError:
+                        captcha_solved = False
+                        is_blocked = True
+
+                    if (
+                        (not captcha_solved and "sorry/index" in page.url) or is_blocked
+                    ) and attempt < max_retries:
+                        if proxy_rotator is not None:
+                            logger.warning(
+                                "CAPTCHA blocked/unsolved in process_link, renewing proxy/circuit and creating fresh context..."
+                            )
+                            new_proxy = proxy_rotator.renew()
+                            browser = active_context.browser
+                            if browser is not None:
+                                await _safe_close_page(page)
+                                page = None
+
+                                coords = geo_coordinates
+                                if coords is None:
+                                    extracted_coords = extract_coordinates_from_url(
+                                        link
+                                    )
+                                    if extracted_coords:
+                                        coords = Point(
+                                            extracted_coords[0], extracted_coords[1]
+                                        )
+                                    else:
+                                        coords = Point(21.018785, 105.830415)
+
+                                new_context = await _create_browser_context(
+                                    browser=browser,
+                                    geo_coordinates=coords,
+                                    lang=lang,
+                                    proxy=new_proxy,
+                                    static_cache_dir=static_cache_dir,
+                                    timezone_id=timezone_id,
+                                )
+                                created_contexts.append(new_context)
+                                active_context = new_context
+
+                        await asyncio.sleep(
+                            random.uniform(
+                                captcha_retry_delay_range[0],
+                                captcha_retry_delay_range[1],
+                            )
+                        )
+                        continue
+
+                    html_content = await page.content()
                     place_data = extract_place_data(
-                        html_content=None,
+                        html_content=html_content,
                         preview_json=preview_json,
                         fields=fields,
                     )
-                    if place_data is not None and (
-                        fields is not None
-                        or "name" in place_data
-                        or len(place_data) >= min_valid_fields
-                    ):
+
+                    if place_data is not None:
                         if fields is None or "link" in fields:
                             place_data["link"] = link
                         elapsed = time.time() - start_time
-                        logger.info(
-                            "  ✅ Extracted (early preview): %s in %.2fs",
-                            link,
-                            elapsed,
-                        )
+                        logger.info("  ✅ Extracted: %s in %.2fs", link, elapsed)
                         return place_data
 
-                # CAPTCHA verification
-                is_blocked = False
-                try:
-                    captcha_solved = await _handle_captcha_if_present(
-                        page,
-                        context_label="process_link",
-                        timeout=captcha_timeout,
-                    )
-                except RecaptchaBlockedError:
-                    captcha_solved = False
-                    is_blocked = True
-
-                if (
-                    (not captcha_solved and "sorry/index" in page.url) or is_blocked
-                ) and attempt < max_retries:
-                    if proxy_rotator is not None:
-                        logger.warning(
-                            "CAPTCHA blocked/unsolved in process_link, renewing proxy/circuit..."
+                    logger.warning("  ⚠️ Extraction returned None: %s", link)
+                    if attempt < max_retries:
+                        await asyncio.sleep(
+                            random.uniform(retry_delay_range[0], retry_delay_range[1])
                         )
-                        proxy_rotator.renew()
-                    await asyncio.sleep(
-                        random.uniform(
-                            captcha_retry_delay_range[0],
-                            captcha_retry_delay_range[1],
-                        )
-                    )
-                    continue
-
-                html_content = await page.content()
-                place_data = extract_place_data(
-                    html_content=html_content,
-                    preview_json=preview_json,
-                    fields=fields,
-                )
-
-                if place_data is not None:
-                    if fields is None or "link" in fields:
-                        place_data["link"] = link
-                    elapsed = time.time() - start_time
-                    logger.info("  ✅ Extracted: %s in %.2fs", link, elapsed)
-                    return place_data
-
-                logger.warning("  ⚠️ Extraction returned None: %s", link)
-                if attempt < max_retries:
-                    await asyncio.sleep(
-                        random.uniform(retry_delay_range[0], retry_delay_range[1])
-                    )
-                    continue
-                return None
-
-            except Exception as e:  # noqa: BLE001
-                logger.error(
-                    "  ❌ Error processing %s (attempt %d): %s",
-                    link,
-                    attempt,
-                    e,
-                )
-                if attempt < max_retries:
-                    await asyncio.sleep(
-                        random.uniform(retry_delay_range[0], retry_delay_range[1])
-                    )
-                else:
+                        continue
                     return None
-            finally:
-                await _safe_close_page(page)
 
-        return None
+                except Exception as e:  # noqa: BLE001
+                    logger.error(
+                        "  ❌ Error processing %s (attempt %d): %s",
+                        link,
+                        attempt,
+                        e,
+                    )
+                    if attempt < max_retries:
+                        await asyncio.sleep(
+                            random.uniform(retry_delay_range[0], retry_delay_range[1])
+                        )
+                    else:
+                        return None
+                finally:
+                    await _safe_close_page(page)
+
+            return None
+    finally:
+        for extra_ctx in created_contexts:
+            await _safe_close_context(extra_ctx)
 
 
 async def _stagger_query_start(
@@ -1777,8 +1864,8 @@ async def scrape_google_maps(
     fields: Sequence[str] | set[str] | None = None,
     flatten: bool = False,
     use_spa: bool = True,
-    cache_dir: Path | None = Path(".cache") / "chromium_cache",
-    range_limit: float = 25000.0,
+    cache_dir: Path | None = None,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
     query_timeout: float = 300.0,
     place_timeout: float = 45.0,
     preview_timeout: float = 10000,
@@ -1792,6 +1879,7 @@ async def scrape_google_maps(
     max_consecutive_out_of_range_scrolls: int = 3,
     max_scroll_attempts_without_new_links: int = 5,
     watchdog_grace_period: float = 10.0,
+    timezone_id: str | None = "UTC",
 ) -> pl.DataFrame:
     """Scrapes Google Maps for places based on queries.
 
@@ -1813,8 +1901,8 @@ async def scrape_google_maps(
             keeping 11 common columns at top-level.
         use_spa (bool, optional): Whether to use high-speed SPA navigation.
         cache_dir (Path | None, optional): Persistent Chromium disk cache directory.
-            Defaults to .cache/chromium_cache.
-            When None, disk cache flags are omitted.
+            Defaults to None (omits disk cache flags to eliminate multi-context file lock contention).
+            Pass a Path to explicitly enable persistent disk cache.
         range_limit (float): Maximum radius distance in meters from geo_coordinates.
             Google Maps local ranking combines Relevance, Distance, and Prominence
             (https://support.google.com/business/answer/7091). Prominent places further away
@@ -1836,6 +1924,8 @@ async def scrape_google_maps(
         max_scroll_attempts_without_new_links (int, optional): Maximum scroll attempts with unchanged height before stopping.
         watchdog_grace_period (float, optional): Extra grace period in seconds added to query_timeout
             for the hard watchdog timer.
+        timezone_id (str | None, optional): IANA timezone ID for browser context
+            (e.g. "UTC", "Asia/Tokyo"). Defaults to "UTC".
 
     Returns:
         pl.DataFrame: DataFrame containing scraped places data. Places found by
@@ -1896,6 +1986,7 @@ async def scrape_google_maps(
                             lang=lang,
                             proxy=allocated_proxy,
                             static_cache_dir=static_cache_dir,
+                            timezone_id=timezone_id,
                         )
                         collector: list[dict[str, Any]] = []
                         try:
@@ -1919,6 +2010,7 @@ async def scrape_google_maps(
                                 max_consecutive_out_of_range_scrolls=max_consecutive_out_of_range_scrolls,
                                 max_scroll_attempts_without_new_links=max_scroll_attempts_without_new_links,
                                 static_cache_dir=static_cache_dir,
+                                timezone_id=timezone_id,
                             )
                             return await asyncio.wait_for(
                                 coro,
@@ -1979,6 +2071,7 @@ async def scrape_google_maps(
                             lang=lang,
                             proxy=allocated_proxy,
                             static_cache_dir=static_cache_dir,
+                            timezone_id=timezone_id,
                         )
                         links_collector: set[str] = set()
                         try:
@@ -2061,6 +2154,7 @@ async def scrape_google_maps(
                             lang=lang,
                             proxy=allocated_proxy,
                             static_cache_dir=static_cache_dir,
+                            timezone_id=timezone_id,
                         )
                         try:
                             coro = _process_link(
@@ -2073,6 +2167,10 @@ async def scrape_google_maps(
                                 proxy_rotator=proxy_rotator,
                                 navigation_timeout=navigation_timeout,
                                 captcha_timeout=captcha_timeout,
+                                geo_coordinates=geo_coordinates,
+                                lang=lang,
+                                static_cache_dir=static_cache_dir,
+                                timezone_id=timezone_id,
                             )
                             return await asyncio.wait_for(coro, timeout=place_timeout)
                         except TimeoutError:

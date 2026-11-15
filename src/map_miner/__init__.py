@@ -4,6 +4,7 @@ map-miner: High-performance asynchronous Google Maps scraper using Playwright.
 
 from .extractor import (
     DEFAULT_FLATTEN_COLUMNS,
+    DEFAULT_RANGE_LIMIT,
     REQUIRED_COLUMNS,
     calculate_distance,
     extract_coordinates_from_url,
@@ -36,6 +37,7 @@ __version__ = "0.3.7"
 __all__ = [
     "DEFAULT_FLATTEN_COLUMNS",
     "DEFAULT_PROXY_BYPASS",
+    "DEFAULT_RANGE_LIMIT",
     "DEFAULT_TOR_RENEW_COOLDOWN",
     "REQUIRED_COLUMNS",
     "ProxyRotator",
