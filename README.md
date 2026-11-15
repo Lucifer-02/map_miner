@@ -1,6 +1,6 @@
 # Map Miner 🗺️
 
-High-performance asynchronous Google Maps scraper using Playwright and Polars.
+High-performance Google Maps scraper.
 
 ## Installation
 
