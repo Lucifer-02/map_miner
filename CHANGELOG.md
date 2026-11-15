@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-11-15
+
 ### Changed
 
+- Nâng cấp `playwright==1.65.2` (Chromium 159.0.8154.6), mặc định `cache_dir=None` và `timezone_id="UTC"`, thêm timeout cho `_safe_close_page`/`_safe_close_browser`, tái tạo `BrowserContext` khi xoay proxy.
+- Định nghĩa hằng số tập trung `DEFAULT_RANGE_LIMIT = 25000.0`, kiểm tra khớp URL trong `extract_feed_item_dom` và `is_preview_response_for_link`, hỗ trợ dấu chấm phân tách hàng nghìn trong `get_reviews_count`, xử lý tọa độ `None` trong `calculate_distance`.
 - Gom setup mock và tham số hóa các ca kiểm thử STT, cache route, forwarding và CAPTCHA; giữ các assertions về cancellation, guardrails và giá trị mặc định.
 - Gom kiểu đầu vào proxy, startup delay và gather/cancellation drain dùng chung; làm gọn lựa chọn speech engine mà giữ thứ tự và fallback hiện hành.
 - Rút gọn ví dụ main, loại comment credentials/proxy không dùng và chỉnh tài liệu thành mô tả best effort; ghi rõ lỗi association DOM rescue đã quan sát, chưa sửa trong cleanup.
 
 ### Fixed
 
-- Đồng bộ tài liệu và test với cờ disk cache Chromium bật mặc định ở `.cache/chromium_cache/`; ghi rõ giới hạn HTTP cache khi routing, timeout đã quan sát khi nhiều context dùng chung disk cache trong Chromium 153 và workaround `cache_dir=None`, giữ cache static ứng dụng.
+- Tải audio reCAPTCHA qua Playwright request context để bảo toàn proxy và cookie.
 - Giải phóng route khi fetch/body cache static lỗi bằng cách tiếp tục request gốc; abort khi fetch bị hủy, không cache response lỗi hoặc body đọc thất bại.
 - Đợi route handler bằng public `BrowserContext.unroute_all(behavior="wait")` trước khi đóng context, với cleanup có giới hạn thời gian và truyền lại cancellation của caller; bỏ tập task route toàn cục.
 - Kiểm tra sự tồn tại của `Recognizer.recognize_vosk` trước khi gọi, tương tự các speech engine khác, để tương thích API được gắn động và kiểm tra kiểu.
