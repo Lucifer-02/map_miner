@@ -21,3 +21,4 @@ logs/
 
 # Preserve test fixtures
 !tests/fixtures/**
+experiments/
