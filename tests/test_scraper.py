@@ -335,6 +335,7 @@ def test_spa_processed_links_only_on_successful_click():
         mock_page.wait_for_selector.return_value = None
 
         valid_blob: list[Any] = [None] * 20
+        valid_blob[9] = [None, None, 21.0, 105.8]
         valid_blob[11] = "Recovered Cafe"
         valid_outer = [None, [], None, None, None, None, valid_blob]
         valid_preview = ")]}'\n" + json.dumps(valid_outer)
@@ -1148,9 +1149,8 @@ def test_get_place_urls_early_drop():
             "https://www.google.com/maps/place/Near/data=!1s0x1:0x1!8m2!3d21.0010!4d105.8010"
             in place_links
         )
-        # Far links were dropped and feed continued scrolling without halting on 3 consecutive out-of-range links
         assert not any("Far" in l for l in place_links)
-        assert mock_scroll.call_count == 2
+        mock_scroll.assert_awaited_once()
 
     asyncio.run(_run())
 
@@ -1265,7 +1265,9 @@ def test_spa_retry_on_captcha_blocked():
         mock_context_1.new_page = AsyncMock(return_value=page_1)
 
         page_2 = MagicMock()
-        page_2.url = "https://www.google.com/maps/place/Cafe+Test/@21.0,105.8,17z"
+        page_2.url = (
+            "https://www.google.com/maps/place/Cafe+Test/data=!8m2!3d21.0!4d105.8"
+        )
         page_2.goto = AsyncMock()
         page_2.close = AsyncMock()
         page_2.is_closed = MagicMock(return_value=False)
@@ -1376,6 +1378,7 @@ def test_scrape_query_spa_timeout_returns_partial_results():
         mock_page.wait_for_selector.return_value = None
 
         valid_blob: list[Any] = [None] * 20
+        valid_blob[9] = [None, None, 21.0, 105.8]
         valid_blob[11] = "Cafe 1"
         valid_outer = [None, [], None, None, None, None, valid_blob]
         valid_preview = ")]}'\n" + json.dumps(valid_outer)
@@ -1510,29 +1513,24 @@ def test_get_place_urls_timeout_returns_partial_links():
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize(
-    "unprocessed_items",
-    [
-        [],
-        ["https://www.google.com/maps/place/UnprocessableItem"],
-    ],
-)
-def test_consecutive_empty_scrolls_guard_spa(unprocessed_items):
-    """Verifies that scrape_query_spa stops when consecutive_empty_scrolls
-    reaches 4 consecutive empty scrolls even if scrollHeight continues to increase
-    and even if unprocessed items remain."""
+@pytest.mark.parametrize("repeat_link", [False, True])
+def test_consecutive_empty_scrolls_guard_spa(repeat_link):
+    """Empty and duplicate-only scrolls reach the limit even if height grows."""
 
     async def _run():
         mock_page = make_mock_page(url="https://www.google.com/maps/search/cafe")
         mock_context = make_mock_context(page=mock_page)
+        far_link = "https://www.google.com/maps/place/FarCafe/data=!8m2!3d0.0!4d0.0"
+        element = AsyncMock()
+        element.get_attribute.return_value = far_link
 
         def mock_feed_locator(selector):
             loc = AsyncMock()
             loc.count.return_value = 0
             loc.first.is_visible.return_value = False
             if 'a[href*="/maps/place/"]' in selector:
-                loc.all.return_value = []
-                loc.evaluate_all.return_value = unprocessed_items
+                loc.all.return_value = [element] if repeat_link else []
+                loc.evaluate_all.return_value = [far_link] if repeat_link else []
             return loc
 
         mock_page.locator = MagicMock(side_effect=mock_feed_locator)
@@ -2792,54 +2790,65 @@ def test_scrape_query_spa_timeout_in_element_loop():
     asyncio.run(_run())
 
 
-def test_scrape_query_spa_early_stop_out_of_range():
-    """Verifies that scrape_query_spa halts early after 3 consecutive scrolls where all new items are out of range."""
+@pytest.mark.parametrize("end_marker", [False, True])
+def test_scrape_query_spa_drains_new_links_past_far_batches(end_marker):
+    """A nearby card loaded after both scroll thresholds still gets processed."""
 
     async def _run():
         mock_context = AsyncMock()
         mock_page = make_mock_page(url="https://www.google.com/maps/search/courthouse")
         mock_context.new_page.return_value = mock_page
 
-        scroll_idx = 0
+        far_links = [
+            f"/maps/place/FarCourt{i}/data=!1s0x{i}:0x{i}!8m2!3d21.02!4d105.8"
+            for i in range(1, 6)
+        ]
+        near_link = "/maps/place/NearCourt/data=!1s0xa:0xb!8m2!3d21.0!4d105.8"
+        batches = [*([link] for link in far_links), [near_link, near_link + "?hl=en"]]
+        scroll_count = 0
+        preview = AsyncMock()
+        preview.text.return_value = "preview"
+        preview_value = asyncio.Future()
+        preview_value.set_result(preview)
+        preview_context = AsyncMock()
+        preview_context.__aenter__.return_value = MagicMock(value=preview_value)
+        mock_page.expect_response = MagicMock(return_value=preview_context)
 
         def mock_feed_locator(selector):
-            nonlocal scroll_idx
             loc = AsyncMock()
-            loc.count.return_value = 0
-            loc.first.is_visible.return_value = False
-            if 'a[href*="/maps/place/"]' in selector:
+            links = batches[min(scroll_count, len(batches) - 1)]
+            elements = []
+            for link in links:
                 el = AsyncMock()
-                url = f"https://www.google.com/maps/place/FarCourt{scroll_idx}/data=!1s0x{scroll_idx}:0x{scroll_idx}!8m2!3d21.02!4d105.8"
-                el.get_attribute.return_value = url
-                el.evaluate.return_value = None
-                loc.all.return_value = [el]
-                loc.evaluate_all.return_value = [url]
+                el.get_attribute.return_value = link
+                elements.append(el)
+            loc.all.return_value = elements
+            loc.evaluate_all.return_value = [link.split("?")[0] for link in links]
             return loc
 
         mock_page.locator = MagicMock(side_effect=mock_feed_locator)
-
-        height_counter = 0
-
-        async def mock_eval(script, *args):
-            nonlocal height_counter
-            height_counter += 200
-            return height_counter
-
-        mock_page.evaluate = AsyncMock(side_effect=mock_eval)
-
-        scroll_count = 0
+        mock_page.evaluate.return_value = 1000
 
         async def mock_scroll(page, selector):
-            nonlocal scroll_count, scroll_idx
+            nonlocal scroll_count
             scroll_count += 1
-            scroll_idx += 1
 
         with (
             patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
+            patch("map_miner.scraper._handle_captcha_if_present", AsyncMock()),
+            patch(
+                "map_miner.scraper._find_feed_selector",
+                AsyncMock(return_value='[role="feed"]'),
+            ),
             patch("map_miner.scraper._scroll_feed", side_effect=mock_scroll),
             patch(
                 "map_miner.scraper._is_feed_at_end",
-                AsyncMock(return_value=False),
+                AsyncMock(side_effect=lambda _: end_marker and scroll_count >= 5),
+            ),
+            patch("map_miner.scraper.parse_preview_json", return_value=["blob"]),
+            patch(
+                "map_miner.scraper.extract_place_data",
+                return_value={"name": "Near Court"},
             ),
         ):
             results = await _scrape_query_spa(
@@ -2851,8 +2860,17 @@ def test_scrape_query_spa_early_stop_out_of_range():
                 range_limit=500.0,
             )
 
-        assert len(results) == 0
-        assert scroll_count == 3
+        assert results == [
+            {
+                "name": "Near Court",
+                "place_id": "0xa:0xb",
+                "latitude": 21.0,
+                "longitude": 105.8,
+                "link": near_link,
+            }
+        ]
+        mock_page.expect_response.assert_called_once()
+        assert scroll_count == (6 if end_marker else 9)
 
     asyncio.run(_run())
 
@@ -3061,8 +3079,9 @@ def test_scrape_query_spa_fallback_rescue_from_dom():
         el.get_attribute.return_value = url
 
         # When el.evaluate is called for card outerHTML, return sample feed card HTML
-        card_html = """
+        card_html = f"""
         <div class="Nv2PK">
+            <a class="hfpxzc" href="{url}"></a>
             <div class="qBF1Pd">Rescued Cafe</div>
             <span class="MW4etd">4.7</span>
             <span class="UY7F9">(89)</span>
@@ -3324,21 +3343,18 @@ def test_scrape_query_spa_custom_guardrails():
 
         # 3. Test max_consecutive_out_of_range_scrolls=2 stops early when links are out of range
         mock_scroll_oor = AsyncMock()
-        oor_counter = 0
 
-        async def mock_get_oor_attr(*args, **kwargs):
-            nonlocal oor_counter
-            oor_counter += 1
-            return f"https://www.google.com/maps/place/Far{oor_counter}/@0.0,0.0,17z/data={oor_counter}"
+        def mock_locator_oor(selector):
+            batch = min(mock_scroll_oor.await_count, 1)
+            link = f"https://www.google.com/maps/place/Far{batch}/data=!8m2!3d0.0!4d0.0"
+            element = AsyncMock()
+            element.get_attribute.return_value = link
+            return MagicMock(
+                all=AsyncMock(return_value=[element]),
+                evaluate_all=AsyncMock(return_value=[link]),
+            )
 
-        out_of_range_el = AsyncMock()
-        out_of_range_el.get_attribute = AsyncMock(side_effect=mock_get_oor_attr)
-        mock_locator_oor = MagicMock()
-        mock_locator_oor.all = AsyncMock(return_value=[out_of_range_el])
-        mock_locator_oor.evaluate_all = AsyncMock(
-            return_value=["https://www.google.com/maps/place/Far/@0.0,0.0,17z/data=123"]
-        )
-        mock_page.locator = MagicMock(return_value=mock_locator_oor)
+        mock_page.locator = MagicMock(side_effect=mock_locator_oor)
         mock_page.evaluate = AsyncMock(side_effect=[100, 200, 300, 400, 500])
 
         with (
@@ -3450,15 +3466,13 @@ def test_get_place_urls_custom_guardrails():
         assert urls == set()
         assert mock_scroll.call_count == 2
 
-        # 3. Test max_consecutive_out_of_range_scrolls=2 stops early
+        # 3. Stop at the quiet scroll after two distinct out-of-range batches.
         mock_scroll_oor = AsyncMock()
-        oor_count = 0
 
         def get_oor_links(*args, **kwargs):
-            nonlocal oor_count
-            oor_count += 1
+            batch = min(mock_scroll_oor.await_count, 1)
             return [
-                f"https://www.google.com/maps/place/Far{oor_count}/@0.0,0.0,17z/data={oor_count}"
+                f"https://www.google.com/maps/place/Far{batch}/data=!8m2!3d0.0!4d0.0"
             ]
 
         mock_locator_oor = MagicMock()
@@ -3814,8 +3828,9 @@ def test_create_browser_context_utc_timezone():
     asyncio.run(_run())
 
 
-def test_scrape_query_spa_secondary_rescue_uses_active_context():
-    """Verifies that secondary fallback rescue in _scrape_query_spa passes active_context."""
+@pytest.mark.parametrize("end_marker", [False, True])
+def test_scrape_query_spa_secondary_rescue_uses_active_context(end_marker):
+    """A persistent unresolved card stops with one secondary rescue in the rotated context."""
 
     async def _run():
         mock_initial_page = make_mock_page(
@@ -3835,14 +3850,17 @@ def test_scrape_query_spa_secondary_rescue_uses_active_context():
         card_url = "https://www.google.com/maps/place/RescueMe/data=!1s0x1:0x2!8m2!3d21.0!4d105.8"
         card_el.get_attribute.return_value = card_url
         card_el.evaluate.return_value = '<a href="' + card_url + '"></a>'
+        far_url = "https://www.google.com/maps/place/FarCafe/data=!8m2!3d0.0!4d0.0"
+        far_el = AsyncMock()
+        far_el.get_attribute.return_value = far_url
 
         def mock_feed_locator(selector):
             loc = AsyncMock()
             loc.count.return_value = 0
             loc.first.is_visible.return_value = False
             if 'a[href*="/maps/place/"]' in selector:
-                loc.all.return_value = [card_el]
-                loc.evaluate_all.return_value = [card_url]
+                loc.all.return_value = [card_el, far_el]
+                loc.evaluate_all.return_value = [card_url, far_url]
             return loc
 
         mock_new_page.locator = MagicMock(side_effect=mock_feed_locator)
@@ -3880,11 +3898,17 @@ def test_scrape_query_spa_secondary_rescue_uses_active_context():
                 "map_miner.scraper._PreviewInterceptor", return_value=mock_interceptor
             ),
             patch("map_miner.scraper.extract_feed_item_dom", return_value=None),
-            patch("map_miner.scraper._is_feed_at_end", AsyncMock(return_value=True)),
-            patch("map_miner.scraper._scroll_feed", AsyncMock()),
+            patch(
+                "map_miner.scraper._is_feed_at_end", AsyncMock(return_value=end_marker)
+            ),
+            patch("map_miner.scraper._scroll_feed", AsyncMock()) as mock_scroll,
             patch(
                 "map_miner.scraper._process_link",
-                AsyncMock(return_value={"name": "Rescued", "link": card_url}),
+                AsyncMock(
+                    return_value={"name": "Rescued", "link": card_url}
+                    if end_marker
+                    else None
+                ),
             ) as mock_process,
             patch("map_miner.scraper.asyncio.sleep", AsyncMock()),
         ):
@@ -3897,6 +3921,7 @@ def test_scrape_query_spa_secondary_rescue_uses_active_context():
                 proxy_rotator=mock_rotator,
                 max_captcha_retries=2,
                 query_timeout=30.0,
+                max_consecutive_out_of_range_scrolls=1,
             )
 
             # Assert proxy rotation happened and created mock_new_context
@@ -3909,8 +3934,21 @@ def test_scrape_query_spa_secondary_rescue_uses_active_context():
             call_kwargs = mock_process.await_args.kwargs
             assert call_kwargs["context"] is mock_new_context
             assert call_kwargs["context"] is not mock_initial_context
-            assert len(results) == 1
-            assert results[0]["name"] == "Rescued"
+            assert mock_scroll.await_count == (1 if end_marker else 4)
+            assert mock_new_page.expect_response.call_count == mock_scroll.await_count
+            assert results == (
+                [
+                    {
+                        "name": "Rescued",
+                        "place_id": "0x1:0x2",
+                        "latitude": 21.0,
+                        "longitude": 105.8,
+                        "link": card_url,
+                    }
+                ]
+                if end_marker
+                else []
+            )
 
     asyncio.run(_run())
 

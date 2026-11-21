@@ -42,22 +42,11 @@ if __name__ == "__main__":
 
 By default, results are limited to 25 km from `geo_coordinates`. Set `range_limit` (in meters) to use a different radius.
 
-Chromium disk cache flags are enabled by default using `.cache/chromium_cache/`.
-Use `cache_dir=Path(...)` to select
-another directory or `cache_dir=None` to omit Chromium disk cache flags.
-Application static caching remains enabled in `.cache/static_assets/`,
-configured separately through `static_cache_dir`. Playwright documents that
-[routing disables HTTP cache](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route);
-this scraper routes requests, so those Chromium flags do not guarantee HTTP
-cache reuse. The application static cache persists independently.
-
-In live checks with
-Playwright 1.63.0 / Chromium 153.0.8010.12, sharing a disk cache directory across
-concurrent contexts delayed search document responses, even with a fresh cache.
-Removing those flags allowed all four concurrent searches to navigate promptly.
-Cached concurrent workloads can reproduce those timeouts; `cache_dir=None`
-is an available workaround. This does not establish an upstream browser
-regression or corruption of existing cache files.
+Chromium disk caching is opt-in. Set `cache_dir=Path(...)` to enable the
+Chromium disk cache flags. Sharing a cache directory across concurrent contexts
+can delay search responses. Application static caching is configured separately
+with `static_cache_dir` and defaults to `.cache/static_assets/`. Playwright
+routing disables the browser's HTTP cache. [Playwright routing documentation](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route)
 
 Each result has a top-level `query` column containing the original string from
 `queries` (for example, `"cafe_hanoi"`). If a place appears in two searches, it
@@ -65,6 +54,10 @@ appears in two rows, one for each query. This applies to both `use_spa` modes;
 the fallback mode fetches each unique place URL only once. The `query` column
 remains present when `fields` selects other columns, when `flatten=True`, and
 when the result is empty.
+
+Set `on_query_incomplete` to a callback that accepts `query` and `reasons` to
+receive detected failures such as query timeouts or unreadable place details.
+The returned DataFrame includes any rows already collected for those queries.
 
 ## Features
 

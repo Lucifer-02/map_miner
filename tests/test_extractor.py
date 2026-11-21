@@ -14,9 +14,12 @@ from map_miner.extractor import (
     REQUIRED_COLUMNS,
     _is_matching_feed_link,
     calculate_distance,
+    compare_place_url_ids,
     extract_coordinates_from_url,
     extract_feed_item_dom,
+    extract_place_coordinates_from_url,
     extract_place_data,
+    extract_place_identity_from_url,
     format_places_dataframe,
     get_reviews_count,
     is_preview_response_for_link,
@@ -25,6 +28,7 @@ from map_miner.extractor import (
     parse_address_string_fallback,
     parse_dom_from_html,
     parse_json_data,
+    preview_blob_matches_link,
     safe_get,
     strip_accents,
 )
@@ -140,6 +144,51 @@ def test_extract_place_data_field_filtering():
     assert "reviews_count" not in data
 
 
+@pytest.mark.parametrize(
+    "fields", [None, ["name", "place_id", "latitude", "longitude", "website"]]
+)
+def test_html_fills_missing_fields_from_an_otherwise_usable_preview(fields):
+    preview: list[Any] = [None] * 12
+    preview[9] = [None, None, 21.0, 105.8]
+    preview[10] = "0x1:0x2"
+    preview[11] = "Preview Cafe"
+    html_blob = preview.copy()
+    html_blob[7] = ["https://example.com"]
+    html_blob[11] = "HTML Cafe"
+    state = [None] * 3 + [[None] * 6 + [html_blob]]
+    html = f"<script>;window.APP_INITIALIZATION_STATE={json.dumps(state)};window.APP_FLAGS=[];</script>"
+
+    extracted = extract_place_data(
+        html_content=html, preview_blob=preview, fields=fields
+    )
+
+    assert extracted == {
+        "name": "Preview Cafe",
+        "place_id": "0x1:0x2",
+        "latitude": 21.0,
+        "longitude": 105.8,
+        "website": "https://example.com",
+    }
+
+
+def test_malformed_payload_fields_are_discarded_without_losing_other_fields():
+    preview: list[Any] = [None] * 250
+    preview[9] = [None, None, 200, "105.8"]
+    preview[10] = "0x1:0x2"
+    preview[11] = ["not a place name"]
+    preview[13] = ["Cafe", {}, ""]
+    preview[72] = [{"wrong": "photo collection"}]
+    preview[78] = ["not a place id"]
+    preview[208] = [[None, None, "21.0"]]
+
+    assert extract_place_data(preview_blob=preview) == {
+        "place_id": "0x1:0x2",
+        "latitude": 21.0,
+        "longitude": 105.8,
+        "categories": ["Cafe"],
+    }
+
+
 def test_parse_json_data_xssi_variations():
     # Test path [3][6] with \r\n and whitespace after )]}'
     blob: list[Any] = [None] * 20
@@ -234,6 +283,18 @@ def test_extract_coordinates_from_url():
     )
 
 
+def test_place_coordinates_ignore_viewport_and_unpaired_protobuf_values():
+    base = "https://www.google.com/maps/place/Cafe/@0,0,17z"
+    separated = base + "/data=!3d21.0!1m2!4d105.8"
+    assert extract_place_coordinates_from_url(base) is None
+    assert extract_place_coordinates_from_url(separated) is None
+    assert extract_coordinates_from_url(separated) == (21.0, 105.8)
+    assert extract_place_coordinates_from_url(base + "/data=%213d21.0%214d105.8") == (
+        21.0,
+        105.8,
+    )
+
+
 def test_is_preview_response_for_link():
     canonical = "https://www.google.com/maps/place/data=!4m2!3m1!1s0x3135ab953357c99f:0x50774a3f338d3ab9"
     matching_url = "https://www.google.com/maps/preview/place?authuser=0&hl=vi&gl=vn&pb=!1m18!1m12!1m3!1d1000!2d105.8!3d21.0!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3135ab953357c99f:0x50774a3f338d3ab9!2z"
@@ -315,6 +376,48 @@ def test_is_preview_response_for_link_place_id():
     # Link with neither ID (safely rejected to avoid cross-place data poisoning)
     simple_link = "https://www.google.com/maps/place/SomeCafe"
     assert is_preview_response_for_link(resp_match, simple_link) is False
+
+
+def test_preview_ids_match_full_tokens_and_preserve_place_id_case():
+    preview_url = "https://www.google.com/maps/preview/place?pb=!1s"
+    target = "https://www.google.com/maps/place/Branch/data=!1s0x1:0x23"
+    assert (
+        is_preview_response_for_link(
+            MagicMock(url=preview_url + "0x1:0x234", status=200), target
+        )
+        is False
+    )
+    assert (
+        is_preview_response_for_link(
+            MagicMock(url=preview_url + "0X1%3A0X23!2z", status=200), target
+        )
+        is True
+    )
+
+    place_id = "ChIJdWb_e3MvdTERRLy4KKg2lnw-"
+    target = "https://www.google.com/maps/place/?query_place_id=" + place_id
+    assert extract_place_identity_from_url(target) == place_id
+    assert extract_place_identity_from_url("/maps/place/ChIJUsedAsName") is None
+    assert (
+        is_preview_response_for_link(
+            MagicMock(url=preview_url + place_id, status=200), target
+        )
+        is True
+    )
+    assert (
+        is_preview_response_for_link(
+            MagicMock(url=preview_url + place_id.swapcase(), status=200), target
+        )
+        is False
+    )
+    assert compare_place_url_ids(target, preview_url + "0x1:0x23") is None
+    assert compare_place_url_ids(target, preview_url + place_id + "0") is False
+
+    blob: list[Any] = [None] * 79
+    blob[78] = place_id + "0"
+    assert preview_blob_matches_link(blob, target) is False
+    blob[78] = place_id
+    assert preview_blob_matches_link(blob, target) is True
 
 
 def test_extract_feed_item_dom():
@@ -441,6 +544,19 @@ def test_extract_feed_item_dom_dom_recycling_guard():
     # 6. None or non-string card_html
     assert extract_feed_item_dom(None) == {}  # type: ignore
     assert extract_feed_item_dom("") == {}
+
+
+def test_feed_card_requires_matching_href_and_omits_viewport_coordinates():
+    target = "https://www.google.com/maps/place/Branch/@21,105,17z"
+    different_branch = target.replace("@21,105", "@22,105")
+    card = '<div><a href="{}"></a><h3>Branch</h3></div>'
+
+    assert extract_feed_item_dom(card.format(different_branch), link=target) == {}
+    assert extract_feed_item_dom("<h3>Branch</h3>", link=target) == {}
+    assert extract_feed_item_dom(card.format(target), link=target) == {
+        "name": "Branch",
+        "link": target,
+    }
 
 
 def test_is_matching_feed_link_direct():

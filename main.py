@@ -15,7 +15,7 @@ def main():
             geo_coordinates=Point(21.018785, 105.830415),
             zoom=18,
             n_semaphore=8,
-            headless=False
+            headless=False,
         )
     )
     print(pois)

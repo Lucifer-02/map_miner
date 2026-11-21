@@ -282,6 +282,57 @@ def test_format_places_dataframe_keeps_query_top_level(
         assert "query" not in json.loads(df["details"][0])
 
 
+@pytest.mark.parametrize("flatten", [False, True])
+@pytest.mark.parametrize(
+    "fields", [None, ["name", "categories", "latitude", "website"]]
+)
+def test_bad_field_types_do_not_lose_rows_or_usable_fields(flatten, fields):
+    good = {
+        "name": "Good",
+        "categories": ["Cafe"],
+        "latitude": 21.0,
+        "website": "https://example.com",
+        "query": " cafe ",
+    }
+    malformed = {
+        "name": ["not a string"],
+        "categories": ["Shop", {"bad": "shape"}],
+        "latitude": "NaN",
+        "website": ["not a URL"],
+        "query": "",
+    }
+    data = format_places_dataframe(
+        [good, malformed], flatten, fields, include_query=True
+    )
+
+    assert data.height == 2
+    assert data["name"].to_list() == ["Good", None]
+    assert data["latitude"].to_list() == [21.0, None]
+    assert data["categories"].to_list() == [["Cafe"], ["Shop"]]
+    assert data["query"].to_list() == [" cafe ", ""]
+    assert data["name"].dtype == pl.String
+    if flatten:
+        assert data["website"].to_list() == ["https://example.com", None]
+    else:
+        assert [json.loads(value) for value in data["details"]] == [
+            {"website": "https://example.com"},
+            {},
+        ]
+
+
+def test_mixed_shape_custom_metadata_does_not_discard_other_flattened_columns():
+    data = format_places_dataframe(
+        [
+            {"name": "First", "custom": "text"},
+            {"name": "Second", "custom": ["nested"]},
+        ],
+        flatten=True,
+    )
+
+    assert data["name"].to_list() == ["First", "Second"]
+    assert data["custom"][0] == "text"
+
+
 def test_scrape_google_maps_forwards_flatten_parameter():
     """Verifies that scrape_google_maps forwards the flatten parameter to format_places_dataframe."""
 

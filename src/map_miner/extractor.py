@@ -5,7 +5,7 @@ import re
 import unicodedata
 from collections.abc import Sequence
 from typing import Any
-from urllib.parse import quote_plus, unquote
+from urllib.parse import quote_plus, unquote, urlsplit
 
 import polars as pl
 from bs4 import BeautifulSoup
@@ -19,10 +19,13 @@ __all__ = [
     "DEFAULT_RANGE_LIMIT",
     "REQUIRED_COLUMNS",
     "calculate_distance",
+    "compare_place_url_ids",
     "extract_coordinates_from_url",
     "extract_feed_item_dom",
     "extract_initial_json",
+    "extract_place_coordinates_from_url",
     "extract_place_data",
+    "extract_place_identity_from_url",
     "format_places_dataframe",
     "get_address_components",
     "is_preview_response_for_link",
@@ -32,6 +35,7 @@ __all__ = [
     "parse_dom_from_html",
     "parse_json_data",
     "parse_preview_json",
+    "preview_blob_matches_link",
     "safe_get",
     "strip_accents",
 ]
@@ -54,6 +58,92 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     DEFAULT_FLATTEN_COLUMNS  # Backward compatibility alias
 )
 DEFAULT_RANGE_LIMIT: float = 25000.0  # 25 km in meters
+_TEXT_FIELDS = {
+    "name",
+    "place_id",
+    "address",
+    "link",
+    "plus_code",
+    "city",
+    "street",
+    "sublocality",
+    "district",
+    "postal_code",
+    "price_level",
+    "phone",
+    "website",
+    "open_status",
+    "timezone",
+    "thumbnail",
+    "country_code",
+    "menu_url",
+    "query",
+}
+_FLOAT_FIELDS = {"latitude", "longitude", "rating"}
+_COUNT_FIELDS = {"reviews_count", "photos_count"}
+_TEXT_LIST_FIELDS = {"categories", "amenities", "photos"}
+_ADDRESS_COMPONENT_FIELDS = {"street", "sublocality", "district", "city", "postal_code"}
+_OUTPUT_FIELDS = {"link", "query"}
+
+
+def _float_value(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _int_value(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if -(2**63) <= number < 2**63 else None
+
+
+def _normalize_field_value(field: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if field in _TEXT_FIELDS:
+        if not isinstance(value, str):
+            return None
+        if field == "query":
+            return value
+        return value.strip() or None
+    if field in _FLOAT_FIELDS:
+        number = _float_value(value)
+        if number is not None and (
+            (field == "latitude" and abs(number) > 90)
+            or (field == "longitude" and abs(number) > 180)
+        ):
+            return None
+        return number
+    if field in _COUNT_FIELDS:
+        return _int_value(value)
+    if field in _TEXT_LIST_FIELDS:
+        if field == "categories" and isinstance(value, str):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            return None
+        return [
+            item.strip() for item in value if isinstance(item, str) and item.strip()
+        ] or None
+    if field == "is_claimed":
+        return value if isinstance(value, bool) else None
+    if field == "opening_hours":
+        if not isinstance(value, dict):
+            return None
+        return {
+            day: hours
+            for day, hours in value.items()
+            if isinstance(day, str) and isinstance(hours, str) and day and hours
+        } or None
+    return value
 
 
 def safe_get(data: Any, *keys: Any) -> Any:
@@ -174,23 +264,25 @@ def get_main_name(data: list) -> str | None:
 
 def get_place_id(data: list) -> str | None:
     """Extracts the Google Place ID (canonical ChIJ... or hex ID)."""
-    return safe_get(data, 78) or safe_get(data, 10)
+    return _normalize_field_value(
+        "place_id", safe_get(data, 78)
+    ) or _normalize_field_value("place_id", safe_get(data, 10))
 
 
 def get_latitude(data: list) -> float | None:
     """Extracts latitude coordinate."""
-    lat = safe_get(data, 9, 2)
+    lat = _normalize_field_value("latitude", safe_get(data, 9, 2))
     if lat is not None:
         return lat
-    return safe_get(data, 208, 0, 2)
+    return _normalize_field_value("latitude", safe_get(data, 208, 0, 2))
 
 
 def get_longitude(data: list) -> float | None:
     """Extracts longitude coordinate."""
-    lon = safe_get(data, 9, 3)
+    lon = _normalize_field_value("longitude", safe_get(data, 9, 3))
     if lon is not None:
         return lon
-    return safe_get(data, 208, 0, 3)
+    return _normalize_field_value("longitude", safe_get(data, 208, 0, 3))
 
 
 def get_complete_address(data: list) -> str | None:
@@ -367,32 +459,20 @@ def parse_address_string_fallback(address_str: str) -> dict[str, str | None]:
 
 def get_rating(data: list) -> float | None:
     """Extracts the average star rating."""
-    val = safe_get(data, 4, 7)
-    if val is not None:
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            pass
-    return None
+    return _float_value(safe_get(data, 4, 7))
 
 
 def get_reviews_count(data: list) -> int | None:
     """Extracts the total number of reviews, supporting both comma and dot thousand separators."""
-    val = safe_get(data, 4, 8)
-    if val is not None:
-        try:
-            return int(val)
-        except (ValueError, TypeError):
-            pass
+    count = _int_value(safe_get(data, 4, 8))
+    if count is not None:
+        return count
     rev_str = safe_get(data, 4, 3, 1)
     if isinstance(rev_str, str):
         m = re.search(r"([0-9,.]+)", rev_str)
         if m:
             clean_num = m.group(1).replace(",", "").replace(".", "").strip()
-            try:
-                return int(clean_num)
-            except (ValueError, TypeError):
-                pass
+            return _int_value(clean_num)
     return None
 
 
@@ -412,7 +492,7 @@ def get_plus_code(data: list) -> str | None:
 def get_price_level(data: list) -> str | None:
     """Extracts the price tier/level."""
     lvl = safe_get(data, 4, 2)
-    if isinstance(lvl, int) and lvl > 0:
+    if isinstance(lvl, int) and not isinstance(lvl, bool) and 0 < lvl <= 5:
         return "$" * lvl
     if isinstance(lvl, str) and lvl.strip():
         return lvl.strip()
@@ -475,17 +555,21 @@ def get_photos_count(data: list) -> int | None:
 def get_photos(data: list) -> list[str] | None:
     """Extracts list of prominent photo URLs."""
     photos: list[str] = []
-    candidates = (safe_get(data, 72, 0) or []) + (safe_get(data, 51, 0) or [])
-    for p in candidates:
-        url = safe_get(p, 6, 0)
-        if url and isinstance(url, str) and url not in photos:
-            photos.append(url)
+    for candidates in (safe_get(data, 72, 0), safe_get(data, 51, 0)):
+        if isinstance(candidates, list):
+            for candidate in candidates:
+                url = safe_get(candidate, 6, 0)
+                if isinstance(url, str) and url and url not in photos:
+                    photos.append(url)
     return photos if photos else None
 
 
-def get_is_claimed(data: list) -> bool:
+def get_is_claimed(data: list) -> bool | None:
     """Checks whether the business is claimed by its owner."""
-    return safe_get(data, 57, 1) is not None or safe_get(data, 57, 2) is not None
+    claimed = safe_get(data, 57)
+    if not isinstance(claimed, list):
+        return None
+    return safe_get(claimed, 1) is not None or safe_get(claimed, 2) is not None
 
 
 def get_country_code(data: list) -> str | None:
@@ -741,9 +825,7 @@ def _extract_from_blob(
         return wanted is None or field_name in wanted
 
     addr_comps: dict[str, str | None] = {}
-    if wanted is None or not wanted.isdisjoint(
-        {"street", "sublocality", "district", "city", "postal_code"}
-    ):
+    if wanted is None or not wanted.isdisjoint(_ADDRESS_COMPONENT_FIELDS):
         addr_comps = get_address_components(data_blob)
 
     candidate_data: dict[str, Any] = {
@@ -786,7 +868,11 @@ def _extract_from_blob(
         if is_wanted("country_code")
         else None,
     }
-    return {k: v for k, v in candidate_data.items() if v is not None and is_wanted(k)}
+    return {
+        field: normalized
+        for field, value in candidate_data.items()
+        if (normalized := _normalize_field_value(field, value)) is not None
+    }
 
 
 def extract_place_data(
@@ -812,52 +898,65 @@ def extract_place_data(
     if preview_blob is None and preview_json:
         preview_blob = parse_preview_json(preview_json)
 
-    # 2. Automatically parse rendered DOM from HTML if dom_data was not explicitly supplied
-    if dom_data is None and html_content:
-        dom_data = parse_dom_from_html(html_content)
-
     place_details: dict[str, Any] = {}
-    wanted = set(fields) if fields is not None else None
+    wanted = set(fields) - _OUTPUT_FIELDS if fields is not None else None
+    extract_fields = wanted
+    if wanted is not None and not wanted.isdisjoint(_ADDRESS_COMPONENT_FIELDS):
+        extract_fields = wanted | {"address"}
 
     def is_wanted(f: str) -> bool:
         return wanted is None or f in wanted
 
     # 1. First priority: rich preview blob from /maps/preview/place
     if preview_blob and isinstance(preview_blob, list):
-        place_details = _extract_from_blob(preview_blob, wanted)
+        place_details = _extract_from_blob(preview_blob, extract_fields)
 
     # 2. Second priority: extract from HTML (APP_INITIALIZATION_STATE) if fields are missing
-    if html_content and (not place_details or len(place_details) < 4):
+    if html_content and (wanted is None or wanted - place_details.keys()):
         json_str = extract_initial_json(html_content)
         if json_str:
             data_blob = parse_json_data(json_str)
             if data_blob:
-                html_details = _extract_from_blob(data_blob, wanted)
-                for k, v in html_details.items():
-                    if v is not None and k not in place_details:
-                        place_details[k] = v
+                missing = (
+                    extract_fields - place_details.keys()
+                    if extract_fields is not None
+                    else None
+                )
+                html_details = _extract_from_blob(data_blob, missing)
+                place_details.update(
+                    {
+                        field: value
+                        for field, value in html_details.items()
+                        if field not in place_details
+                    }
+                )
 
     # 3. Third priority: DOM data fallback for missing fields
+    if (
+        dom_data is None
+        and html_content
+        and (wanted is None or wanted - place_details.keys())
+    ):
+        dom_data = parse_dom_from_html(html_content)
     if dom_data and isinstance(dom_data, dict):
-        for k, v in dom_data.items():
+        for field, value in dom_data.items():
             if (
-                v is not None
-                and is_wanted(k)
-                and (k not in place_details or place_details[k] is None)
-            ):
-                place_details[k] = v
+                extract_fields is None or field in extract_fields
+            ) and field not in place_details:
+                normalized = _normalize_field_value(field, value)
+                if normalized is not None:
+                    place_details[field] = normalized
 
     # 4. Fallback heuristic for address components if full address is available but components are missing
-    address_comp_keys = ["street", "sublocality", "district", "city", "postal_code"]
     if "address" in place_details and any(
-        is_wanted(k) and k not in place_details for k in address_comp_keys
+        is_wanted(k) and k not in place_details for k in _ADDRESS_COMPONENT_FIELDS
     ):
         fb_comps = parse_address_string_fallback(place_details["address"])
         for k, v in fb_comps.items():
             if v and is_wanted(k) and k not in place_details:
                 place_details[k] = v
 
-    if not place_details:
+    if not place_details or (wanted is not None and wanted.isdisjoint(place_details)):
         return None
 
     # If specific fields are requested, return dict preserving the requested order
@@ -895,30 +994,91 @@ def extract_coordinates_from_url(url: str) -> tuple[float, float] | None:
         return None
 
     decoded_url = unquote(url)
+    place_coords = _coordinates_from_match(
+        re.search(r"!3d(-?\d+(?:\.\d+)?).*?!4d(-?\d+(?:\.\d+)?)", decoded_url)
+    )
+    if place_coords is not None:
+        return place_coords
 
-    # 1. Primary feed / place protobuf format: !3d<lat>...!4d<lon>
-    match = re.search(r"!3d(-?\d+(?:\.\d+)?).*?!4d(-?\d+(?:\.\d+)?)", decoded_url)
+    return _coordinates_from_match(
+        re.search(r"@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)", decoded_url)
+    )
+
+
+def extract_place_coordinates_from_url(url: str) -> tuple[float, float] | None:
+    """Returns place coordinates encoded as !3d<lat>!4d<lon>."""
+    if not url or not isinstance(url, str):
+        return None
+    return _coordinates_from_match(
+        re.search(
+            r"!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)(?=[!/?&#]|$)",
+            unquote(url),
+        )
+    )
+
+
+def _coordinates_from_match(match: re.Match[str] | None) -> tuple[float, float] | None:
     if match:
-        try:
-            lat = float(match.group(1))
-            lon = float(match.group(2))
-            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
-                return lat, lon
-        except (ValueError, TypeError):
-            pass
-
-    # 2. Fallback viewport format: @<lat>,<lon>
-    match = re.search(r"@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)", decoded_url)
-    if match:
-        try:
-            lat = float(match.group(1))
-            lon = float(match.group(2))
-            if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
-                return lat, lon
-        except (ValueError, TypeError):
-            pass
-
+        lat, lon = float(match.group(1)), float(match.group(2))
+        if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+            return lat, lon
     return None
+
+
+_HEX_ID = r"0[xX][0-9a-fA-F]+:0[xX][0-9a-fA-F]+"
+_PLACE_ID = r"ChIJ[A-Za-z0-9_-]+"
+
+
+def _place_ids_from_url(url: str) -> dict[str, str]:
+    if not isinstance(url, str):
+        return {}
+    decoded = unquote(url)
+    ids: dict[str, str] = {}
+    for kind, prefix, pattern in (
+        ("hex", r"!\d+s|(?<![A-Za-z0-9_-])", _HEX_ID),
+        ("place_id", r"!\d+s|\b(?:query_)?place_id[:=]", _PLACE_ID),
+    ):
+        match = re.search(
+            rf"(?:{prefix})({pattern})(?=[!&?#/]|$)",
+            decoded,
+        )
+        if match:
+            value = match.group(1)
+            ids[kind] = value.lower() if kind == "hex" else value
+    return ids
+
+
+def extract_place_identity_from_url(url: str) -> str | None:
+    """Returns the most specific explicit place identifier in a place URL."""
+    ids = _place_ids_from_url(url)
+    return ids.get("place_id") or ids.get("hex")
+
+
+def _ids_match(
+    target_ids: dict[str, str], candidate_ids: dict[str, str]
+) -> bool | None:
+    common = target_ids.keys() & candidate_ids.keys()
+    if not common:
+        return None
+    return all(target_ids[kind] == candidate_ids[kind] for kind in common)
+
+
+def compare_place_url_ids(first_url: str, second_url: str) -> bool | None:
+    """Compares explicit place identifiers, returning None without comparable IDs."""
+    return _ids_match(_place_ids_from_url(first_url), _place_ids_from_url(second_url))
+
+
+def preview_blob_matches_link(preview_blob: list, canonical_link: str) -> bool:
+    """Checks comparable identifiers in a preview blob against a place URL."""
+    ids: dict[str, str] = {}
+    for value in (safe_get(preview_blob, 10), safe_get(preview_blob, 78)):
+        if not isinstance(value, str):
+            continue
+        if re.fullmatch(_HEX_ID, value):
+            ids["hex"] = value.lower()
+        elif re.fullmatch(_PLACE_ID, value):
+            ids["place_id"] = value
+    return _ids_match(_place_ids_from_url(canonical_link), ids) is not False
 
 
 def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
@@ -933,33 +1093,24 @@ def is_preview_response_for_link(response: Any, canonical_link: str) -> bool:
 
     raw_url = getattr(response, "url", "")
     status = getattr(response, "status", 0)
-    ok = getattr(response, "ok", status == 200)
-
-    if "maps/preview/place" not in raw_url or (status != 200 and not ok):
+    if not isinstance(raw_url, str) or not isinstance(status, int):
+        return False
+    try:
+        path = urlsplit(raw_url).path
+    except ValueError:
+        return False
+    if not 200 <= status < 300 or not (
+        path == "/maps/preview/place" or path.startswith("/maps/preview/place/")
+    ):
         return False
 
-    decoded_canonical = unquote(canonical_link)
-    decoded_url = unquote(raw_url)
-    decoded_url_lower = decoded_url.lower()
-
-    hex_match = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", decoded_canonical)
-    place_id_match = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", decoded_canonical)
-
-    if hex_match is not None or place_id_match is not None:
-        matched = False
-        if hex_match is not None:
-            hex_id = hex_match.group(0).lower()
-            if hex_id in decoded_url_lower:
-                matched = True
-        if place_id_match is not None:
-            place_id = place_id_match.group(1)
-            if place_id in decoded_url or place_id.lower() in decoded_url_lower:
-                matched = True
-        return matched
+    ids = _place_ids_from_url(canonical_link)
+    if ids:
+        return _ids_match(ids, _place_ids_from_url(raw_url)) is True
 
     # If canonical link has neither Hex ID nor Place ID, verify matching place slug
-    slug_canonical = re.search(r"/maps/place/([^/@?]+)", decoded_canonical)
-    slug_preview = re.search(r"/maps/preview/place/([^/@?]+)", decoded_url)
+    slug_canonical = re.search(r"/maps/place/([^/@?]+)", unquote(canonical_link))
+    slug_preview = re.search(r"/maps/preview/place/([^/@?]+)", unquote(path))
     if slug_canonical and slug_preview:
         s_c = slug_canonical.group(1).replace("+", " ").strip().lower()
         s_p = slug_preview.group(1).replace("+", " ").strip().lower()
@@ -977,37 +1128,19 @@ def _is_matching_feed_link(target_link: str, dom_link: str) -> bool:
     if not target_link or not dom_link:
         return False
 
-    t_clean = unquote(target_link).strip()
-    d_clean = unquote(dom_link).strip()
-
-    # Exact match
-    if t_clean == d_clean:
+    if target_link == dom_link:
         return True
 
-    # 1. Place ID check (ChIJ...)
-    chij_t = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", t_clean)
-    chij_d = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", d_clean)
-    if chij_t and chij_d:
-        return chij_t.group(1) == chij_d.group(1)
+    target_ids = _place_ids_from_url(target_link)
+    dom_ids = _place_ids_from_url(dom_link)
+    if target_ids or dom_ids:
+        return _ids_match(target_ids, dom_ids) is True
 
-    # 2. Hex ID check (0x...:0x...)
-    hex_t = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", t_clean)
-    hex_d = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", d_clean)
-    if hex_t and hex_d:
-        return hex_t.group(0).lower() == hex_d.group(0).lower()
-
-    # 3. Place slug check (/maps/place/<slug>)
-    slug_t = re.search(r"/maps/place/([^/@?]+)", t_clean)
-    slug_d = re.search(r"/maps/place/([^/@?]+)", d_clean)
-    if slug_t and slug_d:
-        s1 = slug_t.group(1).replace("+", " ").strip().lower()
-        s2 = slug_d.group(1).replace("+", " ").strip().lower()
-        if s1 and s2:
-            return s1 == s2
-
-    # 4. Canonical path match (only if path has specific place components beyond /maps/place)
-    t_path = re.sub(r"^https?://[^/]+", "", t_clean).split("?")[0].rstrip("/")
-    d_path = re.sub(r"^https?://[^/]+", "", d_clean).split("?")[0].rstrip("/")
+    try:
+        t_path = unquote(urlsplit(target_link).path).rstrip("/")
+        d_path = unquote(urlsplit(dom_link).path).rstrip("/")
+    except ValueError:
+        return False
     return bool(
         t_path
         and d_path
@@ -1031,53 +1164,29 @@ def extract_feed_item_dom(
     soup = BeautifulSoup(card_html, "html.parser")
     res: dict[str, Any] = {}
 
-    a_tag = soup.select_one("a[href*='/maps/place/'], a.hfpxzc")
+    a_tag = soup.select_one("a.hfpxzc[href]") or soup.select_one(
+        "a[href*='/maps/place/']"
+    )
     dom_href = str(a_tag["href"]).strip() if (a_tag and a_tag.get("href")) else None
 
     # 1. Target link validation & DOM recycling guard
-    if link:
-        if dom_href:
-            if not _is_matching_feed_link(link, dom_href):
-                return {}
-        else:
-            name_el = soup.select_one("div.qBF1Pd, div[role='heading'], h3")
-            card_name = name_el.get_text(strip=True) if name_el else ""
-            slug_m = re.search(r"/maps/place/([^/@?]+)", unquote(link))
-            if not card_name or not slug_m:
-                return {}
-            s_slug = re.sub(r"[\s+_]+", "", slug_m.group(1).lower())
-            s_card = re.sub(r"[\s+_]+", "", card_name.lower())
-            if s_slug != s_card:
-                return {}
-        target_link = link
-    else:
-        if not dom_href:
-            return {}
-        target_link = dom_href
+    if not dom_href or (link and not _is_matching_feed_link(link, dom_href)):
+        return {}
+    target_link = link or dom_href
 
     res["link"] = target_link
 
     # 2. Place ID from link
-    if target_link:
-        chij_m = re.search(r"\b(ChIJ[a-zA-Z0-9_-]{20,})\b", target_link)
-        if chij_m:
-            res["place_id"] = chij_m.group(1)
-        else:
-            hex_m = re.search(r"0x[0-9a-fA-F]+:0x[0-9a-fA-F]+", unquote(target_link))
-            if hex_m:
-                res["place_id"] = hex_m.group(0)
+    if place_id := extract_place_identity_from_url(target_link):
+        res["place_id"] = place_id
 
     # 3. Name
     name = None
     name_el = soup.select_one("div.qBF1Pd, div[role='heading'], h3")
     if name_el and name_el.get_text(strip=True):
         name = name_el.get_text(strip=True)
-    if not name:
-        a_tag = soup.select_one(
-            "a[href*='/maps/place/'][aria-label], a.hfpxzc[aria-label]"
-        )
-        if a_tag and a_tag.get("aria-label"):
-            name = str(a_tag["aria-label"]).strip()
+    if not name and a_tag and a_tag.get("aria-label"):
+        name = str(a_tag["aria-label"]).strip()
     if name:
         res["name"] = name
 
@@ -1194,7 +1303,7 @@ def extract_feed_item_dom(
         res["latitude"] = coords[0]
         res["longitude"] = coords[1]
     elif target_link:
-        extracted_coords = extract_coordinates_from_url(target_link)
+        extracted_coords = extract_place_coordinates_from_url(target_link)
         if extracted_coords:
             res["latitude"] = extracted_coords[0]
             res["longitude"] = extracted_coords[1]
@@ -1275,13 +1384,56 @@ def is_within_range(
 
 
 def _get_flatten_column_type(col: str) -> pl.DataType | type[pl.DataType]:
-    if col in ("latitude", "longitude", "rating"):
+    if col in _FLOAT_FIELDS:
         return pl.Float64
-    if col == "reviews_count":
+    if col in _COUNT_FIELDS:
         return pl.Int64
-    if col == "categories":
+    if col in _TEXT_LIST_FIELDS:
         return pl.List(pl.String)
+    if col == "is_claimed":
+        return pl.Boolean
     return pl.String
+
+
+def _format_flattened_rows(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    columns = dict.fromkeys(field for row in rows for field in row)
+    typed_fields = (
+        _TEXT_FIELDS
+        | _FLOAT_FIELDS
+        | _COUNT_FIELDS
+        | _TEXT_LIST_FIELDS
+        | {"is_claimed"}
+    )
+    overrides = {
+        field: _get_flatten_column_type(field)
+        for field in columns
+        if field in typed_fields
+    }
+    try:
+        return pl.from_dicts(rows, infer_schema_length=None, schema_overrides=overrides)
+    except (pl.exceptions.PolarsError, TypeError, ValueError, OverflowError):
+        # A caller's flattened metadata can mix shapes that Polars cannot unify.
+        # Build the columns independently to preserve the other fields and rows.
+        series: list[pl.Series] = []
+        for field in columns:
+            values = [row.get(field) for row in rows]
+            try:
+                column = pl.Series(
+                    field, values, dtype=overrides.get(field), strict=False
+                )
+            except (pl.exceptions.PolarsError, TypeError, ValueError, OverflowError):
+                column = pl.Series(
+                    field,
+                    [
+                        json.dumps(value, ensure_ascii=False, default=str)
+                        if value is not None
+                        else None
+                        for value in values
+                    ],
+                    dtype=pl.String,
+                )
+            series.append(column)
+        return pl.DataFrame(series)
 
 
 def format_places_dataframe(
@@ -1312,21 +1464,10 @@ def format_places_dataframe(
     Returns:
         pl.DataFrame: Formatted Polars DataFrame.
     """
-    sanitized_results: list[dict[str, Any]] = []
-    for item in results:
-        item_copy = dict(item)
-        if "reviews_count" in item_copy:
-            val = item_copy.get("reviews_count")
-            if val is not None:
-                try:
-                    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
-                        item_copy["reviews_count"] = None
-                    else:
-                        item_copy["reviews_count"] = int(val)
-                except (ValueError, TypeError):
-                    item_copy["reviews_count"] = None
-        sanitized_results.append(item_copy)
-    results = sanitized_results
+    results = [
+        {field: _normalize_field_value(field, value) for field, value in item.items()}
+        for item in results
+    ]
 
     def with_query(row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
         if include_query:
@@ -1336,9 +1477,7 @@ def format_places_dataframe(
     if flatten:
         if not results:
             if fields is not None:
-                schema = {
-                    f: (pl.Int64 if f == "reviews_count" else pl.String) for f in fields
-                }
+                schema = {f: _get_flatten_column_type(f) for f in fields}
                 if include_query:
                     schema["query"] = pl.String
                 return pl.DataFrame(schema=schema)
@@ -1346,27 +1485,14 @@ def format_places_dataframe(
                 return pl.DataFrame(schema={"query": pl.String})
             return pl.DataFrame()
 
-        schema_overrides: dict[str, Any] = {}
         if fields is not None:
-            if "reviews_count" in fields:
-                schema_overrides["reviews_count"] = pl.Int64
             filtered_results = [
                 with_query({k: item[k] for k in fields if k in item}, item)
                 for item in results
             ]
-            df = pl.from_dicts(
-                filtered_results,
-                infer_schema_length=None,
-                schema_overrides=schema_overrides or None,
-            )
+            df = _format_flattened_rows(filtered_results)
         else:
-            if any("reviews_count" in item for item in results):
-                schema_overrides["reviews_count"] = pl.Int64
-            df = pl.from_dicts(
-                results,
-                infer_schema_length=None,
-                schema_overrides=schema_overrides or None,
-            )
+            df = _format_flattened_rows(results)
     elif fields is None:
         if not results:
             schema: dict[str, Any] = {
@@ -1390,12 +1516,10 @@ def format_places_dataframe(
             row["details"] = json.dumps(details_dict, ensure_ascii=False, default=str)
             formatted_rows.append(with_query(row, item))
         schema_overrides = {
-            "latitude": pl.Float64,
-            "longitude": pl.Float64,
-            "rating": pl.Float64,
-            "reviews_count": pl.Int64,
-            "categories": pl.List(pl.String),
+            c: _get_flatten_column_type(c) for c in DEFAULT_FLATTEN_COLUMNS
         }
+        if include_query:
+            schema_overrides["query"] = pl.String
         df = pl.from_dicts(
             formatted_rows,
             infer_schema_length=None,
@@ -1431,11 +1555,9 @@ def format_places_dataframe(
                 )
             formatted_rows.append(with_query(row, item))
 
-        overrides: dict[str, Any] = {
-            c: _get_flatten_column_type(c)
-            for c in top_cols
-            if c in ("latitude", "longitude", "rating", "reviews_count", "categories")
-        }
+        overrides = {c: _get_flatten_column_type(c) for c in top_cols}
+        if include_query:
+            overrides["query"] = pl.String
 
         df = pl.from_dicts(
             formatted_rows,

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-21
+
+### Added
+
+- Thêm callback tùy chọn `on_query_incomplete(query, reasons)` để báo các truy vấn gặp lỗi vận hành. DataFrame vẫn chứa các hàng đã thu được.
+
+### Fixed
+
+- SPA xử lý link mới trước khi xét ngưỡng dừng, đọc kết quả đơn khi chuyển hướng muộn và dùng DOM hoặc trang chi tiết để bổ sung preview thiếu dữ liệu.
+- Luồng nhiều trang đọc nhóm kết quả đầu trước khi cuộn và tiếp tục tìm địa điểm hợp lệ khi gặp link lỗi, ngoài bán kính hoặc trùng ID.
+- Đối chiếu chính xác ID preview, lọc theo tọa độ địa điểm và xử lý `fields` độc lập với xác thực. Chuẩn hóa giá trị sai kiểu để giữ các hàng hợp lệ trong DataFrame.
+
 ## [0.3.8] - 2026-11-15
 
 ### Changed
