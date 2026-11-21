@@ -32,7 +32,7 @@ from .scraper import (
     scrape_google_maps,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "DEFAULT_FLATTEN_COLUMNS",

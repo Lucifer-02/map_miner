@@ -50,10 +50,8 @@ routing disables the browser's HTTP cache. [Playwright routing documentation](ht
 
 Each result has a top-level `query` column containing the original string from
 `queries` (for example, `"cafe_hanoi"`). If a place appears in two searches, it
-appears in two rows, one for each query. This applies to both `use_spa` modes;
-the fallback mode fetches each unique place URL only once. The `query` column
-remains present when `fields` selects other columns, when `flatten=True`, and
-when the result is empty.
+appears in two rows, one for each query. The `query` column remains present when
+`fields` selects other columns, when `flatten=True`, and when the result is empty.
 
 Set `on_query_incomplete` to a callback that accepts `query` and `reasons` to
 receive detected failures such as query timeouts or unreadable place details.
@@ -61,7 +59,7 @@ The returned DataFrame includes any rows already collected for those queries.
 
 ## Features
 
-- Concurrent searches and place-detail requests using Playwright, returning Polars DataFrames.
+- Concurrent SPA searches using Playwright, returning Polars DataFrames.
 - Structured place fields including address components, categories, ratings and review counts when available.
 - Preview extraction with DOM/detail fallback, timeouts and retry handling; extraction remains best effort as Google Maps changes.
 - Proxy rotation and CAPTCHA diagnostics/solving attempts; browser flags do not guarantee avoidance of bot detection.

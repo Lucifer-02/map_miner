@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-21
+
+### Removed
+
+- Bỏ chế độ thu thập nhiều trang cùng hai tham số `use_spa` và `place_timeout`.
+  API thu thập qua SPA. Truyền các tùy chọn từ `cache_dir` trở đi bằng tên tham số.
+
 ## [0.4.0] - 2026-11-21
 
 ### Added

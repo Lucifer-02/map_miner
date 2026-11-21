@@ -384,7 +384,6 @@ def test_scrape_google_maps_forwards_flatten_parameter():
                 queries={"coffee"},
                 geo_coordinates=Point(21.0, 105.8),
                 zoom=16,
-                use_spa=True,
             )
 
         assert len(df_default) == 1
@@ -409,7 +408,6 @@ def test_scrape_google_maps_forwards_flatten_parameter():
                 queries={"coffee"},
                 geo_coordinates=Point(21.0, 105.8),
                 zoom=16,
-                use_spa=True,
                 flatten=True,
             )
 

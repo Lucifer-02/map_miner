@@ -5,7 +5,7 @@ import os
 import random
 import re
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -30,7 +30,6 @@ from .extractor import (
     DEFAULT_RANGE_LIMIT,
     calculate_distance,
     compare_place_url_ids,
-    extract_coordinates_from_url,
     extract_feed_item_dom,
     extract_place_coordinates_from_url,
     extract_place_data,
@@ -78,7 +77,7 @@ STATIC_EXTENSIONS: tuple[str, ...] = (
     ".png",
 )
 
-# Stable launch args: headless/stealth-safe, avoids crashes on multi-page Chromium
+# Stable launch args for Chromium
 LAUNCH_ARGS = [
     "--no-default-browser-check",
     "--disable-dev-shm-usage",
@@ -737,281 +736,6 @@ def _place_link_key(link: str) -> str:
     return path
 
 
-async def _get_place_urls(
-    context: BrowserContext,
-    max_places: int | None,
-    query: str,
-    geo_coordinates: Point,
-    zoom: float,
-    lang: str = "en",
-    range_limit: float = DEFAULT_RANGE_LIMIT,
-    proxy_rotator: ProxyRotator | None = None,
-    query_timeout: float = 300.0,
-    links_collector: set[str] | None = None,
-    navigation_timeout: int = 30000,
-    captcha_timeout: float = 85.0,
-    max_consecutive_empty_scrolls: int = 4,
-    max_consecutive_out_of_range_scrolls: int = 3,
-    max_scroll_attempts_without_new_links: int = 5,
-    initial_delay_range: tuple[float, float] = (1.0, 2.5),
-    min_remaining_time: float = 2.0,
-    scroll_retry_delay: float = 1.5,
-    process_candidates: Callable[[list[str]], Awaitable[bool]] | None = None,
-    query_issues: list[str] | None = None,
-) -> set[str]:
-    """Navigates the search feed and scrolls to collect place links.
-
-    Used in multi-page fallback mode.
-    Supports early drop when places exceed range_limit.
-
-    Args:
-        context (BrowserContext): Isolated browser context.
-        max_places (int): Maximum number of valid place links to collect. Places
-            dropped via range_limit (early drop) do not count toward this limit.
-        query (str): Search query string.
-        geo_coordinates (Point): Center coordinates for search.
-        zoom (float): Map zoom level.
-        lang (str, optional): Language code.
-        range_limit (float): Maximum radius distance in meters from geo_coordinates.
-            Google Maps local ranking combines Relevance, Distance, and Prominence
-            (https://support.google.com/business/answer/7091). Prominent places further away
-            may be returned before closer ones, so results are not strictly monotonic by distance.
-            range_limit filters out places exceeding this radius (early drop).
-        proxy_rotator (ProxyRotator | None, optional): Rotator to renew proxy on CAPTCHA block.
-        query_timeout (float): Maximum seconds allowed for this query.
-        links_collector (set[str] | None, optional): Mutable set to collect links in-place for zero data loss on timeout.
-        navigation_timeout (int, optional): Navigation timeout in ms.
-        captcha_timeout (float, optional): reCAPTCHA solving timeout in seconds.
-        max_consecutive_empty_scrolls (int, optional): Max consecutive scrolls without new links before stopping.
-        max_consecutive_out_of_range_scrolls (int, optional): Max consecutive scrolls with only out-of-range links before stopping.
-        max_scroll_attempts_without_new_links (int, optional): Max scroll attempts when height is unchanged before stopping.
-        initial_delay_range (tuple[float, float], optional): Range of random sleep delay after initial navigation.
-        min_remaining_time (float, optional): Minimum remaining time threshold in seconds before early exit.
-        scroll_retry_delay (float, optional): Sleep delay in seconds when scroll height is unchanged.
-        process_candidates (Callable, optional): Process each ordered batch of candidates.
-            When supplied, only the callback decides whether the place quota was reached.
-        query_issues (list[str], optional): Collect reasons this query may be incomplete.
-
-    Returns:
-        set[str]: Collected place URLs.
-    """
-    search_page = await context.new_page()
-    if not search_page:
-        raise RuntimeError("Failed to create search browser page.")
-
-    place_links: set[str] = links_collector if links_collector is not None else set()
-    processed_links: set[str] = set()
-    processing_seconds = 0.0
-
-    async def collect_candidates(links: Sequence[str]) -> tuple[bool, bool, bool]:
-        nonlocal processing_seconds
-        candidates = []
-        found_new_link = False
-        for link in links:
-            if not link:
-                continue
-            key = _place_link_key(link)
-            if key in processed_links:
-                continue
-            processed_links.add(key)
-            found_new_link = True
-            coords = extract_place_coordinates_from_url(link)
-            if coords is not None:
-                distance = calculate_distance(geo_coordinates, coords)
-                if distance > range_limit:
-                    logger.debug(
-                        "Early drop: Place %s is %.1fm away, exceeding range limit (%.1fm).",
-                        link,
-                        distance,
-                        range_limit,
-                    )
-                    continue
-            place_links.add(link)
-            candidates.append(link)
-            if (
-                process_candidates is None
-                and max_places is not None
-                and len(place_links) >= max_places
-            ):
-                return True, True, True
-
-        if candidates and process_candidates is not None:
-            started = time.monotonic()
-            try:
-                if await process_candidates(candidates):
-                    return True, True, True
-            finally:
-                processing_seconds += time.monotonic() - started
-        return False, found_new_link, bool(candidates)
-
-    try:
-        if max_places is not None and max_places <= 0:
-            return place_links
-        query_start = time.monotonic()
-        search_url = make_place_url(
-            query=query, geo_coordinates=geo_coordinates, zoom=zoom, lang=lang
-        )
-        logger.info("Navigating to search URL: %s", search_url)
-
-        await search_page.goto(
-            search_url,
-            wait_until="domcontentloaded",
-            timeout=max(1, navigation_timeout),
-        )
-        await asyncio.sleep(
-            random.uniform(initial_delay_range[0], initial_delay_range[1])
-        )
-
-        if "consent" in search_page.url:
-            await _pass_consent(search_page)
-
-        is_blocked = False
-        try:
-            captcha_solved = await _handle_captcha_if_present(
-                search_page,
-                context_label="search_page",
-                timeout=captcha_timeout,
-            )
-        except RecaptchaBlockedError:
-            captcha_solved = False
-            is_blocked = True
-
-        if is_blocked or (not captcha_solved and "sorry/index" in search_page.url):
-            if proxy_rotator is not None:
-                proxy_rotator.renew()
-            if query_issues is not None:
-                query_issues.append("CAPTCHA blocked search")
-            return place_links
-
-        if "/maps/place/" in search_page.url:
-            await collect_candidates([search_page.url])
-            return place_links
-
-        active_feed_selector = await _find_feed_selector(search_page)
-        if not active_feed_selector:
-            if "/maps/place/" in search_page.url:
-                await collect_candidates([search_page.url])
-                return place_links
-            if await _is_no_results_page(search_page):
-                logger.info("No results found for query '%s'.", query)
-                return place_links
-            logger.error("Could not find results feed selector on search page.")
-            if query_issues is not None:
-                query_issues.append("results feed unavailable")
-            return place_links
-
-        link_selector = f'{active_feed_selector} a[href*="/maps/place/"]'
-        initial_links = await search_page.locator(link_selector).evaluate_all(
-            "elements => elements.map(a => a.href)"
-        )
-        reached_limit, new_links, had_candidates = await collect_candidates(
-            initial_links
-        )
-        if reached_limit:
-            return place_links
-
-        last_height = await search_page.evaluate(
-            "(sel) => document.querySelector(sel)?.scrollHeight || 0",
-            active_feed_selector,
-        )
-        scroll_attempts_no_new = 0
-        consecutive_empty_scrolls = 0
-        consecutive_out_of_range_batches = int(new_links and not had_candidates)
-
-        while True:
-            elapsed = time.monotonic() - query_start - processing_seconds
-            remaining_time = max(0.0, query_timeout - elapsed)
-            if remaining_time <= min_remaining_time:
-                logger.warning(
-                    "⚠️ Query '%s' reached timeout limit (%.1fs) in get_place_urls. Returning %d collected links.",
-                    query,
-                    query_timeout,
-                    len(place_links),
-                )
-                if query_issues is not None:
-                    query_issues.append("search deadline reached")
-                break
-
-            await _scroll_feed(search_page, active_feed_selector)
-
-            current_links = await search_page.locator(link_selector).evaluate_all(
-                "elements => elements.map(a => a.href)"
-            )
-            reached_limit, new_links, had_candidates = await collect_candidates(
-                current_links
-            )
-            if reached_limit:
-                break
-
-            new_height = await search_page.evaluate(
-                "(sel) => document.querySelector(sel)?.scrollHeight || 0",
-                active_feed_selector,
-            )
-
-            if new_links:
-                consecutive_empty_scrolls = 0
-                scroll_attempts_no_new = 0
-                last_height = new_height
-                consecutive_out_of_range_batches = (
-                    0 if had_candidates else consecutive_out_of_range_batches + 1
-                )
-                continue
-
-            if await _is_feed_at_end(search_page):
-                logger.debug("Reached end of results list marker and no new links.")
-                return place_links
-
-            if (
-                consecutive_out_of_range_batches
-                and consecutive_out_of_range_batches
-                >= max_consecutive_out_of_range_scrolls
-            ):
-                logger.debug(
-                    "Stopping scroll in get_place_urls: no new links after %d out-of-range batches.",
-                    consecutive_out_of_range_batches,
-                )
-                break
-            consecutive_out_of_range_batches = 0
-            consecutive_empty_scrolls += 1
-            if consecutive_empty_scrolls >= max_consecutive_empty_scrolls:
-                logger.debug(
-                    "Stopping scroll in get_place_urls: %d consecutive scrolls without new links.",
-                    consecutive_empty_scrolls,
-                )
-                break
-
-            if new_height == last_height:
-                scroll_attempts_no_new += 1
-                logger.debug(
-                    "Scroll height unchanged (%d/%d).",
-                    scroll_attempts_no_new,
-                    max_scroll_attempts_without_new_links,
-                )
-                await asyncio.sleep(scroll_retry_delay)
-                if scroll_attempts_no_new >= max_scroll_attempts_without_new_links:
-                    break
-            else:
-                last_height = new_height
-                scroll_attempts_no_new = 0
-
-        if (
-            query_issues is not None
-            and not processed_links
-            and not query_issues
-            and not await _is_no_results_page(search_page)
-        ):
-            query_issues.append("search feed contained no place links")
-
-    except Exception as e:  # noqa: BLE001
-        logger.error("Error during get_place_urls: %s", e)
-        if query_issues is not None:
-            query_issues.append(f"search failed: {type(e).__name__}")
-    finally:
-        await _safe_close_page(search_page)
-
-    return place_links
-
-
 async def _scrape_query_spa(
     context: BrowserContext,
     query: str,
@@ -1043,7 +767,6 @@ async def _scrape_query_spa(
     post_scroll_delay_range: tuple[float, float] = (1.2, 2.2),
     scroll_retry_delay: float = 1.5,
     secondary_rescue_min_time: float = 5.0,
-    secondary_rescue_concurrency: int = 4,
     secondary_rescue_cutoff: float = 3.0,
     min_valid_fields: int = 3,
     query_issues: list[str] | None = None,
@@ -1096,7 +819,6 @@ async def _scrape_query_spa(
         post_scroll_delay_range (tuple[float, float], optional): Delay range after scrolling feed.
         scroll_retry_delay (float, optional): Sleep delay in seconds when scroll height is unchanged.
         secondary_rescue_min_time (float, optional): Minimum query remaining time to attempt secondary rescue.
-        secondary_rescue_concurrency (int, optional): Maximum concurrency for secondary rescue.
         secondary_rescue_cutoff (float, optional): Remaining time cutoff below which secondary rescue aborts.
         min_valid_fields (int, optional): Minimum fields required for a place dictionary to be valid.
         query_issues (list[str] | None, optional): Collector for reasons the query ended with partial results.
@@ -1222,28 +944,17 @@ async def _scrape_query_spa(
             places_by_identity[key] = place
         return is_new
 
-    async def rescue_detail(
-        link: str, semaphore: asyncio.Semaphore, remaining: float
-    ) -> tuple[dict[str, Any], bool]:
+    async def rescue_detail(link: str, remaining: float) -> tuple[dict[str, Any], bool]:
         rejected: list[bool] = []
         try:
             async with asyncio.timeout(remaining - secondary_rescue_cutoff):
                 data = await _process_link(
                     context=active_context,
                     link=urljoin(search_url, link),
-                    count=len(results) + 1,
-                    total=max_places
-                    or (len(results) + max(1, len(fallback_rescue_links))),
-                    semaphore=semaphore,
                     fields=extraction_fields,
-                    max_retries=1,
-                    proxy_rotator=proxy_rotator,
                     navigation_timeout=navigation_timeout,
                     captcha_timeout=captcha_timeout,
                     geo_coordinates=geo_coordinates,
-                    lang=lang,
-                    static_cache_dir=static_cache_dir,
-                    timezone_id=timezone_id,
                     range_limit=range_limit,
                     out_of_range=rejected,
                 )
@@ -1348,9 +1059,7 @@ async def _scrape_query_spa(
             if not usable_place(place_data) or needs_detail(place_data, link, coords):
                 remaining = query_timeout - (time.monotonic() - query_start)
                 if remaining > secondary_rescue_min_time:
-                    detail_data, rejected = await rescue_detail(
-                        link, asyncio.Semaphore(1), remaining
-                    )
+                    detail_data, rejected = await rescue_detail(link, remaining)
                     if rejected:
                         return results
                     fill_missing(place_data, detail_data)
@@ -1371,7 +1080,6 @@ async def _scrape_query_spa(
         scroll_attempts_no_new = 0
         consecutive_empty_scrolls = 0
         consecutive_out_of_range_scrolls = 0
-        rescue_sem = asyncio.Semaphore(max(1, secondary_rescue_concurrency))
         seen_link = False
         is_at_end = False
         last_height = await search_page.evaluate(
@@ -1585,9 +1293,7 @@ async def _scrape_query_spa(
                     if needs_detail(place_data, link, coords):
                         remaining = query_timeout - (time.monotonic() - query_start)
                         if remaining > secondary_rescue_min_time:
-                            detail_data, rejected = await rescue_detail(
-                                link, rescue_sem, remaining
-                            )
+                            detail_data, rejected = await rescue_detail(link, remaining)
                             if rejected:
                                 processed_links.add(canonical_link)
                                 out_of_range_links.add(canonical_link)
@@ -1720,7 +1426,7 @@ async def _scrape_query_spa(
                 remaining = query_timeout - (time.monotonic() - query_start)
                 if remaining <= secondary_rescue_cutoff:
                     break
-                data, rejected = await rescue_detail(link, rescue_sem, remaining)
+                data, rejected = await rescue_detail(link, remaining)
                 if rejected:
                     processed_links.add(key)
                 elif usable_place(data):
@@ -1752,61 +1458,18 @@ async def _scrape_query_spa(
 async def _process_link(
     context: BrowserContext,
     link: str,
-    semaphore: asyncio.Semaphore,
-    count: int,
-    total: int | None,
+    *,
+    geo_coordinates: Point,
+    out_of_range: list[bool],
     fields: Sequence[str] | set[str] | None = None,
-    max_retries: int = 2,
-    proxy_rotator: ProxyRotator | None = None,
+    range_limit: float = DEFAULT_RANGE_LIMIT,
     navigation_timeout: int = 30000,
     captcha_timeout: float = 85.0,
     preview_wait_timeout: float = 4.5,
     main_selector_timeout: int = 2000,
-    retry_delay_range: tuple[float, float] = (0.8, 1.5),
-    captcha_retry_delay_range: tuple[float, float] = (1.0, 2.0),
     min_valid_fields: int = 3,
-    geo_coordinates: Point | None = None,
-    lang: str = "en",
-    static_cache_dir: Path = Path(".cache") / "static_assets",
-    timezone_id: str | None = "UTC",
-    range_limit: float | None = None,
-    out_of_range: list[bool] | None = None,
-    result_collector: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Processes a single place link in multi-page fallback mode:
-    - Pure I/O: intercepts rich network payload or collects HTML content
-    - Pure extraction: delegates parsing to extractor.py
-    - Includes automatic retry and resilient page lifecycle cleanup
-
-    Args:
-        context (BrowserContext): Isolated browser context.
-        link (str): URL of place to scrape.
-        semaphore (asyncio.Semaphore): Concurrency semaphore.
-        count (int): Current link index.
-        total (int | None): Total number of places when known.
-        fields (Sequence[str] | set[str] | None, optional): Specific fields to extract.
-        max_retries (int, optional): Max attempts for this link.
-        proxy_rotator (ProxyRotator | None, optional): Proxy rotator.
-        navigation_timeout (int, optional): Navigation timeout in ms.
-        captcha_timeout (float, optional): CAPTCHA solving timeout in seconds.
-        preview_wait_timeout (float, optional): Timeout waiting for preview payload in seconds.
-        main_selector_timeout (int, optional): Timeout waiting for main content selector in ms.
-        retry_delay_range (tuple[float, float], optional): Delay range in seconds before retry attempt.
-        captcha_retry_delay_range (tuple[float, float], optional): Delay range in seconds before CAPTCHA retry.
-        min_valid_fields (int, optional): Minimum fields required for valid place data.
-        geo_coordinates (Point | None, optional): Reference coordinates for dynamic context recreation.
-        lang (str, optional): Language code.
-        static_cache_dir (Path, optional): Directory to store static assets cache.
-        timezone_id (str | None, optional): IANA timezone ID for browser context. Defaults to "UTC".
-        range_limit (float, optional): Radius to apply to verified coordinates.
-        out_of_range (list[bool], optional): Receives True on a verified radius rejection.
-        result_collector (list[dict], optional): Stores a valid row before cleanup.
-
-    Returns:
-        dict[str, Any] | None: Extracted place data dictionary, or None on failure.
-    """
-    active_context = context
-    created_contexts: list[BrowserContext] = []
+    """Rescue a place from its detail page within the active SPA context."""
     place_fields = (
         {*fields, "name", "place_id", "latitude", "longitude"}
         if fields is not None
@@ -1818,10 +1481,8 @@ async def _process_link(
     def place_coordinates(place: dict[str, Any]) -> tuple[float, float] | None:
         try:
             if place.get("latitude") is not None and place.get("longitude") is not None:
-                latitude, longitude = (
-                    float(place["latitude"]),
-                    float(place["longitude"]),
-                )
+                latitude = float(place["latitude"])
+                longitude = float(place["longitude"])
                 if -90 <= latitude <= 90 and -180 <= longitude <= 180:
                     return latitude, longitude
         except (TypeError, ValueError, OverflowError):
@@ -1835,15 +1496,8 @@ async def _process_link(
         if coords is None and detail_url:
             coords = extract_place_coordinates_from_url(detail_url)
         if coords is not None:
-            if (
-                range_limit is not None
-                and geo_coordinates is not None
-                and calculate_distance(geo_coordinates, coords) > range_limit
-            ):
-                if out_of_range is not None:
-                    out_of_range.append(True)
-                if result_collector is not None:
-                    result_collector.clear()
+            if calculate_distance(geo_coordinates, coords) > range_limit:
+                out_of_range.append(True)
                 return None
             place["latitude"], place["longitude"] = coords
 
@@ -1855,8 +1509,6 @@ async def _process_link(
                 place["place_id"] = identity
         if fields is None or "link" in fields:
             place["link"] = link
-        if result_collector is not None:
-            result_collector[:] = [place]
         return place
 
     def valid_place(place: dict[str, Any] | None) -> bool:
@@ -1870,237 +1522,110 @@ async def _process_link(
             )
         )
 
+    page: Page | None = None
     try:
-        async with semaphore:
-            for attempt in range(1, max_retries + 1):
-                start_time = time.time()
-                page: Page | None = None
-                try:
-                    logger.info(
-                        "Processing link [%d/%s] (attempt %d/%d): %s",
-                        count,
-                        total if total is not None else "?",
-                        attempt,
-                        max_retries,
-                        link,
-                    )
-                    page = await active_context.new_page()
-                    interceptor = _PreviewInterceptor(page, target_link=link)
-
-                    await page.set_extra_http_headers(
-                        {
-                            "Referer": "https://www.google.com/",
-                            "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
-                        }
-                    )
-
-                    try:
-                        response = await page.goto(
-                            link,
-                            wait_until="domcontentloaded",
-                            timeout=max(1, navigation_timeout),
-                        )
-                    except PlaywrightTimeoutError:
-                        logger.warning("  ❌ Timeout navigating to: %s", link)
-                        if attempt < max_retries:
-                            await asyncio.sleep(
-                                random.uniform(
-                                    retry_delay_range[0], retry_delay_range[1]
-                                )
-                            )
-                            continue
-                        return None
-                    except PlaywrightError as e:
-                        logger.error("  ❌ Navigation error for %s: %s", link, e)
-                        if attempt < max_retries:
-                            await asyncio.sleep(
-                                random.uniform(
-                                    retry_delay_range[0], retry_delay_range[1]
-                                )
-                            )
-                            continue
-                        return None
-                    status = getattr(response, "status", None)
-                    if (
-                        isinstance(status, int)
-                        and status >= 400
-                        and "sorry/index" not in page.url
-                    ):
-                        logger.warning("HTTP %d navigating to place: %s", status, link)
-                        if attempt < max_retries:
-                            continue
-                        return None
-
-                    # Wait for preview API response
-                    preview_json = await interceptor.wait_for_preview(
-                        timeout=preview_wait_timeout
-                    )
-                    preview_blob = (
-                        parse_preview_json(preview_json)
-                        if isinstance(preview_json, str)
-                        else None
-                    )
-                    if preview_blob is not None and not preview_blob_matches_link(
-                        preview_blob, link
-                    ):
-                        preview_blob = None
-                    preview_data = (
-                        extract_place_data(
-                            preview_blob=preview_blob, fields=place_fields
-                        )
-                        if preview_blob is not None
-                        else None
-                    )
-
-                    if not valid_place(preview_data):
-                        preview_data = None
-                        try:
-                            await page.wait_for_selector(
-                                "h1, [role='main']", timeout=main_selector_timeout
-                            )
-                        except PlaywrightError:
-                            pass
-                    elif preview_data is not None and (
-                        place_coordinates(preview_data) is not None
-                        or range_limit is None
-                    ):
-                        resolved_preview = finalize(preview_data.copy())
-                        if resolved_preview is None or (
-                            fields is not None
-                            and all(
-                                resolved_preview.get(key) is not None for key in fields
-                            )
-                        ):
-                            return resolved_preview
-
-                    # CAPTCHA verification
-                    is_blocked = False
-                    try:
-                        captcha_solved = await _handle_captcha_if_present(
-                            page,
-                            context_label="process_link",
-                            timeout=captcha_timeout,
-                        )
-                    except RecaptchaBlockedError:
-                        captcha_solved = False
-                        is_blocked = True
-
-                    if (not captcha_solved and "sorry/index" in page.url) or is_blocked:
-                        if preview_data is not None:
-                            return finalize(preview_data)
-                        if attempt == max_retries:
-                            return None
-                        if proxy_rotator is not None:
-                            logger.warning(
-                                "CAPTCHA blocked/unsolved in process_link, renewing proxy/circuit and creating fresh context..."
-                            )
-                            new_proxy = proxy_rotator.renew()
-                            browser = active_context.browser
-                            if browser is not None:
-                                await _safe_close_page(page)
-                                page = None
-
-                                coords = geo_coordinates
-                                if coords is None:
-                                    extracted_coords = extract_coordinates_from_url(
-                                        link
-                                    )
-                                    if extracted_coords:
-                                        coords = Point(
-                                            extracted_coords[0], extracted_coords[1]
-                                        )
-                                    else:
-                                        coords = Point(21.018785, 105.830415)
-
-                                new_context = await _create_browser_context(
-                                    browser=browser,
-                                    geo_coordinates=coords,
-                                    lang=lang,
-                                    proxy=new_proxy,
-                                    static_cache_dir=static_cache_dir,
-                                    timezone_id=timezone_id,
-                                )
-                                created_contexts.append(new_context)
-                                active_context = new_context
-
-                        await asyncio.sleep(
-                            random.uniform(
-                                captcha_retry_delay_range[0],
-                                captcha_retry_delay_range[1],
-                            )
-                        )
-                        continue
-
-                    page_identity = extract_place_identity_from_url(page.url)
-                    if (
-                        "/maps/place/" not in page.url
-                        or compare_place_url_ids(link, page.url) is False
-                    ):
-                        logger.warning(
-                            "Detail page redirected away from the requested place: %s",
-                            link,
-                        )
-                        if preview_data is not None:
-                            return finalize(preview_data)
-                        return None
-
-                    try:
-                        html_content = await page.content()
-                    except PlaywrightError:
-                        if preview_data is not None:
-                            return finalize(preview_data, page.url)
-                        raise
-                    place_data = extract_place_data(
-                        html_content=html_content,
-                        preview_blob=preview_blob,
-                        fields=place_fields,
-                    )
-
-                    if place_data is not None and valid_place(place_data):
-                        elapsed = time.time() - start_time
-                        logger.info("  ✅ Extracted: %s in %.2fs", link, elapsed)
-                        return finalize(place_data, page.url)
-                    if preview_data is not None:
-                        return finalize(preview_data, page.url)
-                    if (
-                        fields is not None
-                        and set(fields) == {"link"}
-                        and (
-                            link_identity
-                            or page_identity
-                            or _place_link_key(link) == _place_link_key(page.url)
-                        )
-                    ):
-                        return finalize({}, page.url)
-
-                    logger.warning("  ⚠️ Extraction returned None: %s", link)
-                    if attempt < max_retries:
-                        await asyncio.sleep(
-                            random.uniform(retry_delay_range[0], retry_delay_range[1])
-                        )
-                        continue
-                    return None
-
-                except Exception as e:  # noqa: BLE001
-                    logger.error(
-                        "  ❌ Error processing %s (attempt %d): %s",
-                        link,
-                        attempt,
-                        e,
-                    )
-                    if attempt < max_retries:
-                        await asyncio.sleep(
-                            random.uniform(retry_delay_range[0], retry_delay_range[1])
-                        )
-                    else:
-                        return None
-                finally:
-                    await _safe_close_page(page)
-
+        page = await context.new_page()
+        interceptor = _PreviewInterceptor(page, target_link=link)
+        await page.set_extra_http_headers(
+            {
+                "Referer": "https://www.google.com/",
+                "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
+            }
+        )
+        response = await page.goto(
+            link,
+            wait_until="domcontentloaded",
+            timeout=max(1, navigation_timeout),
+        )
+        status = getattr(response, "status", None)
+        if isinstance(status, int) and status >= 400 and "sorry/index" not in page.url:
+            logger.warning("HTTP %d navigating to place: %s", status, link)
             return None
+
+        preview_json = await interceptor.wait_for_preview(timeout=preview_wait_timeout)
+        preview_blob = (
+            parse_preview_json(preview_json) if isinstance(preview_json, str) else None
+        )
+        if preview_blob is not None and not preview_blob_matches_link(
+            preview_blob, link
+        ):
+            preview_blob = None
+        preview_data = (
+            extract_place_data(preview_blob=preview_blob, fields=place_fields)
+            if preview_blob is not None
+            else None
+        )
+
+        if preview_data is None or not valid_place(preview_data):
+            preview_data = None
+            try:
+                await page.wait_for_selector(
+                    "h1, [role='main']", timeout=main_selector_timeout
+                )
+            except PlaywrightError:
+                pass
+        elif place_coordinates(preview_data) is not None:
+            resolved_preview = finalize(preview_data.copy())
+            if resolved_preview is None or (
+                fields is not None
+                and all(resolved_preview.get(key) is not None for key in fields)
+            ):
+                return resolved_preview
+
+        try:
+            captcha_solved = await _handle_captcha_if_present(
+                page, context_label="process_link", timeout=captcha_timeout
+            )
+        except RecaptchaBlockedError:
+            return finalize(preview_data) if preview_data is not None else None
+        if not captcha_solved and "sorry/index" in page.url:
+            return finalize(preview_data) if preview_data is not None else None
+
+        if (
+            "/maps/place/" not in page.url
+            or compare_place_url_ids(link, page.url) is False
+        ):
+            logger.warning(
+                "Detail page redirected away from the requested place: %s", link
+            )
+            return finalize(preview_data) if preview_data is not None else None
+
+        try:
+            html_content = await page.content()
+        except PlaywrightError:
+            if preview_data is not None:
+                return finalize(preview_data, page.url)
+            raise
+        place_data = extract_place_data(
+            html_content=html_content,
+            preview_blob=preview_blob,
+            fields=place_fields,
+        )
+        if place_data is not None and valid_place(place_data):
+            return finalize(place_data, page.url)
+        if preview_data is not None:
+            return finalize(preview_data, page.url)
+        if (
+            fields is not None
+            and set(fields) == {"link"}
+            and (
+                link_identity
+                or extract_place_identity_from_url(page.url)
+                or _place_link_key(link) == _place_link_key(page.url)
+            )
+        ):
+            return finalize({}, page.url)
+
+        logger.warning("Detail extraction returned no usable data: %s", link)
+        return None
+    except PlaywrightTimeoutError:
+        logger.warning("Timeout reading place detail: %s", link)
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.error("Error reading place detail for %s: %s", link, e)
+        return None
     finally:
-        for extra_ctx in created_contexts:
-            await _safe_close_context(extra_ctx)
+        await _safe_close_page(page)
 
 
 async def _stagger_query_start(
@@ -2149,11 +1674,10 @@ async def scrape_google_maps(
     n_semaphore: int = 8,
     fields: Sequence[str] | set[str] | None = None,
     flatten: bool = False,
-    use_spa: bool = True,
+    *,
     cache_dir: Path | None = None,
     range_limit: float = DEFAULT_RANGE_LIMIT,
     query_timeout: float = 300.0,
-    place_timeout: float = 45.0,
     preview_timeout: float = 10000,
     stagger_delay: tuple[float, float] | float = (1.5, 3.5),
     navigation_timeout: int = 30000,
@@ -2166,10 +1690,9 @@ async def scrape_google_maps(
     max_scroll_attempts_without_new_links: int = 5,
     watchdog_grace_period: float = 10.0,
     timezone_id: str | None = "UTC",
-    *,
     on_query_incomplete: Callable[[str, tuple[str, ...]], None] | None = None,
 ) -> pl.DataFrame:
-    """Scrapes Google Maps for places based on queries.
+    """Scrapes Google Maps for places using SPA navigation.
 
     Args:
         queries (set[str]): Search queries (e.g. {"cafe", "restaurant"}).
@@ -2181,14 +1704,12 @@ async def scrape_google_maps(
             dropped via range_limit (early drop) do not count toward this limit.
         lang (str, optional): Language code for Google Maps.
         headless (bool, optional): Whether to run headless browser.
-        n_semaphore (int, optional): Maximum concurrent searches. Fallback detail
-            requests have a separate concurrency limit of the same size.
+        n_semaphore (int, optional): Maximum concurrent queries.
         fields (Sequence[str] | set[str], optional): Selected place fields to extract.
             The original query is always included as a top-level column.
         flatten (bool, optional): Whether to flatten all fields into individual columns.
             If False (default), bundles non-default fields into a 'details' JSON string column,
             keeping 11 common columns at top-level.
-        use_spa (bool, optional): Whether to use high-speed SPA navigation.
         cache_dir (Path | None, optional): Persistent Chromium disk cache directory.
             Defaults to None (omits disk cache flags to eliminate multi-context file lock contention).
             Pass a Path to explicitly enable persistent disk cache.
@@ -2198,8 +1719,6 @@ async def scrape_google_maps(
             may be returned before closer ones, so results are not strictly monotonic by distance.
             range_limit filters out places exceeding this radius (early drop).
         query_timeout (float): Maximum seconds allowed per query before early return.
-            In fallback mode, this covers search and feed traversal only.
-        place_timeout (float, optional): Maximum seconds allowed to scrape a place in fallback mode.
         preview_timeout (float | int, optional): Maximum timeout in ms (or seconds if < 1000)
             waiting for SPA place preview XHR response.
         stagger_delay (tuple[float, float] | float, optional): Delay range (min, max) in
@@ -2211,7 +1730,7 @@ async def scrape_google_maps(
         disk_cache_size (int, optional): Maximum disk cache size in bytes.
         max_consecutive_empty_scrolls (int, optional): Maximum consecutive empty scrolls before stopping search.
         max_consecutive_out_of_range_scrolls (int, optional): Maximum consecutive batches
-            with only out-of-range places before stopping. Both modes check that the next
+            with only out-of-range places before stopping. The scraper checks that the next
             scroll exposes no unattempted links.
         max_scroll_attempts_without_new_links (int, optional): Maximum scroll attempts with unchanged height before stopping.
         watchdog_grace_period (float, optional): Extra grace period in seconds added to query_timeout
@@ -2266,333 +1785,100 @@ async def scrape_google_maps(
 
             query_semaphore = asyncio.Semaphore(n_semaphore)
 
-            if use_spa:
-                logger.info(
-                    "Scraping in SPA Navigation mode (max concurrency: %d, proxies: %d)...",
-                    n_semaphore,
-                    proxy_rotator.total,
-                )
+            logger.info(
+                "Scraping in SPA Navigation mode (max concurrency: %d, proxies: %d)...",
+                n_semaphore,
+                proxy_rotator.total,
+            )
 
-                async def run_spa_query(idx: int, q: str) -> list[dict[str, Any]]:
-                    await _stagger_query_start(idx, q, stagger_delay)
+            async def run_spa_query(idx: int, q: str) -> list[dict[str, Any]]:
+                await _stagger_query_start(idx, q, stagger_delay)
 
-                    async with query_semaphore:
-                        issues = query_issues.get(q)
-                        allocated_proxy = proxy_rotator.get()
-                        context = await _create_browser_context(
-                            browser=browser,
+                async with query_semaphore:
+                    issues = query_issues.get(q)
+                    allocated_proxy = proxy_rotator.get()
+                    context = await _create_browser_context(
+                        browser=browser,
+                        geo_coordinates=geo_coordinates,
+                        lang=lang,
+                        proxy=allocated_proxy,
+                        static_cache_dir=static_cache_dir,
+                        timezone_id=timezone_id,
+                    )
+                    collector: list[dict[str, Any]] = []
+                    try:
+                        coro = _scrape_query_spa(
+                            context=context,
+                            query=q.replace("_", " "),
                             geo_coordinates=geo_coordinates,
+                            zoom=zoom,
+                            max_places=max_places,
                             lang=lang,
-                            proxy=allocated_proxy,
+                            fields=extraction_fields,
+                            range_limit=range_limit,
+                            proxy_rotator=proxy_rotator,
+                            max_captcha_retries=max_captcha_retries,
+                            query_timeout=query_timeout,
+                            preview_timeout=preview_timeout,
+                            results_collector=collector,
+                            navigation_timeout=navigation_timeout,
+                            captcha_timeout=captcha_timeout,
+                            max_consecutive_empty_scrolls=max_consecutive_empty_scrolls,
+                            max_consecutive_out_of_range_scrolls=max_consecutive_out_of_range_scrolls,
+                            max_scroll_attempts_without_new_links=max_scroll_attempts_without_new_links,
                             static_cache_dir=static_cache_dir,
                             timezone_id=timezone_id,
+                            query_issues=issues,
                         )
-                        collector: list[dict[str, Any]] = []
-                        try:
-                            coro = _scrape_query_spa(
-                                context=context,
-                                query=q.replace("_", " "),
-                                geo_coordinates=geo_coordinates,
-                                zoom=zoom,
-                                max_places=max_places,
-                                lang=lang,
-                                fields=extraction_fields,
-                                range_limit=range_limit,
-                                proxy_rotator=proxy_rotator,
-                                max_captcha_retries=max_captcha_retries,
-                                query_timeout=query_timeout,
-                                preview_timeout=preview_timeout,
-                                results_collector=collector,
-                                navigation_timeout=navigation_timeout,
-                                captcha_timeout=captcha_timeout,
-                                max_consecutive_empty_scrolls=max_consecutive_empty_scrolls,
-                                max_consecutive_out_of_range_scrolls=max_consecutive_out_of_range_scrolls,
-                                max_scroll_attempts_without_new_links=max_scroll_attempts_without_new_links,
-                                static_cache_dir=static_cache_dir,
-                                timezone_id=timezone_id,
-                                query_issues=issues,
-                            )
-                            return await asyncio.wait_for(
-                                coro,
-                                timeout=query_timeout + watchdog_grace_period,
-                            )
-                        except TimeoutError:
-                            if issues is not None:
-                                issues.append("hard query deadline reached")
-                            logger.warning(
-                                "🚨 Hard watchdog timeout for query '%s' after %.1fs. Returning %d rescued places.",
-                                q,
-                                query_timeout + watchdog_grace_period,
-                                len(collector),
-                            )
-                            return collector
-                        except asyncio.CancelledError:
-                            logger.debug("run_spa_query cancelled for query '%s'", q)
-                            raise
-                        except Exception as e:  # noqa: BLE001
-                            if issues is not None:
-                                issues.append(f"query failed: {type(e).__name__}")
-                            logger.error(
-                                "❌ Error in run_spa_query for query '%s': %s",
-                                q,
-                                e,
-                            )
-                            return collector
-                        finally:
-                            await _safe_close_context(context)
-
-                spa_tasks = [
-                    asyncio.create_task(run_spa_query(i, query))
-                    for i, query in enumerate(query_list)
-                ]
-                list_of_results = await _gather_tasks(spa_tasks)
-                for query, res in zip(query_list, list_of_results, strict=True):
-                    if isinstance(res, BaseException):
-                        issues = query_issues.get(query)
+                        return await asyncio.wait_for(
+                            coro,
+                            timeout=query_timeout + watchdog_grace_period,
+                        )
+                    except TimeoutError:
                         if issues is not None:
-                            issues.append(f"query failed: {type(res).__name__}")
-                        logger.error(
-                            "Unexpected exception gathered in SPA query: %s",
-                            res,
+                            issues.append("hard query deadline reached")
+                        logger.warning(
+                            "🚨 Hard watchdog timeout for query '%s' after %.1fs. Returning %d rescued places.",
+                            q,
+                            query_timeout + watchdog_grace_period,
+                            len(collector),
                         )
-                    elif isinstance(res, list):
-                        results.extend({**place, "query": query} for place in res)
-                logger.info(
-                    "✅ Successfully collected %d places via SPA Navigation.",
-                    len(results),
-                )
-            else:
-                detail_semaphore = asyncio.Semaphore(n_semaphore)
-                detail_tasks: dict[
-                    str, asyncio.Task[tuple[dict[str, Any] | None, bool]]
-                ] = {}
+                        return collector
+                    except asyncio.CancelledError:
+                        logger.debug("run_spa_query cancelled for query '%s'", q)
+                        raise
+                    except Exception as e:  # noqa: BLE001
+                        if issues is not None:
+                            issues.append(f"query failed: {type(e).__name__}")
+                        logger.error(
+                            "❌ Error in run_spa_query for query '%s': %s",
+                            q,
+                            e,
+                        )
+                        return collector
+                    finally:
+                        await _safe_close_context(context)
 
-                async def run_process_link(
-                    index: int, link: str
-                ) -> tuple[dict[str, Any] | None, bool]:
-                    async with detail_semaphore:
-                        detail_context = None
-                        recovered: list[dict[str, Any]] = []
-                        rejected: list[bool] = []
-                        try:
-                            async with asyncio.timeout(place_timeout):
-                                detail_context = await _create_browser_context(
-                                    browser=browser,
-                                    geo_coordinates=geo_coordinates,
-                                    lang=lang,
-                                    proxy=proxy_rotator.get(),
-                                    static_cache_dir=static_cache_dir,
-                                    timezone_id=timezone_id,
-                                )
-                                place = await _process_link(
-                                    detail_context,
-                                    link,
-                                    asyncio.Semaphore(1),
-                                    index,
-                                    None,
-                                    fields=extraction_fields,
-                                    proxy_rotator=proxy_rotator,
-                                    navigation_timeout=navigation_timeout,
-                                    captcha_timeout=captcha_timeout,
-                                    geo_coordinates=geo_coordinates,
-                                    lang=lang,
-                                    static_cache_dir=static_cache_dir,
-                                    timezone_id=timezone_id,
-                                    range_limit=range_limit,
-                                    out_of_range=rejected,
-                                    result_collector=recovered,
-                                )
-                                return place, bool(rejected)
-                        except TimeoutError:
-                            logger.warning(
-                                "Timeout processing place link after %.1fs: %s",
-                                place_timeout,
-                                link,
-                            )
-                            return next(iter(recovered), None), bool(rejected)
-                        except Exception as e:  # noqa: BLE001
-                            logger.error("Error processing place link %s: %s", link, e)
-                            return next(iter(recovered), None), bool(rejected)
-                        finally:
-                            await _safe_close_context(detail_context)
-
-                async def run_get_urls(idx: int, query: str) -> list[dict[str, Any]]:
-                    await _stagger_query_start(idx, query, stagger_delay)
-                    places: list[dict[str, Any]] = []
-                    identities: dict[str, dict[str, Any]] = {}
-                    tried_links: set[str] = set()
-                    failed_identities: set[str] = set()
+            spa_tasks = [
+                asyncio.create_task(run_spa_query(i, query))
+                for i, query in enumerate(query_list)
+            ]
+            list_of_results = await _gather_tasks(spa_tasks)
+            for query, res in zip(query_list, list_of_results, strict=True):
+                if isinstance(res, BaseException):
                     issues = query_issues.get(query)
-
-                    async def process_candidates(candidates: list[str]) -> bool:
-                        pending = iter(candidates)
-                        while max_places is None or len(places) < max_places:
-                            remaining = (
-                                n_semaphore
-                                if max_places is None
-                                else min(n_semaphore, max_places - len(places))
-                            )
-                            batch: list[
-                                tuple[
-                                    str,
-                                    asyncio.Task[tuple[dict[str, Any] | None, bool]],
-                                ]
-                            ] = []
-                            for link in pending:
-                                key = _place_link_key(link)
-                                if key in tried_links:
-                                    continue
-                                tried_links.add(key)
-                                identity = extract_place_identity_from_url(link) or key
-                                if identity in identities:
-                                    continue
-                                task = detail_tasks.get(key)
-                                if task is None:
-                                    task = asyncio.create_task(
-                                        run_process_link(len(detail_tasks) + 1, link)
-                                    )
-                                    detail_tasks[key] = task
-                                batch.append((link, task))
-                                if len(batch) >= remaining:
-                                    break
-                            if not batch:
-                                return False
-
-                            # Keep feed order while independent detail pages load concurrently.
-                            for link, task in batch:
-                                place, rejected = await asyncio.shield(task)
-                                link_identity = extract_place_identity_from_url(
-                                    link
-                                ) or _place_link_key(link)
-                                if not isinstance(place, dict):
-                                    if issues is not None and not rejected:
-                                        failed_identities.add(link_identity)
-                                    continue
-
-                                place_id = place.get("place_id")
-                                place_identity = (
-                                    place_id
-                                    if isinstance(place_id, str) and place_id
-                                    else link_identity
-                                )
-                                failed_identities.discard(link_identity)
-                                failed_identities.discard(place_identity)
-                                original = identities.get(place_identity)
-                                if original is None:
-                                    original = identities.get(link_identity)
-                                if original is None:
-                                    original = {**place, "query": query}
-                                    places.append(original)
-                                else:
-                                    for field, value in place.items():
-                                        if (
-                                            original.get(field) is None
-                                            and value is not None
-                                        ):
-                                            original[field] = value
-                                identities[link_identity] = original
-                                identities[place_identity] = original
-                        return True
-
-                    async with query_semaphore:
-                        context = None
-                        links_collector: set[str] = set()
-                        links = links_collector
-                        watchdog = asyncio.timeout(
-                            query_timeout + watchdog_grace_period
-                        )
-                        loop = asyncio.get_running_loop()
-
-                        async def process_during_search(candidates: list[str]) -> bool:
-                            search_deadline = watchdog.when()
-                            detail_started = loop.time()
-                            watchdog.reschedule(None)
-                            try:
-                                return await process_candidates(candidates)
-                            finally:
-                                if search_deadline is not None:
-                                    watchdog.reschedule(
-                                        search_deadline + loop.time() - detail_started
-                                    )
-
-                        try:
-                            context = await _create_browser_context(
-                                browser=browser,
-                                geo_coordinates=geo_coordinates,
-                                lang=lang,
-                                proxy=proxy_rotator.get(),
-                                static_cache_dir=static_cache_dir,
-                                timezone_id=timezone_id,
-                            )
-                            async with watchdog:
-                                links = await _get_place_urls(
-                                    context=context,
-                                    max_places=max_places,
-                                    query=query.replace("_", " "),
-                                    geo_coordinates=geo_coordinates,
-                                    zoom=zoom,
-                                    lang=lang,
-                                    range_limit=range_limit,
-                                    proxy_rotator=proxy_rotator,
-                                    query_timeout=query_timeout,
-                                    links_collector=links_collector,
-                                    navigation_timeout=navigation_timeout,
-                                    captcha_timeout=captcha_timeout,
-                                    max_consecutive_empty_scrolls=max_consecutive_empty_scrolls,
-                                    max_consecutive_out_of_range_scrolls=max_consecutive_out_of_range_scrolls,
-                                    max_scroll_attempts_without_new_links=max_scroll_attempts_without_new_links,
-                                    process_candidates=process_during_search,
-                                    query_issues=issues,
-                                )
-                        except TimeoutError:
-                            logger.warning(
-                                "Hard search deadline reached for %r.", query
-                            )
-                            if issues is not None:
-                                issues.append("hard search deadline reached")
-                        except Exception as e:  # noqa: BLE001
-                            logger.error(
-                                "Could not collect place links for %r: %s", query, e
-                            )
-                            if issues is not None:
-                                issues.append(f"search failed: {type(e).__name__}")
-                        finally:
-                            await _safe_close_context(context)
-
-                    # The collector also retains candidates discovered just before a deadline.
-                    await process_candidates(sorted(links))
-                    if issues is not None and failed_identities:
-                        issues.append(
-                            f"could not extract {len(failed_identities)} place detail(s)"
-                        )
-                    return places
-
-                tasks = [
-                    asyncio.create_task(run_get_urls(i, query))
-                    for i, query in enumerate(query_list)
-                ]
-                try:
-                    places_by_query = await _gather_tasks(tasks)
-                finally:
-                    pending_details = [
-                        task for task in detail_tasks.values() if not task.done()
-                    ]
-                    for task in pending_details:
-                        task.cancel()
-                    await asyncio.gather(*pending_details, return_exceptions=True)
-
-                for query, places in zip(query_list, places_by_query, strict=True):
-                    if isinstance(places, BaseException):
-                        logger.error(
-                            "Unexpected detail error for %r: %s", query, places
-                        )
-                        issues = query_issues.get(query)
-                        if issues is not None:
-                            issues.append(f"query failed: {type(places).__name__}")
-                    else:
-                        results.extend(places)
-                logger.info("Successfully collected %d places.", len(results))
-
+                    if issues is not None:
+                        issues.append(f"query failed: {type(res).__name__}")
+                    logger.error(
+                        "Unexpected exception gathered in SPA query: %s",
+                        res,
+                    )
+                elif isinstance(res, list):
+                    results.extend({**place, "query": query} for place in res)
+            logger.info(
+                "✅ Successfully collected %d places via SPA Navigation.",
+                len(results),
+            )
         except asyncio.CancelledError:
             logger.info("Scraping cancelled by user/task cancellation.")
             raise

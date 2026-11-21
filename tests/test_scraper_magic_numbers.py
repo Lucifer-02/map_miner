@@ -13,7 +13,6 @@ from geopy.point import Point
 from map_miner.scraper import (
     _create_browser_context,
     _find_feed_selector,
-    _get_place_urls,
     _pass_consent,
     _process_link,
     _scrape_query_spa,
@@ -39,11 +38,6 @@ def test_default_parameters_exist_and_match() -> None:
             "scroll_delta_y": 5000,
             "scroll_delay_range": (1.0, 1.6),
         },
-        _get_place_urls: {
-            "initial_delay_range": (1.0, 2.5),
-            "min_remaining_time": 2.0,
-            "scroll_retry_delay": 1.5,
-        },
         _scrape_query_spa: {
             "initial_delay_range": (1.0, 2.0),
             "min_remaining_time": 2.0,
@@ -55,15 +49,12 @@ def test_default_parameters_exist_and_match() -> None:
             "post_scroll_delay_range": (1.2, 2.2),
             "scroll_retry_delay": 1.5,
             "secondary_rescue_min_time": 5.0,
-            "secondary_rescue_concurrency": 4,
             "secondary_rescue_cutoff": 3.0,
             "min_valid_fields": 3,
         },
         _process_link: {
             "preview_wait_timeout": 4.5,
             "main_selector_timeout": 2000,
-            "retry_delay_range": (0.8, 1.5),
-            "captcha_retry_delay_range": (1.0, 2.0),
             "min_valid_fields": 3,
         },
         scrape_google_maps: {
@@ -164,7 +155,6 @@ def test_no_magic_numbers_in_ast() -> None:
         "_create_browser_context": {1920, 1080, 50},
         "_pass_consent": {1.0},
         "_scroll_feed": {5000, 1.6},
-        "_get_place_urls": {2.5, 1.5},
         "_scrape_query_spa": {
             0.3,
             0.8,
@@ -177,9 +167,8 @@ def test_no_magic_numbers_in_ast() -> None:
             5.0,
             3.0,
         },
-        "_process_link": {4.5, 2000, 0.8, 1.5},
+        "_process_link": {4.5, 2000},
         "run_spa_query": {10.0},
-        "run_get_urls": {10.0},
     }
 
     class BodyNumberCollector(ast.NodeVisitor):
